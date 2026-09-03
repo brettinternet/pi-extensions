@@ -1,6 +1,6 @@
 # pi-live-codex
 
-[![npm version](https://img.shields.io/npm/v/pi-live-codex)](https://www.npmjs.com/package/pi-live-codex)
+[![npm version](https://img.shields.io/npm/v/pi-live-codex)](https://www.npmjs.com/package/pi-live-codex) [![CI](https://github.com/brettinternet/pi-live-codex/actions/workflows/ci.yml/badge.svg)](https://github.com/brettinternet/pi-live-codex/actions/workflows/ci.yml)
 
 Realtime `gpt-live-1-codex` voice mode for the [Pi coding agent](https://pi.dev). Speak naturally; repository work is delegated to the active Pi session and results are read back. This is modeled after omp's implementation to fit Pi.
 
