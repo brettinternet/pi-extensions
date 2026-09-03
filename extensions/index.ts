@@ -131,6 +131,13 @@ export default function piLiveCodex(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerShortcut("ctrl+l", {
+    description: "Toggle gpt-live-1-codex voice mode",
+    handler: async (context) => {
+      await runtime.toggle(context, "sol");
+    },
+  });
+
   pi.on("message_end", (event) => {
     runtime.handleAgentMessage(event.message);
   });
