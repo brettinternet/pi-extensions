@@ -1,5 +1,5 @@
 // Adapted from Oh My Pi's MIT-licensed Codex live transport.
-import { LiveWebRtcPeer } from "@oh-my-pi/pi-natives";
+import type { LiveWebRtcPeer as NativeLiveWebRtcPeer } from "@oh-my-pi/pi-natives";
 import { generateCodexAttestation } from "./attestation.ts";
 import {
   buildLiveSessionPayload,
@@ -105,7 +105,7 @@ function abortError(signal?: AbortSignal): Error {
 export class CodexLiveTransport {
   readonly #options: LiveTransportOptions;
   readonly #realtimeSessionId = crypto.randomUUID();
-  #peer: LiveWebRtcPeer | undefined;
+  #peer: NativeLiveWebRtcPeer | undefined;
   #sideband: WebSocket | undefined;
   #state: Lifecycle = "idle";
   #connectPromise: Promise<void> | undefined;
@@ -143,6 +143,8 @@ export class CodexLiveTransport {
   }
 
   async #connect(): Promise<void> {
+    // Defer the native optional package until /live runs; Pi's Jiti loader cannot statically resolve it.
+    const { LiveWebRtcPeer } = await import("@oh-my-pi/pi-natives");
     const peer = new LiveWebRtcPeer(
       (error, payload) => {
         if (error) this.#reportFailure(error.message);

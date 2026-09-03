@@ -1,5 +1,4 @@
 // Adapted from Oh My Pi's MIT-licensed Codex attestation implementation.
-import { deviceCheckGenerateToken } from "@oh-my-pi/pi-natives";
 
 const CHATGPT_BUNDLE_ID = "com.openai.codex";
 const APP_SESSION_ID = crypto.randomUUID();
@@ -90,6 +89,8 @@ function buildClientAttestation(result: DeviceCheckResult): string {
 export async function generateCodexAttestation(): Promise<string | undefined> {
   if (process.platform !== "darwin" || process.arch !== "arm64") return undefined;
   try {
+    // Pi's extension loader cannot resolve native optional packages during static module evaluation.
+    const { deviceCheckGenerateToken } = await import("@oh-my-pi/pi-natives");
     const result = await deviceCheckGenerateToken();
     return JSON.stringify({ v: 1, s: 0, t: buildClientAttestation(result) });
   } catch {

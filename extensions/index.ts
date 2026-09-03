@@ -1,3 +1,4 @@
+import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type {
   ExtensionAPI,
   ExtensionContext,
@@ -86,7 +87,7 @@ class LiveExtensionRuntime {
     }
   }
 
-  handleAgentMessage(message: Parameters<LiveSession["handleAgentMessage"]>[0]): void {
+  handleAgentMessage(message: AgentMessage): void {
     this.#session?.handleAgentMessage(message);
   }
 

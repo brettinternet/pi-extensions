@@ -1,4 +1,5 @@
 // Adapted from Oh My Pi's MIT-licensed live protocol implementation.
+import { isObject } from "./type-guards.ts";
 export const LIVE_MODEL = "gpt-live-1-codex" as const;
 export const CONTEXT_CHUNK_BYTES = 500;
 
@@ -54,9 +55,6 @@ export type LiveServerEvent =
 
 type UnknownRecord = Record<string, unknown>;
 
-function isRecord(value: unknown): value is UnknownRecord {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
 
 function parsePayload(payload: unknown): UnknownRecord | null {
   let parsed = payload;
@@ -67,7 +65,7 @@ function parsePayload(payload: unknown): UnknownRecord | null {
       return null;
     }
   }
-  return isRecord(parsed) ? parsed : null;
+  return isObject(parsed) ? parsed : null;
 }
 
 function parseSessionEvent(
@@ -75,7 +73,7 @@ function parseSessionEvent(
   payload: UnknownRecord,
 ): LiveServerEvent | null {
   const session = payload.session;
-  if (!isRecord(session) || typeof session.id !== "string") return null;
+  if (!isObject(session) || typeof session.id !== "string") return null;
   return {
     type,
     session: {
@@ -92,13 +90,13 @@ function parseTranscriptEvent(
   payload: UnknownRecord,
 ): LiveServerEvent | null {
   const item = payload.item;
-  if (!isRecord(item) || typeof item.text !== "string") return null;
+  if (!isObject(item) || typeof item.text !== "string") return null;
   return { type, item: { text: item.text } };
 }
 
 function parseTurnDone(payload: UnknownRecord): LiveServerEvent | null {
   const turn = payload.turn;
-  if (!isRecord(turn) || (turn.role !== "user" && turn.role !== "assistant")) {
+  if (!isObject(turn) || (turn.role !== "user" && turn.role !== "assistant")) {
     return null;
   }
   if (typeof turn.transcript !== "string") return null;
@@ -111,7 +109,7 @@ function parseTurnDone(payload: UnknownRecord): LiveServerEvent | null {
 function parseDelegation(payload: UnknownRecord): LiveServerEvent | null {
   const item = payload.item;
   if (
-    !isRecord(item) ||
+    !isObject(item) ||
     item.type !== "delegation" ||
     item.target !== "client" ||
     typeof item.id !== "string" ||
@@ -123,7 +121,7 @@ function parseDelegation(payload: UnknownRecord): LiveServerEvent | null {
   const content: LiveInputTextContent[] = [];
   for (const candidate of item.content) {
     if (
-      isRecord(candidate) &&
+      isObject(candidate) &&
       candidate.type === "input_text" &&
       typeof candidate.text === "string"
     ) {
@@ -147,7 +145,7 @@ function parseError(payload: UnknownRecord): LiveServerEvent | null {
     return { type: "error", message: payload.message };
   }
   const error = payload.error;
-  if (isRecord(error) && typeof error.message === "string") {
+  if (isObject(error) && typeof error.message === "string") {
     return { type: "error", message: error.message };
   }
   if (error === undefined) return null;
