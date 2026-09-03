@@ -17,6 +17,7 @@ import { CodexLiveTransport } from "./transport.ts";
 import type { LivePhase } from "./visualizer.ts";
 
 const OUTPUT_ACTIVE_LEVEL = 0.015;
+const OUTPUT_RELEASE_DELAY_MS = 250;
 const MIN_BARGE_IN_LEVEL = 0.04;
 const OUTPUT_ECHO_RATIO = 0.65;
 const LIVE_DELEGATION_MESSAGE_TYPE = "pi-live-codex-delegation";
@@ -58,6 +59,44 @@ function microphoneLevel(samples: Float32Array): number {
   return Math.min(1, Math.sqrt(squares / samples.length));
 }
 
+export class OutputActivityLatch {
+  readonly #onChange: (active: boolean) => void;
+  readonly #releaseDelayMs: number;
+  #active = false;
+  #releaseTimer: NodeJS.Timeout | undefined;
+
+  constructor(
+    onChange: (active: boolean) => void,
+    releaseDelayMs = OUTPUT_RELEASE_DELAY_MS,
+  ) {
+    this.#onChange = onChange;
+    this.#releaseDelayMs = releaseDelayMs;
+  }
+
+  update(active: boolean): void {
+    if (active) {
+      clearTimeout(this.#releaseTimer);
+      this.#releaseTimer = undefined;
+      if (!this.#active) {
+        this.#active = true;
+        this.#onChange(true);
+      }
+      return;
+    }
+    if (!this.#active || this.#releaseTimer) return;
+    this.#releaseTimer = setTimeout(() => {
+      this.#releaseTimer = undefined;
+      this.#active = false;
+      this.#onChange(false);
+    }, this.#releaseDelayMs);
+  }
+
+  dispose(): void {
+    clearTimeout(this.#releaseTimer);
+    this.#releaseTimer = undefined;
+  }
+}
+
 export class LiveSession {
   readonly #pi: ExtensionAPI;
   readonly #context: ExtensionContext;
@@ -71,6 +110,8 @@ export class LiveSession {
   readonly #seenDelegationIds = new Set<string>();
   #pendingFinal = "";
   #outputLevel = 0;
+  #outputActive = false;
+  readonly #outputActivity: OutputActivityLatch;
   #muted = false;
   #stopped = false;
   #terminalEmitted = false;
@@ -81,6 +122,10 @@ export class LiveSession {
     this.#context = options.context;
     this.#callbacks = options.callbacks;
     this.#voice = options.voice?.trim() || "sol";
+    this.#outputActivity = new OutputActivityLatch((active) => {
+      this.#outputActive = active;
+      this.#refreshPhase();
+    });
   }
 
   async start(): Promise<void> {
@@ -106,7 +151,7 @@ export class LiveSession {
           onEvent: (event) => this.#handleLiveEvent(event),
           onOutputLevel: (level) => {
             this.#outputLevel = level;
-            this.#refreshPhase();
+            this.#outputActivity.update(level > OUTPUT_ACTIVE_LEVEL);
           },
         },
       });
@@ -163,6 +208,7 @@ export class LiveSession {
 
   async #stop(): Promise<void> {
     this.#stopped = true;
+    this.#outputActivity.dispose();
     const recorder = this.#recorder;
     this.#recorder = undefined;
     recorder?.stop();
@@ -279,9 +325,8 @@ export class LiveSession {
     if (this.#stopped) return;
     if (this.#muted) this.#callbacks.onPhase("muted");
     else if (this.#activeDelegationId) this.#callbacks.onPhase("working");
-    else if (this.#outputLevel > OUTPUT_ACTIVE_LEVEL) {
-      this.#callbacks.onPhase("speaking");
-    } else this.#callbacks.onPhase("listening");
+    else if (this.#outputActive) this.#callbacks.onPhase("speaking");
+    else this.#callbacks.onPhase("listening");
   }
 
   #fail(error: Error): void {
