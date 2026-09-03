@@ -1,13 +1,15 @@
 # pi-live-codex
 
+[![npm version](https://img.shields.io/npm/v/pi-live-codex)](https://www.npmjs.com/package/pi-live-codex)
+
 Realtime `gpt-live-1-codex` voice mode for the [Pi coding agent](https://pi.dev). Speak naturally; repository work is delegated to the active Pi session and results are read back. This is modeled after omp's implementation to fit Pi.
 
-![prompt with live voice enabled](./docs/screenshot.png)
+![prompt with live voice enabled](https://raw.githubusercontent.com/brettinternet/pi-live-codex/main/docs/screenshot.png)
 
 ## Install
 
 ```sh
-pi install git:github.com/brettinternet/pi-live-codex
+pi install npm:pi-live-codex
 ```
 
 Requires Node.js 22.19+, microphone access, and an OpenAI Codex login:
