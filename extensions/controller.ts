@@ -192,8 +192,8 @@ export class LiveSession {
         break;
       case "turn.done":
         if (event.turn.role === "user") {
-          this.#inputTranscript = event.turn.transcript;
-          this.#callbacks.onTranscript(event.turn.transcript.trim());
+          this.#inputTranscript = "";
+          this.#callbacks.onTranscript("");
         }
         break;
       case "delegation.created":
