@@ -342,7 +342,9 @@ export class CodexLiveTransport {
   #handlePeerEvent(payload: string): void {
     if (this.#state === "closing" || this.#state === "closed") return;
     const event = parseLiveServerEvent(payload);
-    if (event) this.#options.callbacks.onEvent(event);
+    if (!event) return;
+    if (this.#sideband?.readyState === WebSocket.OPEN && event.type !== "error") return;
+    this.#options.callbacks.onEvent(event);
   }
 
   #handleOutputLevel(level: number): void {

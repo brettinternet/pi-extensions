@@ -9,6 +9,7 @@ import {
   type EditorTheme,
   matchesKey,
   truncateToWidth,
+  wrapTextWithAnsi,
   type TUI,
   visibleWidth,
 } from "@earendil-works/pi-tui";
@@ -107,12 +108,13 @@ export class LiveVisualizer extends CustomEditor {
     const spectrum = this.#generateSpectrum(innerWidth, 2).map((row) =>
       border(this.#colors.fg(spectrumColor, row)),
     );
-    const transcript = truncateToWidth(this.#transcript, innerWidth, "…");
-    const transcriptRow = border(
-      this.#colors.fg("accent", transcript) +
-        " ".repeat(Math.max(0, innerWidth - visibleWidth(transcript))),
+    const transcriptRows = wrapTextWithAnsi(this.#transcript, innerWidth).map((line) =>
+      border(
+        this.#colors.fg("accent", line) +
+          " ".repeat(Math.max(0, innerWidth - visibleWidth(line))),
+      ),
     );
-    return [top, ...spectrum, transcriptRow, this.#renderFooter(width, innerWidth)];
+    return [top, ...spectrum, ...transcriptRows, this.#renderFooter(width, innerWidth)];
   }
 
   #renderFooter(width: number, innerWidth: number): string {
