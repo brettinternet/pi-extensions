@@ -1,6 +1,6 @@
 # pi-live-codex
 
-Realtime `gpt-live-1-codex` voice mode for the [Pi coding agent](https://pi.dev). Speak naturally; repository work is delegated to the active Pi session and results are read back. This is modeled after omp's implementation.
+Realtime `gpt-live-1-codex` voice mode for the [Pi coding agent](https://pi.dev). Speak naturally; repository work is delegated to the active Pi session and results are read back. This is modeled after omp's implementation to fit Pi.
 
 ![prompt with live voice enabled](./docs/screenshot.png)
 
