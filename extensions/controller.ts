@@ -232,6 +232,8 @@ export class LiveSession {
       },
       { triggerTurn: true, deliverAs: "steer" },
     );
+    this.#inputTranscript = "";
+    this.#callbacks.onTranscript("");
   }
 
   #appendDelegationContext(
