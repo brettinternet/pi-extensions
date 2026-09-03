@@ -4,6 +4,22 @@
   "description": "Realtime gpt-live-1-codex voice frontend for the Pi coding agent",
   "type": "module",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brettinternet/pi-live-codex.git"
+  },
+  "homepage": "https://github.com/brettinternet/pi-live-codex#readme",
+  "bugs": {
+    "url": "https://github.com/brettinternet/pi-live-codex/issues"
+  },
+  "files": [
+    "extensions",
+    "README.md",
+    "LICENSE"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
   "keywords": [
     "pi-package",
     "pi-extension",
