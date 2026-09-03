@@ -5,7 +5,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import type { AudioCapture as NativeAudioCapture } from "@oh-my-pi/pi-natives";
+import { AudioCapture } from "./native.cjs";
 import {
   buildDelegationContextAppend,
   buildSessionClose,
@@ -64,10 +64,11 @@ export class LiveSession {
   readonly #callbacks: LiveSessionCallbacks;
   readonly #voice: string;
   #transport: CodexLiveTransport | undefined;
-  #recorder: NativeAudioCapture | undefined;
+  #recorder: AudioCapture | undefined;
   #sendTail: Promise<void> = Promise.resolve();
   #stopPromise: Promise<void> | undefined;
   #activeDelegationId: string | undefined;
+  readonly #seenDelegationIds = new Set<string>();
   #pendingFinal = "";
   #outputLevel = 0;
   #muted = false;
@@ -112,8 +113,6 @@ export class LiveSession {
       this.#transport = transport;
       await transport.connect();
       if (this.#stopped) return;
-      // Defer the native optional package until /live runs; Pi's Jiti loader cannot statically resolve it.
-      const { AudioCapture } = await import("@oh-my-pi/pi-natives");
       this.#recorder = new AudioCapture(16_000, (error, samples) => {
         if (error) {
           this.#fail(error);
@@ -214,6 +213,8 @@ export class LiveSession {
   #handleDelegation(
     event: Extract<LiveServerEvent, { type: "delegation.created" }>,
   ): void {
+    if (this.#seenDelegationIds.has(event.item.id)) return;
+    this.#seenDelegationIds.add(event.item.id);
     const request = event.item.content
       .map((content) => content.text)
       .join("\n")

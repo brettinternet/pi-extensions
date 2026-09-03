@@ -1,4 +1,5 @@
-import { describe, expect, test } from "bun:test";
+import assert from "node:assert/strict";
+import { describe, test } from "node:test";
 import {
   CONTEXT_CHUNK_BYTES,
   buildDelegationContextAppend,
@@ -14,7 +15,7 @@ import {
 
 describe("Frameless Bidi protocol", () => {
   test("parses client delegations", () => {
-    expect(
+    assert.deepEqual(
       parseLiveServerEvent({
         type: "delegation.created",
         item: {
@@ -27,38 +28,37 @@ describe("Frameless Bidi protocol", () => {
           ],
         },
       }),
-    ).toEqual({
-      type: "delegation.created",
-      item: {
-        type: "delegation",
-        target: "client",
-        id: "delegate_1",
-        content: [{ type: "input_text", text: "Fix the failing test" }],
+      {
+        type: "delegation.created",
+        item: {
+          type: "delegation",
+          target: "client",
+          id: "delegate_1",
+          content: [{ type: "input_text", text: "Fix the failing test" }],
+        },
       },
-    });
+    );
   });
 
   test("chunks without splitting UTF-8 code points", () => {
     const input = `${"a".repeat(499)}🙂${"b".repeat(501)}`;
     const chunks = chunkLiveContext(input);
 
-    expect(chunks.join("")).toBe(input);
-    expect(chunks.length).toBe(3);
+    assert.equal(chunks.join(""), input);
+    assert.equal(chunks.length, 3);
     for (const chunk of chunks) {
-      expect(Buffer.byteLength(chunk, "utf8")).toBeLessThanOrEqual(
-        CONTEXT_CHUNK_BYTES,
-      );
+      assert.ok(Buffer.byteLength(chunk, "utf8") <= CONTEXT_CHUNK_BYTES);
     }
   });
 
   test("builds the pinned live session and context append", () => {
-    expect(buildLiveSessionPayload("instructions", "sol")).toEqual({
+    assert.deepEqual(buildLiveSessionPayload("instructions", "sol"), {
       model: "gpt-live-1-codex",
       instructions: "instructions",
       audio: { output: { voice: "sol" } },
       delegation: { type: "client" },
     });
-    expect(buildDelegationContextAppend("delegate_1", "done")).toEqual({
+    assert.deepEqual(buildDelegationContextAppend("delegate_1", "done"), {
       type: "delegation.context.append",
       delegation_item_id: "delegate_1",
       content: [{ type: "input_text", text: "done" }],
@@ -68,13 +68,15 @@ describe("Frameless Bidi protocol", () => {
 
 describe("Codex live transport helpers", () => {
   test("extracts signaling call IDs", () => {
-    expect(
+    assert.equal(
       parseLiveCallId(
         "https://api.openai.com/v1/realtime/calls/rtc_abc-123?foo=bar",
       ),
-    ).toBe("rtc_abc-123");
-    expect(parseLiveCallId("https://example.com/no-call")).toBeUndefined();
-    expect(buildLiveSidebandUrl("rtc_abc-123")).toBe(
+      "rtc_abc-123",
+    );
+    assert.equal(parseLiveCallId("https://example.com/no-call"), undefined);
+    assert.equal(
+      buildLiveSidebandUrl("rtc_abc-123"),
       "wss://api.openai.com/v1/live/rtc_abc-123",
     );
   });
@@ -87,7 +89,8 @@ describe("Codex live transport helpers", () => {
         },
       }),
     ).toString("base64url");
-    expect(getCodexAccountId(`header.${payload}.signature`)).toBe(
+    assert.equal(
+      getCodexAccountId(`header.${payload}.signature`),
       "account_123",
     );
   });

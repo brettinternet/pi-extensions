@@ -1,5 +1,6 @@
 // Adapted from Oh My Pi's MIT-licensed Codex live transport.
-import type { LiveWebRtcPeer as NativeLiveWebRtcPeer } from "@oh-my-pi/pi-natives";
+import WebSocket from "ws";
+import { LiveWebRtcPeer } from "./native.cjs";
 import { generateCodexAttestation } from "./attestation.ts";
 import {
   buildLiveSessionPayload,
@@ -105,7 +106,7 @@ function abortError(signal?: AbortSignal): Error {
 export class CodexLiveTransport {
   readonly #options: LiveTransportOptions;
   readonly #realtimeSessionId = crypto.randomUUID();
-  #peer: NativeLiveWebRtcPeer | undefined;
+  #peer: LiveWebRtcPeer | undefined;
   #sideband: WebSocket | undefined;
   #state: Lifecycle = "idle";
   #connectPromise: Promise<void> | undefined;
@@ -143,8 +144,6 @@ export class CodexLiveTransport {
   }
 
   async #connect(): Promise<void> {
-    // Defer the native optional package until /live runs; Pi's Jiti loader cannot statically resolve it.
-    const { LiveWebRtcPeer } = await import("@oh-my-pi/pi-natives");
     const peer = new LiveWebRtcPeer(
       (error, payload) => {
         if (error) this.#reportFailure(error.message);
@@ -230,7 +229,9 @@ export class CodexLiveTransport {
         failure = cause instanceof Error ? cause : new Error(String(cause));
         if (this.#options.signal?.aborted) throw abortError(this.#options.signal);
         if (attempt + 1 < SIDEBAND_CONNECT_ATTEMPTS) {
-          await Bun.sleep(200 * 2 ** attempt);
+          await new Promise<void>((resolve) => {
+            setTimeout(resolve, 200 * 2 ** attempt);
+          });
         }
       }
     }
@@ -242,25 +243,27 @@ export class CodexLiveTransport {
     access: LiveAccess,
     attestation: string | undefined,
   ): Promise<void> {
-    const socket: WebSocket = Reflect.construct(WebSocket, [
-      buildLiveSidebandUrl(callId),
-      {
-        headers: liveHeaders(
-          access,
-          this.#options.sessionId,
-          this.#realtimeSessionId,
-          attestation,
-        ),
-      } satisfies Bun.WebSocketOptions,
-    ]);
+    const socket = new WebSocket(buildLiveSidebandUrl(callId), {
+      headers: liveHeaders(
+        access,
+        this.#options.sessionId,
+        this.#realtimeSessionId,
+        attestation,
+      ),
+    });
 
-    const { promise, resolve, reject } = Promise.withResolvers<void>();
+    let resolveConnect: () => void;
+    let rejectConnectPromise: (error: Error) => void;
+    const promise = new Promise<void>((resolve, reject) => {
+      resolveConnect = resolve;
+      rejectConnectPromise = reject;
+    });
     let opened = false;
     let settled = false;
-    let timeout: ReturnType<typeof setTimeout> | undefined;
+    let timeout: NodeJS.Timeout | undefined;
 
     const cleanup = () => {
-      if (timeout) clearTimeout(timeout);
+      clearTimeout(timeout);
       timeout = undefined;
       this.#options.signal?.removeEventListener("abort", onAbort);
     };
@@ -268,14 +271,15 @@ export class CodexLiveTransport {
       if (settled) return;
       settled = true;
       cleanup();
-      reject(error);
+      rejectConnectPromise(error);
     };
     const onAbort = () => {
-      socket.close(1000, "aborted");
+      if (socket.readyState === WebSocket.CONNECTING) socket.terminate();
+      else socket.close(1000, "aborted");
       rejectConnect(abortError(this.#options.signal));
     };
 
-    socket.onopen = () => {
+    socket.once("open", () => {
       if (settled) {
         socket.close(1000, "stale");
         return;
@@ -284,50 +288,47 @@ export class CodexLiveTransport {
       settled = true;
       cleanup();
       this.#sideband = socket;
-      resolve();
-    };
-    socket.onmessage = (event) => {
-      if (typeof event.data !== "string") {
+      resolveConnect();
+    });
+    socket.on("message", (data, isBinary) => {
+      if (isBinary) {
         this.#reportFailure("Codex live sideband returned a binary frame");
       } else {
-        this.#handleSidebandEvent(event.data);
+        this.#handleSidebandEvent(data.toString("utf8"));
       }
-    };
-    socket.onerror = (event) => {
-      const detail = event instanceof ErrorEvent && event.message
-        ? `: ${event.message}`
-        : "";
+    });
+    socket.on("error", (error) => {
+      const detail = error.message ? `: ${error.message}` : "";
       if (!opened) {
         rejectConnect(new Error(`Codex live sideband connection failed${detail}`));
-        socket.close(1011, "connection failed");
+        socket.terminate();
       } else {
         this.#reportFailure(`Codex live sideband failed${detail}`);
       }
-    };
-    socket.onclose = (event) => {
+    });
+    socket.on("close", (code, reason) => {
       if (!opened) {
         rejectConnect(
-          new Error(`Codex live sideband closed before connecting (${event.code})`),
+          new Error(`Codex live sideband closed before connecting (${code})`),
         );
         return;
       }
       if (this.#sideband !== socket) return;
       this.#sideband = undefined;
       if (this.#state === "connecting" || this.#state === "connected") {
-        this.#reportFailure(
-          `Codex live sideband closed (${event.code})${event.reason ? `: ${event.reason}` : ""}`,
-        );
+        const detail = reason.length > 0 ? `: ${reason.toString("utf8")}` : "";
+        this.#reportFailure(`Codex live sideband closed (${code})${detail}`);
       }
-    };
+    });
 
     if (this.#options.signal?.aborted) onAbort();
     else {
       this.#options.signal?.addEventListener("abort", onAbort, { once: true });
       timeout = setTimeout(() => {
-        socket.close(1000, "connect timeout");
+        socket.terminate();
         rejectConnect(new Error("Codex live sideband connection timed out"));
       }, SIDEBAND_CONNECT_TIMEOUT_MS);
-      timeout.unref?.();
+      timeout.unref();
     }
     await promise;
   }
@@ -341,10 +342,7 @@ export class CodexLiveTransport {
   #handlePeerEvent(payload: string): void {
     if (this.#state === "closing" || this.#state === "closed") return;
     const event = parseLiveServerEvent(payload);
-    if (!event || (this.#sideband?.readyState === WebSocket.OPEN && event.type !== "error")) {
-      return;
-    }
-    this.#options.callbacks.onEvent(event);
+    if (event) this.#options.callbacks.onEvent(event);
   }
 
   #handleOutputLevel(level: number): void {
