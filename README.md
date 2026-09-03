@@ -1,0 +1,35 @@
+# pi-live-codex
+
+Realtime `gpt-live-1-codex` voice mode for the [Pi coding agent](https://pi.dev). Speak naturally; repository work is delegated to the active Pi session and results are read back. This is modeled after omp's implementation.
+
+## Install
+
+```sh
+pi install git:github.com/brettinternet/pi-live-codex
+```
+
+Requires Node.js 22.19+, microphone access, and an OpenAI Codex login:
+
+```text
+/login openai-codex
+```
+
+## Use
+
+Start Pi in its interactive TUI, then run:
+
+```text
+/live
+```
+
+Use `/live <voice>` to select a voice. `Ctrl+L` toggles voice mode, `Space` mutes, and `Esc` ends the session.
+
+## Development
+
+```sh
+bun install
+bun run check
+bun test
+pi -e .
+```
+
