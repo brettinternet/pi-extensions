@@ -1,5 +1,7 @@
 # pi-title
 
+[![npm version](https://img.shields.io/npm/v/pi-title)](https://www.npmjs.com/package/pi-title) [![CI](https://github.com/brettinternet/pi-extensions/actions/workflows/ci.yml/badge.svg)](https://github.com/brettinternet/pi-extensions/actions/workflows/ci.yml)
+
 Automatic session titles for the [Pi coding agent](https://pi.dev).
 
 A concise title is generated from the first request as soon as the agent starts, concurrently with the main agent work. It is persisted as the Pi session name and used as the terminal title. Existing and manually named sessions are left unchanged.
