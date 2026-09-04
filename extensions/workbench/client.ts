@@ -31,6 +31,7 @@ export interface WorkbenchInput {
   focus?: boolean;
   interactive?: boolean;
   force?: boolean;
+  expectedPaneId?: string;
   command?: string[];
   jobId?: string;
   paneId?: string;
@@ -109,6 +110,7 @@ export function buildWorkbenchArguments(input: WorkbenchInput): string[] {
       return ["editor", "status"];
     case "editor.close": {
       const args = ["editor", "close"];
+      if (input.expectedPaneId) args.push("--expected-pane-id", input.expectedPaneId);
       if (input.force) args.push("--force");
       return args;
     }

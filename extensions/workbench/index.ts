@@ -377,7 +377,10 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
     input: WorkbenchInput,
     ctx: ExtensionContext,
     signal?: AbortSignal,
-  ): Promise<ForceCloseTarget | undefined> {
+  ): Promise<{
+    forceCloseTarget?: ForceCloseTarget;
+    expectedEditorPaneId?: string;
+  }> {
     assertSupportedForce(input);
     if (requiresTrust(input.action) && !ctx.isProjectTrusted()) {
       throw new Error("Workbench mutations require a trusted project");
@@ -386,6 +389,7 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
       throw new Error("job.start requires a non-empty command argv");
     }
     let forceCloseTarget: ForceCloseTarget | undefined;
+    let expectedEditorPaneId: string | undefined;
     if (input.action.startsWith("job.") && !["job.start", "job.list"].includes(input.action)) {
       const jobId = assertOwnedJob(input.jobId);
       if (input.action === "job.close" && input.force === true) {
@@ -404,6 +408,7 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
       if (!paneId || !ownership.editors.has(paneId)) {
         throw new Error("The current workspace editor is not owned by this Pi session");
       }
+      expectedEditorPaneId = paneId;
       if (input.force === true) forceCloseTarget = { kind: "editor", id: paneId };
     }
     if (input.action === "lazygit.close") {
@@ -413,7 +418,7 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
       );
       if (!owned) throw new Error("The current workspace LazyGit pane is not owned by this Pi session");
     }
-    return forceCloseTarget;
+    return { forceCloseTarget, expectedEditorPaneId };
   }
 
   pi.registerTool({
@@ -430,7 +435,7 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
     parameters,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const input = params as WorkbenchInput;
-      const forceCloseTarget = await prepareAction(input, ctx, signal);
+      const { forceCloseTarget, expectedEditorPaneId } = await prepareAction(input, ctx, signal);
       if (forceCloseTarget) {
         await confirmations.confirmForceClose(input, forceCloseTarget, ctx, signal);
         if (forceCloseTarget.kind === "editor" && !ownership.editors.has(forceCloseTarget.id)) {
@@ -446,7 +451,10 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
         content: [{ type: "text", text: `Running ${input.action}…` }],
         details: {},
       });
-      let response = truncateResponse(await client.execute(input, ctx.cwd, signal));
+      const executionInput = expectedEditorPaneId
+        ? { ...input, expectedPaneId: expectedEditorPaneId }
+        : input;
+      let response = truncateResponse(await client.execute(executionInput, ctx.cwd, signal));
       if (input.action === "job.list" && Array.isArray(response.jobs)) {
         response = {
           ...response,

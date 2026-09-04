@@ -36,6 +36,7 @@ async function createHarness(options: {
   dirty?: boolean;
   voiceDecision?: VoiceDecision;
   beforeResolution?: (request: ConfirmationRequest) => void;
+  replaceEditorBeforeResolution?: boolean;
 }) {
   const root = await mkdtemp(join(tmpdir(), "pi-workbench-force-close-"));
   await writeFile(join(root, "workbench.py"), "# test\n");
@@ -46,6 +47,7 @@ async function createHarness(options: {
   const requests: ConfirmationRequest[] = [];
   let tool: ToolDefinition | undefined;
   const owned = options.owned ?? true;
+  let currentEditorPaneId = owned ? "pane-owned" : "pane-foreign";
   const resource = options.action === "editor.close" ? "editor" : "job";
   const resourceId = options.action === "editor.close" ? "pane-owned" : "job-owned";
   const branch = owned
@@ -78,6 +80,7 @@ async function createHarness(options: {
     if (!options.voiceDecision) return;
     bus.emit(`${CONFIRMATION_ACKNOWLEDGED_PREFIX}${request.requestId}`, reply(request));
     options.beforeResolution?.(request);
+    if (options.replaceEditorBeforeResolution) currentEditorPaneId = "pane-replacement";
     if (options.voiceDecision === "wrong-session") {
       setImmediate(() => bus.emit(`${CONFIRMATION_RESOLVED_PREFIX}${request.requestId}`, {
         ...reply(request),
@@ -124,7 +127,7 @@ async function createHarness(options: {
             ok: true,
             action: "editor.status",
             editor: {
-              paneId: owned ? "pane-owned" : "pane-foreign",
+              paneId: currentEditorPaneId,
               workspaceId: "workspace-owned",
             },
           }),
@@ -132,6 +135,19 @@ async function createHarness(options: {
       }
       if (controllerArgs[0] === "editor" && controllerArgs[1] === "close") {
         order.push("editor.close");
+        const expectedPaneIndex = controllerArgs.indexOf("--expected-pane-id");
+        const expectedPaneId = expectedPaneIndex === -1 ? undefined : controllerArgs[expectedPaneIndex + 1];
+        if (expectedPaneId !== undefined && expectedPaneId !== currentEditorPaneId) {
+          return {
+            code: 1,
+            killed: false,
+            stdout: "",
+            stderr: JSON.stringify({
+              ok: false,
+              error: { message: "managed editor pane changed before close" },
+            }),
+          };
+        }
         if (options.dirty) {
           return {
             code: 1,
@@ -212,7 +228,13 @@ describe("workbench force close boundary", () => {
     expect(harness.requests[0]!.summary).toContain("pane-owned");
     expect(harness.requests[0]!.summary.toLowerCase()).toContain("discard");
     expect(harness.closeCalls()).toHaveLength(1);
-    expect(harness.closeCalls()[0]).toEqual(["editor", "close", "--force"]);
+    expect(harness.closeCalls()[0]).toEqual([
+      "editor",
+      "close",
+      "--expected-pane-id",
+      "pane-owned",
+      "--force",
+    ]);
     harness.shutdown();
   });
 
@@ -253,6 +275,24 @@ describe("workbench force close boundary", () => {
     });
     await harness.execute();
     expect(harness.order).toEqual(["editor.status", "confirmation.requested", "editor.close"]);
+    harness.shutdown();
+  });
+
+  test("refuses to close a replacement editor after approval", async () => {
+    const harness = await createHarness({
+      action: "editor.close",
+      force: true,
+      voiceDecision: "approved",
+      replaceEditorBeforeResolution: true,
+    });
+    await expect(harness.execute()).rejects.toThrow("managed editor pane changed before close");
+    expect(harness.closeCalls()).toEqual([[
+      "editor",
+      "close",
+      "--expected-pane-id",
+      "pane-owned",
+      "--force",
+    ]]);
     harness.shutdown();
   });
 
@@ -301,7 +341,12 @@ describe("workbench force close boundary", () => {
     const harness = await createHarness({ action: "editor.close", force: false, dirty: true });
     await expect(harness.execute()).rejects.toThrow("editor has unsaved changes");
     expect(harness.requests).toHaveLength(0);
-    expect(harness.closeCalls()).toEqual([["editor", "close"]]);
+    expect(harness.closeCalls()).toEqual([[
+      "editor",
+      "close",
+      "--expected-pane-id",
+      "pane-owned",
+    ]]);
     harness.shutdown();
   });
 });

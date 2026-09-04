@@ -56,14 +56,26 @@ describe("workbench arguments", () => {
   });
 
   test("serializes force only for close actions", () => {
-    expect(buildWorkbenchArguments({ action: "editor.close", force: true })).toEqual([
+    expect(buildWorkbenchArguments({
+      action: "editor.close",
+      expectedPaneId: "pane-1",
+      force: true,
+    })).toEqual([
       "editor",
       "close",
+      "--expected-pane-id",
+      "pane-1",
       "--force",
     ]);
-    expect(buildWorkbenchArguments({ action: "editor.close", force: false })).toEqual([
+    expect(buildWorkbenchArguments({
+      action: "editor.close",
+      expectedPaneId: "pane-1",
+      force: false,
+    })).toEqual([
       "editor",
       "close",
+      "--expected-pane-id",
+      "pane-1",
     ]);
     expect(buildWorkbenchArguments({ action: "job.close", jobId: "job-1", force: true })).toEqual([
       "job",
