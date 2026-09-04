@@ -30,6 +30,7 @@ export interface WorkbenchInput {
   placement?: WorkbenchPlacement;
   focus?: boolean;
   interactive?: boolean;
+  force?: boolean;
   command?: string[];
   jobId?: string;
   paneId?: string;
@@ -77,7 +78,21 @@ function placementArgs(input: WorkbenchInput): string[] {
   ];
 }
 
+export function assertSupportedForce(input: WorkbenchInput): void {
+  if (input.force !== undefined && typeof input.force !== "boolean") {
+    throw new Error("force must be a boolean");
+  }
+  if (
+    input.force !== undefined &&
+    input.action !== "editor.close" &&
+    input.action !== "job.close"
+  ) {
+    throw new Error("force is only supported for editor.close and job.close");
+  }
+}
+
 export function buildWorkbenchArguments(input: WorkbenchInput): string[] {
+  assertSupportedForce(input);
   switch (input.action) {
     case "layout":
       return ["layout"];
@@ -92,8 +107,11 @@ export function buildWorkbenchArguments(input: WorkbenchInput): string[] {
     }
     case "editor.status":
       return ["editor", "status"];
-    case "editor.close":
-      return ["editor", "close"];
+    case "editor.close": {
+      const args = ["editor", "close"];
+      if (input.force) args.push("--force");
+      return args;
+    }
     case "job.start": {
       if (!input.command?.length) throw new Error("command is required for job.start");
       const args = ["job", "start"];
@@ -112,8 +130,11 @@ export function buildWorkbenchArguments(input: WorkbenchInput): string[] {
     }
     case "job.cancel":
       return ["job", "cancel", required(input.jobId, "jobId")];
-    case "job.close":
-      return ["job", "close", required(input.jobId, "jobId")];
+    case "job.close": {
+      const args = ["job", "close", required(input.jobId, "jobId")];
+      if (input.force) args.push("--force");
+      return args;
+    }
     case "lazygit.open": {
       const args = ["lazygit", "open"];
       if (input.cwd) args.push("--cwd", input.cwd);
@@ -180,6 +201,7 @@ export class WorkbenchClient {
     cwd: string,
     signal?: AbortSignal,
   ): Promise<WorkbenchResponse> {
+    assertSupportedForce(input);
     const plugin = await this.resolve(cwd, signal);
     const args = [
       `HERDR_PLUGIN_ID=${plugin.id}`,

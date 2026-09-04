@@ -5,8 +5,9 @@ import type {
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
 import { classifyCommandRisk } from "./command-policy.ts";
-import { ConfirmationBroker } from "./confirmation.ts";
+import { ConfirmationBroker, type ForceCloseTarget } from "./confirmation.ts";
 import {
+  assertSupportedForce,
   type WorkbenchInput,
   type WorkbenchResponse,
   WorkbenchClient,
@@ -58,6 +59,7 @@ const parameters = Type.Object({
   cwd: Type.Optional(Type.String({ description: "Working directory for jobs or applications" })),
   placement: Type.Optional(StringEnum(PLACEMENTS)),
   focus: Type.Optional(Type.Boolean({ description: "Move Herdr focus to the target pane" })),
+  force: Type.Optional(Type.Boolean({ description: "Force-close an editor or job and discard its remaining state" })),
   interactive: Type.Optional(Type.Boolean({ description: "Attach a job directly to its pane PTY" })),
   command: Type.Optional(Type.Array(Type.String(), { minItems: 1, maxItems: 256 })),
   jobId: Type.Optional(Type.String({ pattern: "^job-[A-Za-z0-9-]+$" })),
@@ -375,15 +377,20 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
     input: WorkbenchInput,
     ctx: ExtensionContext,
     signal?: AbortSignal,
-  ): Promise<void> {
+  ): Promise<ForceCloseTarget | undefined> {
+    assertSupportedForce(input);
     if (requiresTrust(input.action) && !ctx.isProjectTrusted()) {
       throw new Error("Workbench mutations require a trusted project");
     }
     if (input.action === "job.start" && (!input.command || input.command.length === 0)) {
       throw new Error("job.start requires a non-empty command argv");
     }
+    let forceCloseTarget: ForceCloseTarget | undefined;
     if (input.action.startsWith("job.") && !["job.start", "job.list"].includes(input.action)) {
-      assertOwnedJob(input.jobId);
+      const jobId = assertOwnedJob(input.jobId);
+      if (input.action === "job.close" && input.force === true) {
+        forceCloseTarget = { kind: "job", id: jobId };
+      }
     }
     if (input.action === "pane.focus") {
       if (!input.paneId || !ownership.knownPanes.has(input.paneId)) {
@@ -397,6 +404,7 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
       if (!paneId || !ownership.editors.has(paneId)) {
         throw new Error("The current workspace editor is not owned by this Pi session");
       }
+      if (input.force === true) forceCloseTarget = { kind: "editor", id: paneId };
     }
     if (input.action === "lazygit.close") {
       const workspaceId = await currentWorkspace(ctx, signal);
@@ -405,6 +413,7 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
       );
       if (!owned) throw new Error("The current workspace LazyGit pane is not owned by this Pi session");
     }
+    return forceCloseTarget;
   }
 
   pi.registerTool({
@@ -421,7 +430,14 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
     parameters,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const input = params as WorkbenchInput;
-      await prepareAction(input, ctx, signal);
+      const forceCloseTarget = await prepareAction(input, ctx, signal);
+      if (forceCloseTarget) {
+        await confirmations.confirmForceClose(input, forceCloseTarget, ctx, signal);
+        if (forceCloseTarget.kind === "editor" && !ownership.editors.has(forceCloseTarget.id)) {
+          throw new Error("The current workspace editor is not owned by this Pi session");
+        }
+      }
+      const jobIdToClose = input.action === "job.close" ? assertOwnedJob(input.jobId) : undefined;
       if (input.action === "job.start") {
         const risk = classifyCommandRisk(input.command!);
         if (risk) await confirmations.confirm(input, risk, ctx, signal);
@@ -466,11 +482,10 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
         void monitorJob(jobId, workspaceId, ctx);
       }
 
-      if (input.action === "job.close") {
-        const jobId = assertOwnedJob(input.jobId);
-        monitors.get(jobId)?.abort();
-        release("job", jobId);
-        release("terminal-job", jobId);
+      if (jobIdToClose) {
+        monitors.get(jobIdToClose)?.abort();
+        release("job", jobIdToClose);
+        release("terminal-job", jobIdToClose);
       }
       if (input.action === "editor.close") {
         const closedPane = stringField(response, "paneId");

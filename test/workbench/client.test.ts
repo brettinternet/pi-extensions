@@ -55,6 +55,33 @@ describe("workbench arguments", () => {
     ]);
   });
 
+  test("serializes force only for close actions", () => {
+    expect(buildWorkbenchArguments({ action: "editor.close", force: true })).toEqual([
+      "editor",
+      "close",
+      "--force",
+    ]);
+    expect(buildWorkbenchArguments({ action: "editor.close", force: false })).toEqual([
+      "editor",
+      "close",
+    ]);
+    expect(buildWorkbenchArguments({ action: "job.close", jobId: "job-1", force: true })).toEqual([
+      "job",
+      "close",
+      "job-1",
+      "--force",
+    ]);
+    expect(buildWorkbenchArguments({ action: "job.close", jobId: "job-1" })).toEqual([
+      "job",
+      "close",
+      "job-1",
+    ]);
+    expect(() => buildWorkbenchArguments({ action: "job.start", force: true, command: ["echo", "ok"] }))
+      .toThrow("force is only supported for editor.close and job.close");
+    expect(() => buildWorkbenchArguments({ action: "lazygit.close", force: false }))
+      .toThrow("force is only supported for editor.close and job.close");
+  });
+
   test("requires action-specific identifiers", () => {
     expect(() => buildWorkbenchArguments({ action: "job.read" })).toThrow("jobId is required");
     expect(() => buildWorkbenchArguments({ action: "pane.focus" })).toThrow("paneId is required");

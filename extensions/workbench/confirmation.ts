@@ -30,6 +30,11 @@ export interface ConfirmationRequest {
   expiresAt: number;
 }
 
+export interface ForceCloseTarget {
+  kind: "editor" | "job";
+  id: string;
+}
+
 interface ConfirmationReply {
   version: 1;
   requestId: string;
@@ -135,6 +140,54 @@ export function buildConfirmationRequest(
   };
 }
 
+function forceCloseDetails(target: ForceCloseTarget): { title: string; summary: string; reason: string } {
+  if (target.kind === "editor") {
+    return {
+      title: `Force-close editor pane ${target.id}?`.slice(0, MAX_CONFIRMATION_TITLE_CHARS),
+      summary: `Force-closing editor pane ${target.id} will discard unsaved changes.`,
+      reason: `Force-closing editor pane ${target.id} discards unsaved changes.`,
+    };
+  }
+  return {
+    title: `Force-close job ${target.id}?`.slice(0, MAX_CONFIRMATION_TITLE_CHARS),
+    summary: `Force-closing job ${target.id} will terminate its running process and discard its visible pane.`,
+    reason: `Force-closing job ${target.id} terminates its running process and discards its visible pane.`,
+  };
+}
+
+export function buildForceCloseConfirmationRequest(
+  input: WorkbenchInput,
+  cwd: string,
+  target: ForceCloseTarget,
+  scope: { sessionId: string; sessionFile?: string },
+  now = Date.now(),
+): ConfirmationRequest {
+  const expectedAction = target.kind === "editor" ? "editor.close" : "job.close";
+  if (input.action !== expectedAction || !target.id.trim()) {
+    throw new Error("force-close confirmation target does not match the close action");
+  }
+  const operationTarget = target.kind === "editor"
+    ? { paneId: target.id }
+    : { jobId: target.id };
+  const operation = JSON.stringify({ ...input, cwd, target: operationTarget });
+  const details = forceCloseDetails(target);
+  const summary = `${details.summary}\nOperation: ${operation}`;
+  if (!boundedText(summary, MAX_CONFIRMATION_SUMMARY_CHARS)) {
+    throw new Error(`Force-close confirmation summary exceeds ${MAX_CONFIRMATION_SUMMARY_CHARS} characters`);
+  }
+  return {
+    version: 1,
+    requestId: randomUUID(),
+    ...scope,
+    provider: CONFIRMATION_PROVIDER,
+    operationId: `sha256:${createHash("sha256").update(operation).digest("hex")}`,
+    riskCategory: "force-close",
+    title: details.title,
+    summary,
+    expiresAt: now + CONFIRMATION_EXPIRY_MS,
+  };
+}
+
 export class ConfirmationBroker {
   readonly #pi: ExtensionAPI;
   readonly #pending = new Map<string, AbortController>();
@@ -149,15 +202,42 @@ export class ConfirmationBroker {
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ): Promise<void> {
-    if (this.#pending.size >= MAX_PENDING_CONFIRMATIONS) {
-      throw new Error("Too many pending confirmations");
-    }
+    this.#assertCapacity();
     const sessionFile = ctx.sessionManager.getSessionFile();
     const request = buildConfirmationRequest(input, input.cwd ?? ctx.cwd, risk, {
       sessionId: ctx.sessionManager.getSessionId(),
       ...(sessionFile ? { sessionFile } : {}),
     });
+    await this.#awaitConfirmation(request, risk.reason, ctx, signal);
+  }
 
+  async confirmForceClose(
+    input: WorkbenchInput,
+    target: ForceCloseTarget,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ): Promise<void> {
+    this.#assertCapacity();
+    const sessionFile = ctx.sessionManager.getSessionFile();
+    const request = buildForceCloseConfirmationRequest(input, input.cwd ?? ctx.cwd, target, {
+      sessionId: ctx.sessionManager.getSessionId(),
+      ...(sessionFile ? { sessionFile } : {}),
+    });
+    await this.#awaitConfirmation(request, forceCloseDetails(target).reason, ctx, signal);
+  }
+
+  #assertCapacity(): void {
+    if (this.#pending.size >= MAX_PENDING_CONFIRMATIONS) {
+      throw new Error("Too many pending confirmations");
+    }
+  }
+
+  async #awaitConfirmation(
+    request: ConfirmationRequest,
+    reason: string,
+    ctx: ExtensionContext,
+    signal?: AbortSignal,
+  ): Promise<void> {
     const controller = new AbortController();
     const combined = signal
       ? AbortSignal.any([signal, controller.signal])
@@ -189,9 +269,9 @@ export class ConfirmationBroker {
 
       this.#pi.events.emit(CONFIRMATION_CANCELLED_EVENT, request);
       if (!ctx.hasUI || ctx.mode !== "tui") {
-        throw new Error(`Confirmation required for ${risk.category}, but voice and interactive TUI confirmation are unavailable`);
+        throw new Error(`Confirmation required for ${request.riskCategory}, but voice and interactive TUI confirmation are unavailable`);
       }
-      const approved = await ctx.ui.confirm(request.title, `${request.summary}\n\nReason: ${risk.reason}`, {
+      const approved = await ctx.ui.confirm(request.title, `${request.summary}\n\nReason: ${reason}`, {
         signal: combined,
         timeout: Math.max(0, request.expiresAt - Date.now()),
       });
