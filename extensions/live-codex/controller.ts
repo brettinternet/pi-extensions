@@ -1,5 +1,4 @@
 // Adapted from Oh My Pi's MIT-licensed live session controller.
-import { randomUUID } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type {
   AssistantMessage,
@@ -11,6 +10,18 @@ import type {
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { ActivityTracker, type WorkStatus } from "./activity-tracker.ts";
+import {
+  type BackgroundActivityFinished,
+  type BackgroundActivityStarted,
+  cancelBackgroundActivity,
+  currentActivityScope,
+  parseBackgroundActivityFinished,
+  parseBackgroundActivityStarted,
+  parseLegacySubagentFinished,
+  parseLegacySubagentStarted,
+  requestBackgroundActivitySnapshot,
+  SUBAGENT_PROVIDER,
+} from "./background-activity.ts";
 import type { ImageAttachment } from "./image-attachments.ts";
 import { AudioCapture } from "./native.cjs";
 import {
@@ -31,8 +42,7 @@ const OUTPUT_ECHO_RATIO = 0.65;
 const LIVE_DELEGATION_MESSAGE_TYPE = "pi-live-codex-delegation";
 const CANCEL_CURRENT_REQUEST = "[[live:cancel-current]]";
 const CANCEL_JOB_REQUEST = /^\[\[live:cancel-job ([A-Za-z0-9-]+)\]\]$/;
-const SUBAGENT_RPC_REQUEST_EVENT = "subagents:rpc:v1:request";
-const SUBAGENT_RPC_REPLY_PREFIX = "subagents:rpc:v1:reply:";
+const CANCEL_ACTIVITY_REQUEST = /^\[\[live:cancel-activity (\S+) (\S+)\]\]$/;
 
 const LIVE_INSTRUCTIONS = `You are the realtime voice surface of one unified coding assistant.
 
@@ -40,7 +50,7 @@ The user speaks to you. Respond directly, briefly, conversationally, and without
 
 The Pi coding agent is your execution surface with repository context and tools. For coding, investigation, repository changes, commands, or verification, promptly create a client delegation containing the complete request and relevant conversational context. Do not attempt repository work yourself. A new request while work is active must create another client delegation. Independent requests are queued by the client so they remain correctly correlated; do not assume they steer an earlier request.
 
-When the user unambiguously asks to stop the foreground operation currently being performed, create a client delegation whose entire text is exactly ${CANCEL_CURRENT_REQUEST}. When session context identifies the exact job for a background activity the user asks to cancel, create a client delegation whose entire text is [[live:cancel-job JOB_ID]], replacing JOB_ID with that owned job id. If the target is ambiguous, ask the user instead of guessing.
+When the user unambiguously asks to stop the foreground operation currently being performed, create a client delegation whose entire text is exactly ${CANCEL_CURRENT_REQUEST}. When session context identifies the exact provider and activity ID for a background activity the user asks to cancel, create a client delegation whose entire text is [[live:cancel-activity PROVIDER ACTIVITY_ID]]. The legacy form [[live:cancel-job JOB_ID]] remains available only when that raw ID identifies exactly one activity. If the target is ambiguous, ask the user instead of guessing.
 
 Treat delegation context as your own internal progress and results. Never mention a backend, delegation, protocol, or separate assistant. Commentary context is silent progress for conversational continuity. Context beginning with "Agent Final Message": is the completed result; present its useful content naturally as your own. Session context beginning with "Background Activity Final": is a later result from work you previously acknowledged; briefly tell the user what finished. Never claim work or verification before a result arrives.`;
 
@@ -87,16 +97,6 @@ function stringField(
   return typeof candidate === "string" && candidate.trim()
     ? candidate
     : undefined;
-}
-
-function completionState(
-  event: Record<string, unknown>,
-): "completed" | "failed" | "cancelled" {
-  const state = stringField(event, "state");
-  if (state === "stopped" || state === "cancelled") return "cancelled";
-  return event.success === true || state === "complete" || state === "completed"
-    ? "completed"
-    : "failed";
 }
 
 export class OutputActivityLatch {
@@ -160,6 +160,7 @@ export class LiveSession {
   #attachments: ImageAttachment[] = [];
   readonly #delegationAttachments = new Map<string, ImageAttachment[]>();
   #attachmentLoadTail: Promise<void> = Promise.resolve();
+  #stopSnapshotDiscovery: (() => void) | undefined;
 
   constructor(options: LiveSessionOptions) {
     this.#pi = options.pi;
@@ -210,6 +211,11 @@ export class LiveSession {
         this.#handleMicrophoneAudio(samples);
       });
       this.#refreshPhase();
+      this.#stopSnapshotDiscovery = requestBackgroundActivitySnapshot(
+        this.#pi,
+        currentActivityScope(this.#context),
+        (activity) => this.handleBackgroundActivityStarted(activity),
+      );
     } catch (cause) {
       this.#fail(cause instanceof Error ? cause : new Error(String(cause)));
       throw cause;
@@ -268,49 +274,45 @@ export class LiveSession {
     });
   }
 
+  handleToolCallStarted(toolCallId: string): void {
+    this.#activities.correlateToolCall(toolCallId);
+  }
+
+  handleBackgroundActivityStarted(value: unknown): void {
+    const started = parseBackgroundActivityStarted(
+      value,
+      currentActivityScope(this.#context),
+    );
+    if (!started) return;
+    this.#queueAction(() => this.#startActivity(started));
+  }
+
+  handleBackgroundActivityFinished(value: unknown): void {
+    const finished = parseBackgroundActivityFinished(
+      value,
+      currentActivityScope(this.#context),
+    );
+    if (!finished) return;
+    this.#queueAction(() => this.#finishActivity(finished));
+  }
+
   handleAsyncJobStarted(event: unknown): void {
-    if (!isRecord(event)) return;
-    const jobId = stringField(event, "runId") ?? stringField(event, "id");
-    if (!jobId || !this.#eventBelongsToSession(event)) return;
-    this.#queueAction(() => {
-      const owner = this.#activities.associateJob(jobId);
-      if (!owner) return;
-      this.#queueSend(
-        buildSessionContextAppend(
-          `Background Activity Started:\n\n${owner.request}\n\nOwned job id: ${jobId}`,
-          "commentary",
-        ),
-      );
-      this.#persistActivity("job-started", owner.id, jobId);
-      this.#emitWorkStatus();
-    });
+    const scope = currentActivityScope(this.#context);
+    const record = isRecord(event) ? event : undefined;
+    const activityId = record && (stringField(record, "runId") ?? stringField(record, "id"));
+    if (!activityId) return;
+    const originId = `legacy-subagent:${activityId}`;
+    const started = parseLegacySubagentStarted(event, scope, originId);
+    if (!started || !this.#activities.correlateToolCall(originId)) return;
+    this.handleBackgroundActivityStarted(started);
   }
 
   handleAsyncJobCompleted(event: unknown): void {
-    if (!isRecord(event)) return;
-    const jobId = stringField(event, "runId") ?? stringField(event, "id");
-    if (!jobId) return;
-    this.#queueAction(() => {
-      const state = completionState(event);
-      const owner = this.#activities.completeJob(jobId, state);
-      if (!owner) return;
-      const summary = stringField(event, "summary")?.trim();
-      const outcome = state === "completed" ? "completed" : state;
-      const detail = summary
-        ? `\n\n${summary.slice(0, 4_000)}`
-        : "";
-      this.#queueSend(
-        buildSessionContextAppend(
-          `Background Activity Final:\n\n${owner.request}\n\nStatus: ${outcome}.${detail}`,
-          "speakable",
-        ),
-      );
-      this.#persistActivity("job-completed", owner.id, jobId, {
-        state,
-        ...(summary ? { summary: summary.slice(0, 4_000) } : {}),
-      });
-      this.#emitWorkStatus();
-    });
+    const finished = parseLegacySubagentFinished(
+      event,
+      currentActivityScope(this.#context),
+    );
+    if (finished) this.handleBackgroundActivityFinished(finished);
   }
 
   stop(): Promise<void> {
@@ -320,6 +322,8 @@ export class LiveSession {
 
   async #stop(): Promise<void> {
     this.#stopped = true;
+    this.#stopSnapshotDiscovery?.();
+    this.#stopSnapshotDiscovery = undefined;
     this.#outputActivity.dispose();
     try {
       const recorder = this.#recorder;
@@ -400,16 +404,19 @@ export class LiveSession {
       );
       return;
     }
+    const cancelActivity = request.match(CANCEL_ACTIVITY_REQUEST);
     const cancelJob = request.match(CANCEL_JOB_REQUEST);
-    if (cancelJob) {
-      const jobId = cancelJob[1]!;
-      if (!this.#activities.ownsRunningJob(jobId)) {
+    if (cancelActivity || cancelJob) {
+      const activity = cancelActivity
+        ? this.#activities.findRunningActivity(cancelActivity[2]!, cancelActivity[1]!)
+        : this.#activities.findRunningActivity(cancelJob![1]!);
+      if (!activity?.cancellable) {
         this.#appendDelegationContext(
           event.item.id,
-          `"Agent Final Message":\n\nI couldn't cancel that activity because it isn't an active job owned by this voice session.`,
+          `"Agent Final Message":\n\nI couldn't cancel that activity because it isn't an active, unambiguous activity owned by this voice session.`,
         );
       } else {
-        void this.#cancelOwnedJob(event.item.id, jobId);
+        void this.#cancelOwnedActivity(event.item.id, activity);
       }
       return;
     }
@@ -476,42 +483,59 @@ export class LiveSession {
     }
   }
 
-  async #cancelOwnedJob(delegationId: string, jobId: string): Promise<void> {
-    const requestId = randomUUID();
-    const replyEvent = `${SUBAGENT_RPC_REPLY_PREFIX}${requestId}`;
-    let unsubscribe = () => {};
-    let timer: NodeJS.Timeout | undefined;
-    let resolveReply = (_accepted: boolean) => {};
-    const reply = new Promise<boolean>((resolve) => {
-      resolveReply = resolve;
-      timer = setTimeout(() => {
-        unsubscribe();
-        resolve(false);
-      }, 5_000);
-      unsubscribe = this.#pi.events.on(replyEvent, (value) => {
-        clearTimeout(timer);
-        unsubscribe();
-        resolve(isRecord(value) && value.success === true);
-      });
-    });
-    try {
-      this.#pi.events.emit(SUBAGENT_RPC_REQUEST_EVENT, {
-        version: 1,
-        requestId,
-        method: "stop",
-        params: { id: jobId },
-      });
-    } catch {
-      clearTimeout(timer);
-      unsubscribe();
-      resolveReply(false);
-    }
-    const accepted = await reply;
+  async #cancelOwnedActivity(
+    delegationId: string,
+    activity: BackgroundActivityStarted,
+  ): Promise<void> {
+    const accepted = await cancelBackgroundActivity(this.#pi, activity);
     if (this.#stopped) return;
     this.#appendDelegationContext(
       delegationId,
       `"Agent Final Message":\n\n${accepted ? "I asked that background activity to stop." : "I couldn't stop that background activity."}`,
     );
+  }
+
+  #startActivity(started: BackgroundActivityStarted): void {
+    const result = this.#activities.startActivity(started);
+    if (!result) return;
+    const request = result.owner?.request ?? started.label;
+    this.#queueSend(buildSessionContextAppend(
+      `Background Activity Started:\n\n${request}\n\nActivity: ${started.provider} ${started.activityId}`,
+      "commentary",
+    ));
+    this.#persistActivity(
+      started.provider === SUBAGENT_PROVIDER ? "job-started" : "activity-started",
+      result.owner?.id,
+      started,
+      { label: started.label, resumed: started.resumed === true },
+    );
+    if (result.bufferedFinish) this.#finishActivity(result.bufferedFinish);
+    this.#emitWorkStatus();
+  }
+
+  #finishActivity(finished: BackgroundActivityFinished): void {
+    const result = this.#activities.finishActivity(finished);
+    if (!result) return;
+    const request = result.owner?.request ?? result.activity.label;
+    const summary = finished.summary.trim().slice(0, 4_000);
+    const detail = summary ? `\n\n${summary}` : "";
+    this.#queueSend(buildSessionContextAppend(
+      `Background Activity Final:\n\n${request}\n\nStatus: ${finished.outcome}.${detail}`,
+      "speakable",
+    ));
+    this.#persistActivity(
+      finished.provider === SUBAGENT_PROVIDER ? "job-completed" : "activity-finished",
+      result.owner?.id,
+      result.activity,
+      {
+        outcome: finished.outcome,
+        ...(finished.provider === SUBAGENT_PROVIDER
+          ? { state: finished.outcome === "succeeded" ? "completed" : finished.outcome }
+          : {}),
+        ...(summary ? { summary } : {}),
+      },
+    );
+    this.#emitWorkStatus();
   }
 
   #queueAction(action: () => void | Promise<void>): void {
@@ -559,25 +583,25 @@ export class LiveSession {
     else this.#callbacks.onPhase("listening");
   }
 
-  #eventBelongsToSession(event: Record<string, unknown>): boolean {
-    const eventSession = stringField(event, "sessionId");
-    if (!eventSession) return true;
-    return eventSession ===
-      (this.#context.sessionManager.getSessionFile() ??
-        this.#context.sessionManager.getSessionId());
-  }
-
   #persistActivity(
     type: string,
-    delegationId: string,
-    jobId?: string,
+    delegationId?: string,
+    activity?: Pick<BackgroundActivityStarted, "provider" | "activityId" | "kind" | "workspaceId">,
     details: Record<string, unknown> = {},
   ): void {
     this.#pi.appendEntry("pi-live-codex-activity", {
       version: 1,
       type,
-      delegationId,
-      ...(jobId ? { jobId } : {}),
+      ...(delegationId ? { delegationId } : {}),
+      ...(activity ? {
+        provider: activity.provider,
+        activityId: activity.activityId,
+        ...(activity.provider === SUBAGENT_PROVIDER
+          ? { jobId: activity.activityId }
+          : {}),
+        kind: activity.kind,
+        ...(activity.workspaceId ? { workspaceId: activity.workspaceId } : {}),
+      } : {}),
       ...details,
       timestamp: Date.now(),
     });

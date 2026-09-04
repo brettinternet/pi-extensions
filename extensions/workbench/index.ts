@@ -13,10 +13,14 @@ import {
   BACKGROUND_ACTIVITY_CANCEL_EVENT,
   BACKGROUND_ACTIVITY_CANCEL_REPLY_PREFIX,
   BACKGROUND_ACTIVITY_FINISHED_EVENT,
+  BACKGROUND_ACTIVITY_SNAPSHOT_EVENT,
+  BACKGROUND_ACTIVITY_SNAPSHOT_REPLY_PREFIX,
   BACKGROUND_ACTIVITY_STARTED_EVENT,
   type BackgroundActivityCancelReply,
   type BackgroundActivityCancelRequest,
   type BackgroundActivityFinished,
+  type BackgroundActivitySnapshotReply,
+  type BackgroundActivitySnapshotRequest,
   type BackgroundActivityStarted,
   WORKBENCH_PROVIDER,
 } from "./protocol.ts";
@@ -480,6 +484,49 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
     },
   });
 
+  const unsubscribeSnapshot = pi.events.on(
+    BACKGROUND_ACTIVITY_SNAPSHOT_EVENT,
+    (value) => {
+      if (!isRecord(value)) return;
+      const request = value as unknown as BackgroundActivitySnapshotRequest;
+      const ctx = currentContext;
+      if (
+        !ctx || request.version !== 1 || typeof request.requestId !== "string" ||
+        request.sessionId !== ctx.sessionManager.getSessionId() ||
+        (request.sessionFile !== undefined &&
+          request.sessionFile !== ctx.sessionManager.getSessionFile()) ||
+        !Number.isInteger(request.limit) || request.limit <= 0
+      ) return;
+      const limit = Math.min(request.limit, 100);
+      const activities: BackgroundActivityStarted[] = [];
+      for (const [activityId, resource] of ownership.jobs) {
+        if (activities.length >= limit) break;
+        if (ownership.terminalJobs.has(activityId) || !resource.workspaceId) continue;
+        activities.push({
+          version: 1,
+          provider: WORKBENCH_PROVIDER,
+          activityId,
+          kind: "job",
+          ...sessionIdentity(ctx),
+          workspaceId: resource.workspaceId,
+          label: `Workbench job ${activityId}`,
+          cancellable: true,
+          resumed: true,
+        });
+      }
+      const reply: BackgroundActivitySnapshotReply = {
+        version: 1,
+        requestId: request.requestId,
+        provider: WORKBENCH_PROVIDER,
+        activities,
+      };
+      pi.events.emit(
+        `${BACKGROUND_ACTIVITY_SNAPSHOT_REPLY_PREFIX}${request.requestId}`,
+        reply,
+      );
+    },
+  );
+
   const unsubscribeCancel = pi.events.on(
     BACKGROUND_ACTIVITY_CANCEL_EVENT,
     (value) => {
@@ -506,6 +553,8 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
         !ctx ||
         !owned ||
         request.sessionId !== ctx.sessionManager.getSessionId() ||
+        (request.sessionFile !== undefined &&
+          request.sessionFile !== ctx.sessionManager.getSessionFile()) ||
         request.workspaceId !== owned.workspaceId
       ) {
         reply(false, "activity is not owned by the current workbench session");
@@ -551,6 +600,7 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", () => {
     currentContext = undefined;
+    unsubscribeSnapshot();
     unsubscribeCancel();
     for (const monitor of monitors.values()) monitor.abort();
     monitors.clear();
