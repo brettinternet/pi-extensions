@@ -1,0 +1,74 @@
+import { describe, expect, test } from "bun:test";
+import type { Theme } from "@earendil-works/pi-coding-agent";
+import { visibleWidth } from "@earendil-works/pi-tui";
+import { renderProgress } from "../../extensions/progress/render.ts";
+
+const theme = {
+  fg: (_color: string, text: string) => text,
+} as Theme;
+
+describe("progress rendering", () => {
+  test("renders active work and touched paths in at most two compact lines", () => {
+    const lines = renderProgress(
+      {
+        agentActive: true,
+        tools: [
+          { id: "1", name: "edit", label: "edit src/a.ts", path: "src/a.ts" },
+        ],
+        checks: [{ id: "2", label: "bun test", outcome: "passed" }],
+        touchedPaths: ["src/a.ts", "src/b.ts", "src/c.ts", "src/d.ts"],
+      },
+      theme,
+      120,
+    );
+
+    expect(lines).toEqual([
+      "progress · ● edit src/a.ts · ✓ bun test",
+      "touched src/b.ts · src/c.ts · src/d.ts +1",
+    ]);
+  });
+
+  test("renders settled observed results without retaining an idle empty widget", () => {
+    expect(
+      renderProgress(
+        {
+          agentActive: false,
+          tools: [],
+          checks: [{ id: "1", label: "task check", outcome: "failed" }],
+          touchedPaths: [],
+        },
+        theme,
+        80,
+      ),
+    ).toEqual(["progress · ✓ settled · ✗ task check"]);
+
+    expect(
+      renderProgress(
+        {
+          agentActive: false,
+          tools: [],
+          checks: [],
+          touchedPaths: [],
+        },
+        theme,
+        80,
+      ),
+    ).toEqual([]);
+  });
+
+  test("truncates rather than wrapping into additional rows", () => {
+    const lines = renderProgress(
+      {
+        agentActive: true,
+        tools: [{ id: "1", name: "bash", label: `bash ${"x".repeat(100)}` }],
+        checks: [],
+        touchedPaths: ["a/very/long/path/that/would/wrap.ts"],
+      },
+      theme,
+      30,
+    );
+
+    expect(lines).toHaveLength(2);
+    expect(lines.every((line) => visibleWidth(line) <= 30)).toBeTrue();
+  });
+});
