@@ -31,10 +31,13 @@ test("background jobs keep an activity active after its Pi turn settles", () => 
   tracker.activateNext();
   tracker.associateJob("job-1");
 
+  assert.equal(tracker.ownsRunningJob("job-1"), true);
+  assert.equal(tracker.ownsRunningJob("other"), false);
   assert.equal(tracker.settleActive()?.state, "running");
   assert.deepEqual(tracker.status(), { queued: 0, active: 1, failed: 0 });
 
   assert.equal(tracker.completeJob("job-1", "completed")?.state, "settled");
+  assert.equal(tracker.ownsRunningJob("job-1"), false);
   assert.deepEqual(tracker.status(), { queued: 0, active: 0, failed: 0 });
 });
 

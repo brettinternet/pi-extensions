@@ -1,4 +1,5 @@
 // Adapted from Oh My Pi's MIT-licensed live session controller.
+import { randomUUID } from "node:crypto";
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
 import type {
   AssistantMessage,
@@ -29,6 +30,9 @@ const MIN_BARGE_IN_LEVEL = 0.04;
 const OUTPUT_ECHO_RATIO = 0.65;
 const LIVE_DELEGATION_MESSAGE_TYPE = "pi-live-codex-delegation";
 const CANCEL_CURRENT_REQUEST = "[[live:cancel-current]]";
+const CANCEL_JOB_REQUEST = /^\[\[live:cancel-job ([A-Za-z0-9-]+)\]\]$/;
+const SUBAGENT_RPC_REQUEST_EVENT = "subagents:rpc:v1:request";
+const SUBAGENT_RPC_REPLY_PREFIX = "subagents:rpc:v1:reply:";
 
 const LIVE_INSTRUCTIONS = `You are the realtime voice surface of one unified coding assistant.
 
@@ -36,7 +40,7 @@ The user speaks to you. Respond directly, briefly, conversationally, and without
 
 The Pi coding agent is your execution surface with repository context and tools. For coding, investigation, repository changes, commands, or verification, promptly create a client delegation containing the complete request and relevant conversational context. Do not attempt repository work yourself. A new request while work is active must create another client delegation. Independent requests are queued by the client so they remain correctly correlated; do not assume they steer an earlier request.
 
-When the user unambiguously asks to stop the foreground operation currently being performed, create a client delegation whose entire text is exactly ${CANCEL_CURRENT_REQUEST}. Requests to cancel a named or previously launched background activity are ordinary client delegations containing the target and conversational context; the Pi agent will resolve and cancel the owned job.
+When the user unambiguously asks to stop the foreground operation currently being performed, create a client delegation whose entire text is exactly ${CANCEL_CURRENT_REQUEST}. When session context identifies the exact job for a background activity the user asks to cancel, create a client delegation whose entire text is [[live:cancel-job JOB_ID]], replacing JOB_ID with that owned job id. If the target is ambiguous, ask the user instead of guessing.
 
 Treat delegation context as your own internal progress and results. Never mention a backend, delegation, protocol, or separate assistant. Commentary context is silent progress for conversational continuity. Context beginning with "Agent Final Message": is the completed result; present its useful content naturally as your own. Session context beginning with "Background Activity Final": is a later result from work you previously acknowledged; briefly tell the user what finished. Never claim work or verification before a result arrives.`;
 
@@ -144,6 +148,7 @@ export class LiveSession {
   #actionTail: Promise<void> = Promise.resolve();
   #stopPromise: Promise<void> | undefined;
   readonly #activities = new ActivityTracker();
+  readonly #seenDelegationIds = new Set<string>();
   #outputLevel = 0;
   #outputActive = false;
   readonly #outputActivity: OutputActivityLatch;
@@ -270,6 +275,12 @@ export class LiveSession {
     this.#queueAction(() => {
       const owner = this.#activities.associateJob(jobId);
       if (!owner) return;
+      this.#queueSend(
+        buildSessionContextAppend(
+          `Background Activity Started:\n\n${owner.request}\n\nOwned job id: ${jobId}`,
+          "commentary",
+        ),
+      );
       this.#persistActivity("job-started", owner.id, jobId);
       this.#emitWorkStatus();
     });
@@ -371,6 +382,8 @@ export class LiveSession {
   async #handleDelegation(
     event: Extract<LiveServerEvent, { type: "delegation.created" }>,
   ): Promise<void> {
+    if (this.#seenDelegationIds.has(event.item.id)) return;
+    this.#seenDelegationIds.add(event.item.id);
     await this.#attachmentLoadTail;
     if (this.#stopped) return;
     const request = event.item.content
@@ -387,11 +400,24 @@ export class LiveSession {
       );
       return;
     }
+    const cancelJob = request.match(CANCEL_JOB_REQUEST);
+    if (cancelJob) {
+      const jobId = cancelJob[1]!;
+      if (!this.#activities.ownsRunningJob(jobId)) {
+        this.#appendDelegationContext(
+          event.item.id,
+          `"Agent Final Message":\n\nI couldn't cancel that activity because it isn't an active job owned by this voice session.`,
+        );
+      } else {
+        void this.#cancelOwnedJob(event.item.id, jobId);
+      }
+      return;
+    }
     if (!this.#activities.enqueue(event.item.id, request)) return;
     const attachments = this.#attachments.splice(0);
     this.#delegationAttachments.set(event.item.id, attachments);
     this.#callbacks.onAttachmentsChanged(0);
-    this.#persistActivity("queued", event.item.id);
+    this.#persistActivity("queued", event.item.id, undefined, { request });
     this.#emitWorkStatus();
     this.#inputTranscript = "";
     this.#callbacks.onTranscript("");
@@ -448,6 +474,44 @@ export class LiveSession {
         buildDelegationContextAppend(delegationId, chunk, channel),
       );
     }
+  }
+
+  async #cancelOwnedJob(delegationId: string, jobId: string): Promise<void> {
+    const requestId = randomUUID();
+    const replyEvent = `${SUBAGENT_RPC_REPLY_PREFIX}${requestId}`;
+    let unsubscribe = () => {};
+    let timer: NodeJS.Timeout | undefined;
+    let resolveReply = (_accepted: boolean) => {};
+    const reply = new Promise<boolean>((resolve) => {
+      resolveReply = resolve;
+      timer = setTimeout(() => {
+        unsubscribe();
+        resolve(false);
+      }, 5_000);
+      unsubscribe = this.#pi.events.on(replyEvent, (value) => {
+        clearTimeout(timer);
+        unsubscribe();
+        resolve(isRecord(value) && value.success === true);
+      });
+    });
+    try {
+      this.#pi.events.emit(SUBAGENT_RPC_REQUEST_EVENT, {
+        version: 1,
+        requestId,
+        method: "stop",
+        params: { id: jobId },
+      });
+    } catch {
+      clearTimeout(timer);
+      unsubscribe();
+      resolveReply(false);
+    }
+    const accepted = await reply;
+    if (this.#stopped) return;
+    this.#appendDelegationContext(
+      delegationId,
+      `"Agent Final Message":\n\n${accepted ? "I asked that background activity to stop." : "I couldn't stop that background activity."}`,
+    );
   }
 
   #queueAction(action: () => void | Promise<void>): void {

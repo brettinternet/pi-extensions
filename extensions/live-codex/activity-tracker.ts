@@ -114,6 +114,12 @@ export class ActivityTracker {
     return this.#delegations.get(id);
   }
 
+  ownsRunningJob(jobId: string): boolean {
+    const ownerId = this.#jobOwners.get(jobId);
+    return ownerId !== undefined &&
+      this.#delegations.get(ownerId)?.jobs.get(jobId)?.state === "running";
+  }
+
   status(): WorkStatus {
     let queued = 0;
     let active = 0;
