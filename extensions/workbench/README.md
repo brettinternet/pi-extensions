@@ -23,6 +23,8 @@ pi:background-activity:v1:started
 pi:background-activity:v1:finished
 pi:background-activity:v1:cancel
 pi:background-activity:v1:cancel-reply:<requestId>
+pi:background-activity:v1:snapshot
+pi:background-activity:v1:snapshot-reply:<requestId>
 ```
 
-The event payload contract is exported from `protocol.ts`. Identity is scoped by provider, activity ID, Pi session, and Herdr workspace. Cancellation replies mean that cancellation was accepted; the terminal `finished` event reports the final outcome.
+The event payload contract is exported from `protocol.ts`. Identity is scoped by provider, activity ID, Pi session, and Herdr workspace. Cancellation replies mean that cancellation was accepted; the terminal `finished` event reports the final outcome. Snapshot requests let consumers discover jobs that were already running before the consumer started. Workbench replies only for an exact current Pi session and caps each reply at 100 activities.

@@ -9,6 +9,10 @@ import type {
   EditorTheme,
   TUI,
 } from "@earendil-works/pi-tui";
+import {
+  BACKGROUND_ACTIVITY_FINISHED_EVENT,
+  BACKGROUND_ACTIVITY_STARTED_EVENT,
+} from "./background-activity.ts";
 import { LiveSession } from "./controller.ts";
 import { loadDroppedImages } from "./image-attachments.ts";
 import { acquireVoiceLock, type VoiceLock } from "./voice-lock.ts";
@@ -171,6 +175,18 @@ class LiveExtensionRuntime {
     this.#session?.handleAgentSettled();
   }
 
+  handleToolCallStarted(toolCallId: string): void {
+    this.#session?.handleToolCallStarted(toolCallId);
+  }
+
+  handleBackgroundActivityStarted(event: unknown): void {
+    this.#session?.handleBackgroundActivityStarted(event);
+  }
+
+  handleBackgroundActivityFinished(event: unknown): void {
+    this.#session?.handleBackgroundActivityFinished(event);
+  }
+
   handleAsyncJobStarted(event: unknown): void {
     this.#session?.handleAsyncJobStarted(event);
   }
@@ -248,6 +264,18 @@ export default function piLiveCodex(pi: ExtensionAPI): void {
     runtime.handleAgentSettled();
   });
 
+  pi.on("tool_execution_start", (event) => {
+    runtime.handleToolCallStarted(event.toolCallId);
+  });
+
+  const unsubscribeBackgroundStarted = pi.events.on(
+    BACKGROUND_ACTIVITY_STARTED_EVENT,
+    (event) => runtime.handleBackgroundActivityStarted(event),
+  );
+  const unsubscribeBackgroundFinished = pi.events.on(
+    BACKGROUND_ACTIVITY_FINISHED_EVENT,
+    (event) => runtime.handleBackgroundActivityFinished(event),
+  );
   const unsubscribeAsyncStarted = pi.events.on(
     "subagent:async-started",
     (event) => runtime.handleAsyncJobStarted(event),
@@ -258,6 +286,8 @@ export default function piLiveCodex(pi: ExtensionAPI): void {
   );
 
   pi.on("session_shutdown", async () => {
+    unsubscribeBackgroundStarted();
+    unsubscribeBackgroundFinished();
     unsubscribeAsyncStarted();
     unsubscribeAsyncCompleted();
     await runtime.stop();

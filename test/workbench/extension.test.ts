@@ -11,6 +11,8 @@ import workbenchExtension from "../../extensions/workbench/index.ts";
 import {
   BACKGROUND_ACTIVITY_CANCEL_EVENT,
   BACKGROUND_ACTIVITY_CANCEL_REPLY_PREFIX,
+  BACKGROUND_ACTIVITY_SNAPSHOT_EVENT,
+  BACKGROUND_ACTIVITY_SNAPSHOT_REPLY_PREFIX,
   BACKGROUND_ACTIVITY_STARTED_EVENT,
   WORKBENCH_PROVIDER,
 } from "../../extensions/workbench/protocol.ts";
@@ -115,12 +117,41 @@ describe("workbench extension", () => {
       },
     });
 
+    eventHandlers.get(BACKGROUND_ACTIVITY_SNAPSHOT_EVENT)!({
+      version: 1,
+      requestId: "snapshot-test",
+      sessionId: "session-test",
+      sessionFile: "/tmp/session.jsonl",
+      limit: 10,
+    });
+    expect(emitted).toContainEqual({
+      name: `${BACKGROUND_ACTIVITY_SNAPSHOT_REPLY_PREFIX}snapshot-test`,
+      value: {
+        version: 1,
+        requestId: "snapshot-test",
+        provider: WORKBENCH_PROVIDER,
+        activities: [{
+          version: 1,
+          provider: WORKBENCH_PROVIDER,
+          activityId: "job-test",
+          kind: "job",
+          sessionId: "session-test",
+          sessionFile: "/tmp/session.jsonl",
+          workspaceId: "workspace-test",
+          label: "Workbench job job-test",
+          cancellable: true,
+          resumed: true,
+        }],
+      },
+    });
+
     eventHandlers.get(BACKGROUND_ACTIVITY_CANCEL_EVENT)!({
       version: 1,
       requestId: "cancel-test",
       provider: WORKBENCH_PROVIDER,
       activityId: "job-test",
       sessionId: "session-test",
+      sessionFile: "/tmp/session.jsonl",
       workspaceId: "workspace-test",
     });
     await new Promise((resolve) => setTimeout(resolve, 0));

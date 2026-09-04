@@ -6,6 +6,10 @@ export const BACKGROUND_ACTIVITY_CANCEL_EVENT =
   "pi:background-activity:v1:cancel";
 export const BACKGROUND_ACTIVITY_CANCEL_REPLY_PREFIX =
   "pi:background-activity:v1:cancel-reply:";
+export const BACKGROUND_ACTIVITY_SNAPSHOT_EVENT =
+  "pi:background-activity:v1:snapshot";
+export const BACKGROUND_ACTIVITY_SNAPSHOT_REPLY_PREFIX =
+  "pi:background-activity:v1:snapshot-reply:";
 
 export const WORKBENCH_PROVIDER = "herdr-workbench";
 
@@ -42,6 +46,7 @@ export interface BackgroundActivityCancelRequest {
   provider: string;
   activityId: string;
   sessionId: string;
+  sessionFile?: string;
   workspaceId: string;
 }
 
@@ -50,4 +55,19 @@ export interface BackgroundActivityCancelReply {
   requestId: string;
   success: boolean;
   error?: string;
+}
+
+export interface BackgroundActivitySnapshotRequest {
+  version: 1;
+  requestId: string;
+  sessionId: string;
+  sessionFile?: string;
+  limit: number;
+}
+
+export interface BackgroundActivitySnapshotReply {
+  version: 1;
+  requestId: string;
+  provider: string;
+  activities: BackgroundActivityStarted[];
 }

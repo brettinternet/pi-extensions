@@ -20,6 +20,17 @@ Start Pi in its interactive TUI, then run:
 
 Use `/live <voice>` to select a voice. `Ctrl+L` toggles voice mode, `Space` mutes, and `Esc` ends the voice session. Drop image files into the terminal while live to attach them to your next spoken request.
 
-You can make additional requests while work is running. Independent requests are dispatched to Pi in order, while detached subagent jobs continue concurrently. Their completion is correlated with the request that launched them and announced through the live session. A clear request to stop the current foreground operation aborts that Pi turn. A request to cancel an unambiguous background activity stops only the correlated job owned by this voice session.
+You can make additional requests while work is running. Independent requests are dispatched to Pi in order, while background activities continue concurrently. Their completion is correlated with the request that launched them and announced through the live session. A clear request to stop the current foreground operation aborts that Pi turn. A request to cancel an unambiguous background activity is routed only to its provider. Existing subagent lifecycle events and stop RPC remain supported.
+
+## Background activity wire contract
+
+Separately installed extensions integrate through `pi.events`; no package imports are required. Live Codex keeps its own structural validation and types in `background-activity.ts`.
+
+- `pi:background-activity:v1:started`: `{ version: 1, provider, activityId, kind, sessionId, sessionFile?, workspaceId?, originId?, label, cancellable, resumed? }`. Fresh activities require `originId`, which is the originating Pi tool-call ID. Only snapshot/replayed activities may set `resumed: true` and omit it.
+- `pi:background-activity:v1:finished`: `{ version: 1, provider, activityId, kind, sessionId, sessionFile?, workspaceId?, outcome, exitCode?, summary }`, where outcome is `succeeded`, `failed`, or `cancelled`.
+- `pi:background-activity:v1:cancel`: `{ version: 1, requestId, provider, activityId, sessionId, sessionFile?, workspaceId? }`. Reply on `pi:background-activity:v1:cancel-reply:<requestId>` with `{ version: 1, requestId, success, error? }`. Success means accepted; `finished` remains the terminal signal.
+- `pi:background-activity:v1:snapshot`: `{ version: 1, requestId, sessionId, sessionFile?, limit }`. Each producer may reply on `pi:background-activity:v1:snapshot-reply:<requestId>` with `{ version: 1, requestId, provider, activities }`; entries use the started schema with `resumed: true`. Discovery accepts at most 100 entries during a 250 ms window.
+
+Identity is always `(provider, activityId)`. `sessionId` must exactly match the active Pi session; a supplied session file and workspace are retained and must also match across start/finish/cancel events.
 
 Only one Pi process can use live voice at a time.
