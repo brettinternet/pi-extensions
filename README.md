@@ -75,10 +75,11 @@ Install both extensions from the repository:
 pi install git:github.com/brettinternet/pi-extensions
 ```
 
-Or install only Live Codex from npm:
+Or install an individual extension from npm:
 
 ```sh
 pi install npm:pi-live-codex
+pi install npm:pi-title
 ```
 
 Installed extensions are loaded from their package metadata.

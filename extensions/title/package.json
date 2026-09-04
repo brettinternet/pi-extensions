@@ -1,0 +1,39 @@
+{
+  "name": "pi-title",
+  "version": "0.1.0",
+  "description": "Automatic session titles for the Pi coding agent",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brettinternet/pi-extensions.git",
+    "directory": "extensions/title"
+  },
+  "homepage": "https://github.com/brettinternet/pi-extensions#title",
+  "bugs": {
+    "url": "https://github.com/brettinternet/pi-extensions/issues"
+  },
+  "files": [
+    "*.ts",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "session-title"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
