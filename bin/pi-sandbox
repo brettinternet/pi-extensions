@@ -1,0 +1,5 @@
+#!/usr/bin/env -S node --experimental-strip-types
+
+import { main } from "../extensions/colima-sandbox/launcher.ts";
+
+process.exitCode = await main(process.argv.slice(2));
