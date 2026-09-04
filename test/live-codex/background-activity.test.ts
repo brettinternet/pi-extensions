@@ -164,3 +164,74 @@ test("snapshot discovery accepts bounded replies from multiple producers", () =>
   const request = bus.emitted.find(({ name }) => name === BACKGROUND_ACTIVITY_SNAPSHOT_EVENT)!.value;
   assert.equal((request as { limit: number }).limit, 100);
 });
+
+test("snapshot quota ignores malformed and unaccepted entries", () => {
+  const bus = new EventBus();
+  const pi = { events: bus } as unknown as ExtensionAPI;
+  bus.on(BACKGROUND_ACTIVITY_SNAPSHOT_EVENT, (value) => {
+    const requestId = (value as { requestId: string }).requestId;
+    const replyEvent = `${BACKGROUND_ACTIVITY_SNAPSHOT_REPLY_PREFIX}${requestId}`;
+    bus.emit(replyEvent, {
+      version: 1,
+      requestId,
+      provider: "noise",
+      activities: Array.from({ length: 100 }, () => ({ nope: true })),
+    });
+    bus.emit(replyEvent, {
+      version: 1,
+      requestId,
+      provider: "workbench",
+      activities: [
+        { ...activity("other", "wrong-provider"), originId: undefined, resumed: true },
+        { ...activity("workbench", "wrong-session"), sessionId: "other", originId: undefined, resumed: true },
+        { ...activity("workbench", "not-resumed"), originId: "tool-call", resumed: undefined },
+        { ...activity("workbench", "valid"), originId: undefined, resumed: true },
+        { ...activity("workbench", "valid"), originId: undefined, resumed: true },
+      ],
+    });
+  });
+
+  const discovered: BackgroundActivityStarted[] = [];
+  const stop = requestBackgroundActivitySnapshot(pi, scope, (item) => discovered.push(item), 50);
+  stop();
+  assert.deepEqual(discovered.map(({ provider, activityId }) => [provider, activityId]), [
+    ["workbench", "valid"],
+  ]);
+});
+
+test("snapshot quota counts only 100 accepted unique provider/activity tuples", () => {
+  const bus = new EventBus();
+  const pi = { events: bus } as unknown as ExtensionAPI;
+  bus.on(BACKGROUND_ACTIVITY_SNAPSHOT_EVENT, (value) => {
+    const requestId = (value as { requestId: string }).requestId;
+    const replyEvent = `${BACKGROUND_ACTIVITY_SNAPSHOT_REPLY_PREFIX}${requestId}`;
+    const resumed = (provider: string, activityId: string) => ({
+      ...activity(provider, activityId),
+      originId: undefined,
+      resumed: true,
+    });
+    bus.emit(replyEvent, {
+      version: 1,
+      requestId,
+      provider: "provider-a",
+      activities: [resumed("provider-a", "duplicate"), resumed("provider-a", "duplicate")],
+    });
+    bus.emit(replyEvent, {
+      version: 1,
+      requestId,
+      provider: "provider-b",
+      activities: Array.from({ length: 99 }, (_, index) => resumed("provider-b", `job-${index}`)),
+    });
+    bus.emit(replyEvent, {
+      version: 1,
+      requestId,
+      provider: "provider-c",
+      activities: [resumed("provider-c", "over-limit")],
+    });
+  });
+
+  const discovered: BackgroundActivityStarted[] = [];
+  requestBackgroundActivitySnapshot(pi, scope, (item) => discovered.push(item), 50)();
+  assert.equal(discovered.length, 100);
+  assert.equal(discovered.some(({ activityId }) => activityId === "over-limit"), false);
+});

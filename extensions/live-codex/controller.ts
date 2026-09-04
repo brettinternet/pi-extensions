@@ -32,7 +32,10 @@ import {
   type LiveClientMessage,
   type LiveServerEvent,
 } from "./protocol.ts";
-import { CodexLiveTransport } from "./transport.ts";
+import {
+  CodexLiveTransport,
+  type LiveTransportOptions,
+} from "./transport.ts";
 import type { LivePhase } from "./visualizer.ts";
 
 const OUTPUT_ACTIVE_LEVEL = 0.015;
@@ -63,11 +66,27 @@ export interface LiveSessionCallbacks {
   onTerminal(error?: Error): void;
 }
 
+export interface LiveTransport {
+  connect(): Promise<void>;
+  send(message: LiveClientMessage): Promise<void>;
+  pushAudio(samples: Float32Array): void;
+  setMuted(muted: boolean): void;
+  close(): Promise<void>;
+}
+
+export interface LiveAudioCapture {
+  stop(): void;
+}
+
 export interface LiveSessionOptions {
   pi: ExtensionAPI;
   context: ExtensionContext;
   callbacks: LiveSessionCallbacks;
   voice?: string;
+  createTransport?: (options: LiveTransportOptions) => LiveTransport;
+  createAudioCapture?: (
+    onAudio: (error: Error | null, samples: Float32Array) => void,
+  ) => LiveAudioCapture;
 }
 
 function assistantText(message: AssistantMessage): string {
@@ -142,8 +161,12 @@ export class LiveSession {
   readonly #context: ExtensionContext;
   readonly #callbacks: LiveSessionCallbacks;
   readonly #voice: string;
-  #transport: CodexLiveTransport | undefined;
-  #recorder: AudioCapture | undefined;
+  readonly #createTransport: (options: LiveTransportOptions) => LiveTransport;
+  readonly #createAudioCapture: NonNullable<LiveSessionOptions["createAudioCapture"]>;
+  #transport: LiveTransport | undefined;
+  #transportConnected = false;
+  #pendingSends: LiveClientMessage[] = [];
+  #recorder: LiveAudioCapture | undefined;
   #sendTail: Promise<void> = Promise.resolve();
   #actionTail: Promise<void> = Promise.resolve();
   #stopPromise: Promise<void> | undefined;
@@ -167,6 +190,10 @@ export class LiveSession {
     this.#context = options.context;
     this.#callbacks = options.callbacks;
     this.#voice = options.voice?.trim() || "sol";
+    this.#createTransport = options.createTransport ??
+      ((transportOptions) => new CodexLiveTransport(transportOptions));
+    this.#createAudioCapture = options.createAudioCapture ??
+      ((onAudio) => new AudioCapture(16_000, onAudio));
     this.#outputActivity = new OutputActivityLatch((active) => {
       this.#outputActive = active;
       this.#refreshPhase();
@@ -176,7 +203,7 @@ export class LiveSession {
   async start(): Promise<void> {
     this.#callbacks.onPhase("connecting");
     try {
-      const transport = new CodexLiveTransport({
+      const transport = this.#createTransport({
         sessionId: this.#context.sessionManager.getSessionId(),
         instructions: LIVE_INSTRUCTIONS,
         voice: this.#voice,
@@ -202,8 +229,15 @@ export class LiveSession {
       });
       this.#transport = transport;
       await transport.connect();
-      if (this.#stopped) return;
-      this.#recorder = new AudioCapture(16_000, (error, samples) => {
+      if (this.#stopped) {
+        this.#pendingSends = [];
+        return;
+      }
+      this.#transportConnected = true;
+      const pendingSends = this.#pendingSends;
+      this.#pendingSends = [];
+      for (const message of pendingSends) this.#enqueueConnectedSend(message);
+      this.#recorder = this.#createAudioCapture((error, samples) => {
         if (error) {
           this.#fail(error);
           return;
@@ -211,12 +245,17 @@ export class LiveSession {
         this.#handleMicrophoneAudio(samples);
       });
       this.#refreshPhase();
-      this.#stopSnapshotDiscovery = requestBackgroundActivitySnapshot(
+      const stopSnapshotDiscovery = requestBackgroundActivitySnapshot(
         this.#pi,
         currentActivityScope(this.#context),
-        (activity) => this.handleBackgroundActivityStarted(activity),
+        (activity) => {
+          if (!this.#stopped) this.handleBackgroundActivityStarted(activity);
+        },
       );
+      if (this.#stopped) stopSnapshotDiscovery();
+      else this.#stopSnapshotDiscovery = stopSnapshotDiscovery;
     } catch (cause) {
+      this.#pendingSends = [];
       this.#fail(cause instanceof Error ? cause : new Error(String(cause)));
       throw cause;
     }
@@ -322,6 +361,8 @@ export class LiveSession {
 
   async #stop(): Promise<void> {
     this.#stopped = true;
+    this.#transportConnected = false;
+    this.#pendingSends = [];
     this.#stopSnapshotDiscovery?.();
     this.#stopSnapshotDiscovery = undefined;
     this.#outputActivity.dispose();
@@ -539,14 +580,26 @@ export class LiveSession {
   }
 
   #queueAction(action: () => void | Promise<void>): void {
+    if (this.#stopped) return;
     this.#actionTail = this.#actionTail
-      .then(action)
+      .then(async () => {
+        if (!this.#stopped) await action();
+      })
       .catch((cause) => {
         this.#fail(cause instanceof Error ? cause : new Error(String(cause)));
       });
   }
 
   #queueSend(message: LiveClientMessage): void {
+    if (!this.#transport || this.#stopped) return;
+    if (!this.#transportConnected) {
+      this.#pendingSends.push(message);
+      return;
+    }
+    this.#enqueueConnectedSend(message);
+  }
+
+  #enqueueConnectedSend(message: LiveClientMessage): void {
     const transport = this.#transport;
     if (!transport || this.#stopped) return;
     this.#sendTail = this.#sendTail

@@ -43,7 +43,7 @@ export interface ActivityFinishResult {
 }
 
 export function activityKey(provider: string, activityId: string): string {
-  return `${provider}\u0000${activityId}`;
+  return JSON.stringify([provider, activityId]);
 }
 
 export class ActivityTracker {

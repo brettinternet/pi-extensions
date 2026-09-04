@@ -278,15 +278,22 @@ export function requestBackgroundActivitySnapshot(
   const requestId = randomUUID();
   const replyEvent = `${BACKGROUND_ACTIVITY_SNAPSHOT_REPLY_PREFIX}${requestId}`;
   let remaining = SNAPSHOT_LIMIT;
+  const accepted = new Map<string, Set<string>>();
   const unsubscribe = pi.events.on(replyEvent, (value) => {
     if (!isObject(value) || value.version !== 1 || value.requestId !== requestId ||
       !Array.isArray(value.activities) || !stringField(value, "provider")) return;
     const provider = stringField(value, "provider")!;
-    for (const candidate of value.activities.slice(0, remaining)) {
+    for (const candidate of value.activities) {
+      if (remaining === 0) break;
       const activity = parseBackgroundActivityStarted(candidate, scope);
-      if (activity?.resumed === true && activity.provider === provider) onActivity(activity);
+      if (activity?.resumed !== true || activity.provider !== provider) continue;
+      const providerActivities = accepted.get(provider) ?? new Set<string>();
+      if (providerActivities.has(activity.activityId)) continue;
+      providerActivities.add(activity.activityId);
+      accepted.set(provider, providerActivities);
+      remaining -= 1;
+      onActivity(activity);
     }
-    remaining -= Math.min(remaining, value.activities.length);
     if (remaining === 0) unsubscribe();
   });
   const timer = setTimeout(unsubscribe, windowMs);

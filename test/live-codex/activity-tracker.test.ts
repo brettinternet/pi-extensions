@@ -94,6 +94,24 @@ test("provider is part of identity and raw collisions are ambiguous", () => {
   assert.equal(tracker.getActivity("provider-b", "same-id")?.state, "running");
 });
 
+test("NUL-containing provider and activity IDs remain independent", () => {
+  const tracker = new ActivityTracker();
+  tracker.enqueue("delegation", "Run both");
+  tracker.activateNext();
+  tracker.correlateToolCall("tool-a");
+  tracker.correlateToolCall("tool-b");
+
+  assert.ok(tracker.startActivity(started("a\0b", "c", "tool-a")));
+  assert.ok(tracker.startActivity(started("a", "b\0c", "tool-b")));
+  assert.equal(tracker.finishActivity(finished("a\0b", "c"))?.activity.state, "succeeded");
+  assert.equal(tracker.getActivity("a", "b\0c")?.state, "running");
+  assert.equal(
+    tracker.finishActivity(finished("a", "b\0c", "cancelled"))?.activity.state,
+    "cancelled",
+  );
+  assert.equal(tracker.getActivity("a\0b", "c")?.state, "succeeded");
+});
+
 test("duplicate and finish-before-start events are deduplicated", () => {
   const tracker = new ActivityTracker();
   tracker.enqueue("delegation", "Run checks");
