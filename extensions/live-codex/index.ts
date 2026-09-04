@@ -88,6 +88,7 @@ class LiveExtensionRuntime {
           onTranscript: (text) => this.#visualizer?.setTranscript(text),
           onAttachmentsChanged: (count) =>
             this.#visualizer?.setAttachmentCount(count),
+          onWorkStatus: (status) => this.#visualizer?.setWorkStatus(status),
           onTerminal: (error) =>
             session && this.#finish(session, error ?? pendingError),
         },
@@ -170,6 +171,14 @@ class LiveExtensionRuntime {
     this.#session?.handleAgentSettled();
   }
 
+  handleAsyncJobStarted(event: unknown): void {
+    this.#session?.handleAsyncJobStarted(event);
+  }
+
+  handleAsyncJobCompleted(event: unknown): void {
+    this.#session?.handleAsyncJobCompleted(event);
+  }
+
   async stop(): Promise<void> {
     const session = this.#session;
     if (!session) return;
@@ -239,7 +248,18 @@ export default function piLiveCodex(pi: ExtensionAPI): void {
     runtime.handleAgentSettled();
   });
 
+  const unsubscribeAsyncStarted = pi.events.on(
+    "subagent:async-started",
+    (event) => runtime.handleAsyncJobStarted(event),
+  );
+  const unsubscribeAsyncCompleted = pi.events.on(
+    "subagent:async-complete",
+    (event) => runtime.handleAsyncJobCompleted(event),
+  );
+
   pi.on("session_shutdown", async () => {
+    unsubscribeAsyncStarted();
+    unsubscribeAsyncCompleted();
     await runtime.stop();
   });
 }

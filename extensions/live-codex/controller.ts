@@ -9,11 +9,13 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { ActivityTracker, type WorkStatus } from "./activity-tracker.ts";
 import type { ImageAttachment } from "./image-attachments.ts";
 import { AudioCapture } from "./native.cjs";
 import {
   buildDelegationContextAppend,
   buildSessionClose,
+  buildSessionContextAppend,
   chunkLiveContext,
   type LiveClientMessage,
   type LiveServerEvent,
@@ -31,15 +33,16 @@ const LIVE_INSTRUCTIONS = `You are the realtime voice surface of one unified cod
 
 The user speaks to you. Respond directly, briefly, conversationally, and without markdown unless asked for detail.
 
-The Pi coding agent is your execution surface with repository context and tools. For coding, investigation, repository changes, commands, or verification, promptly create a client delegation containing the complete request and relevant conversational context. Do not attempt repository work yourself. A new request while work is active must create another client delegation so it can steer the same backend session.
+The Pi coding agent is your execution surface with repository context and tools. For coding, investigation, repository changes, commands, or verification, promptly create a client delegation containing the complete request and relevant conversational context. Do not attempt repository work yourself. A new request while work is active must create another client delegation. Independent requests are queued by the client so they remain correctly correlated; do not assume they steer an earlier request.
 
-Treat delegation context as your own internal progress and results. Never mention a backend, delegation, protocol, or separate assistant. Commentary context is silent progress for conversational continuity. Context beginning with "Agent Final Message": is the completed result; present its useful content naturally as your own. Never claim work or verification before that result arrives.`;
+Treat delegation context as your own internal progress and results. Never mention a backend, delegation, protocol, or separate assistant. Commentary context is silent progress for conversational continuity. Context beginning with "Agent Final Message": is the completed result; present its useful content naturally as your own. Session context beginning with "Background Activity Final": is a later result from work you previously acknowledged; briefly tell the user what finished. Never claim work or verification before a result arrives.`;
 
 export interface LiveSessionCallbacks {
   onPhase(phase: LivePhase): void;
   onInputLevel(level: number): void;
   onTranscript(text: string): void;
   onAttachmentsChanged(count: number): void;
+  onWorkStatus(status: WorkStatus): void;
   onTerminal(error?: Error): void;
 }
 
@@ -63,6 +66,30 @@ function microphoneLevel(samples: Float32Array): number {
   let squares = 0;
   for (const sample of samples) squares += sample * sample;
   return Math.min(1, Math.sqrt(squares / samples.length));
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+function stringField(
+  value: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const candidate = value[key];
+  return typeof candidate === "string" && candidate.trim()
+    ? candidate
+    : undefined;
+}
+
+function completionState(
+  event: Record<string, unknown>,
+): "completed" | "failed" | "cancelled" {
+  const state = stringField(event, "state");
+  if (state === "stopped" || state === "cancelled") return "cancelled";
+  return event.success === true || state === "complete" || state === "completed"
+    ? "completed"
+    : "failed";
 }
 
 export class OutputActivityLatch {
@@ -111,10 +138,9 @@ export class LiveSession {
   #transport: CodexLiveTransport | undefined;
   #recorder: AudioCapture | undefined;
   #sendTail: Promise<void> = Promise.resolve();
+  #actionTail: Promise<void> = Promise.resolve();
   #stopPromise: Promise<void> | undefined;
-  #activeDelegationId: string | undefined;
-  readonly #seenDelegationIds = new Set<string>();
-  #pendingFinal = "";
+  readonly #activities = new ActivityTracker();
   #outputLevel = 0;
   #outputActive = false;
   readonly #outputActivity: OutputActivityLatch;
@@ -124,6 +150,7 @@ export class LiveSession {
   #terminalEmitted = false;
   #inputTranscript = "";
   #attachments: ImageAttachment[] = [];
+  readonly #delegationAttachments = new Map<string, ImageAttachment[]>();
   #attachmentLoadTail: Promise<void> = Promise.resolve();
 
   constructor(options: LiveSessionOptions) {
@@ -205,24 +232,71 @@ export class LiveSession {
   }
 
   handleAgentMessage(message: AgentMessage): void {
-    if (message.role !== "assistant" || !this.#activeDelegationId) return;
+    if (message.role !== "assistant" || !this.#activities.active()) return;
     const text = assistantText(message);
     if (!text) return;
     if (message.stopReason === "toolUse") {
-      this.#appendDelegationContext(text, "commentary");
+      this.#appendDelegationContext(
+        this.#activities.active()!.id,
+        text,
+        "commentary",
+      );
     } else {
-      this.#pendingFinal = text;
+      this.#activities.setPendingFinal(text);
     }
   }
 
   handleAgentSettled(): void {
-    if (!this.#activeDelegationId || !this.#pendingFinal) return;
-    this.#appendDelegationContext(
-      `"Agent Final Message":\n\n${this.#pendingFinal}`,
-    );
-    this.#pendingFinal = "";
-    this.#activeDelegationId = undefined;
-    this.#refreshPhase();
+    this.#queueAction(() => {
+      const settled = this.#activities.settleActive();
+      if (settled?.pendingFinal) {
+        this.#appendDelegationContext(
+          settled.id,
+          `"Agent Final Message":\n\n${settled.pendingFinal}`,
+        );
+      }
+      this.#emitWorkStatus();
+      this.#dispatchNext();
+    });
+  }
+
+  handleAsyncJobStarted(event: unknown): void {
+    if (!isRecord(event)) return;
+    const jobId = stringField(event, "runId") ?? stringField(event, "id");
+    if (!jobId || !this.#eventBelongsToSession(event)) return;
+    this.#queueAction(() => {
+      const owner = this.#activities.associateJob(jobId);
+      if (!owner) return;
+      this.#persistActivity("job-started", owner.id, jobId);
+      this.#emitWorkStatus();
+    });
+  }
+
+  handleAsyncJobCompleted(event: unknown): void {
+    if (!isRecord(event)) return;
+    const jobId = stringField(event, "runId") ?? stringField(event, "id");
+    if (!jobId) return;
+    this.#queueAction(() => {
+      const state = completionState(event);
+      const owner = this.#activities.completeJob(jobId, state);
+      if (!owner) return;
+      const summary = stringField(event, "summary")?.trim();
+      const outcome = state === "completed" ? "completed" : state;
+      const detail = summary
+        ? `\n\n${summary.slice(0, 4_000)}`
+        : "";
+      this.#queueSend(
+        buildSessionContextAppend(
+          `Background Activity Final:\n\n${owner.request}\n\nStatus: ${outcome}.${detail}`,
+          "speakable",
+        ),
+      );
+      this.#persistActivity("job-completed", owner.id, jobId, {
+        state,
+        ...(summary ? { summary: summary.slice(0, 4_000) } : {}),
+      });
+      this.#emitWorkStatus();
+    });
   }
 
   stop(): Promise<void> {
@@ -240,6 +314,8 @@ export class LiveSession {
         recorder?.stop();
       } catch {}
       try {
+        await this.#attachmentLoadTail;
+        await this.#actionTail;
         await this.#sendTail;
       } catch {}
       const transport = this.#transport;
@@ -276,7 +352,7 @@ export class LiveSession {
         }
         break;
       case "delegation.created":
-        void this.#handleDelegation(event);
+        this.#queueAction(() => this.#handleDelegation(event));
         break;
       case "error":
         this.#fail(new Error(event.message));
@@ -292,51 +368,81 @@ export class LiveSession {
   async #handleDelegation(
     event: Extract<LiveServerEvent, { type: "delegation.created" }>,
   ): Promise<void> {
-    if (this.#seenDelegationIds.has(event.item.id)) return;
-    this.#seenDelegationIds.add(event.item.id);
     await this.#attachmentLoadTail;
     if (this.#stopped) return;
     const request = event.item.content
       .map((content) => content.text)
       .join("\n")
       .trim();
-    if (!request) return;
-    this.#activeDelegationId = event.item.id;
-    this.#pendingFinal = "";
-    this.#callbacks.onPhase("working");
+    if (!request || !this.#activities.enqueue(event.item.id, request)) return;
     const attachments = this.#attachments.splice(0);
-    const content: (TextContent | ImageContent)[] = [
-      { type: "text", text: request },
-      ...attachments.map((attachment) => attachment.content),
-    ];
+    this.#delegationAttachments.set(event.item.id, attachments);
     this.#callbacks.onAttachmentsChanged(0);
-    this.#pi.sendMessage(
-      {
-        customType: LIVE_DELEGATION_MESSAGE_TYPE,
-        content,
-        display: true,
-        details: {
-          delegationId: event.item.id,
-          attachments: attachments.map(({ name }) => name),
-        },
-      },
-      { triggerTurn: true, deliverAs: "steer" },
-    );
+    this.#persistActivity("queued", event.item.id);
+    this.#emitWorkStatus();
     this.#inputTranscript = "";
     this.#callbacks.onTranscript("");
+    this.#dispatchNext();
+  }
+
+  #dispatchNext(): void {
+    if (this.#stopped || !this.#context.isIdle()) return;
+    const delegation = this.#activities.activateNext();
+    if (!delegation) return;
+    const attachments = this.#delegationAttachments.get(delegation.id) ?? [];
+    this.#delegationAttachments.delete(delegation.id);
+    const content: (TextContent | ImageContent)[] = [
+      { type: "text", text: delegation.request },
+      ...attachments.map((attachment) => attachment.content),
+    ];
+    try {
+      this.#pi.sendMessage(
+        {
+          customType: LIVE_DELEGATION_MESSAGE_TYPE,
+          content,
+          display: true,
+          details: {
+            delegationId: delegation.id,
+            attachments: attachments.map(({ name }) => name),
+          },
+        },
+        { triggerTurn: true, deliverAs: "followUp" },
+      );
+      this.#persistActivity("active", delegation.id);
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      this.#appendDelegationContext(
+        delegation.id,
+        `"Agent Final Message":\n\nI couldn't start that request: ${error.message}`,
+      );
+      this.#activities.failActive();
+      this.#persistActivity("failed", delegation.id, undefined, {
+        error: error.message,
+      });
+      this.#dispatchNext();
+    }
+    this.#emitWorkStatus();
+    this.#refreshPhase();
   }
 
   #appendDelegationContext(
+    delegationId: string,
     text: string,
     channel?: "speakable" | "commentary",
   ): void {
-    const delegationId = this.#activeDelegationId;
-    if (!delegationId) return;
     for (const chunk of chunkLiveContext(text)) {
       this.#queueSend(
         buildDelegationContextAppend(delegationId, chunk, channel),
       );
     }
+  }
+
+  #queueAction(action: () => void | Promise<void>): void {
+    this.#actionTail = this.#actionTail
+      .then(action)
+      .catch((cause) => {
+        this.#fail(cause instanceof Error ? cause : new Error(String(cause)));
+      });
   }
 
   #queueSend(message: LiveClientMessage): void {
@@ -368,9 +474,40 @@ export class LiveSession {
   #refreshPhase(): void {
     if (this.#stopped) return;
     if (this.#muted) this.#callbacks.onPhase("muted");
-    else if (this.#activeDelegationId) this.#callbacks.onPhase("working");
+    else if (
+      this.#activities.status().active > 0 ||
+      this.#activities.status().queued > 0
+    ) this.#callbacks.onPhase("working");
     else if (this.#outputActive) this.#callbacks.onPhase("speaking");
     else this.#callbacks.onPhase("listening");
+  }
+
+  #eventBelongsToSession(event: Record<string, unknown>): boolean {
+    const eventSession = stringField(event, "sessionId");
+    if (!eventSession) return true;
+    return eventSession ===
+      (this.#context.sessionManager.getSessionFile() ??
+        this.#context.sessionManager.getSessionId());
+  }
+
+  #persistActivity(
+    type: string,
+    delegationId: string,
+    jobId?: string,
+    details: Record<string, unknown> = {},
+  ): void {
+    this.#pi.appendEntry("pi-live-codex-activity", {
+      version: 1,
+      type,
+      delegationId,
+      ...(jobId ? { jobId } : {}),
+      ...details,
+      timestamp: Date.now(),
+    });
+  }
+
+  #emitWorkStatus(): void {
+    this.#callbacks.onWorkStatus(this.#activities.status());
   }
 
   #fail(error: Error): void {

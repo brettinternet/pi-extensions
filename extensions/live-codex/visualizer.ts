@@ -5,6 +5,7 @@ import {
   type Theme,
   type ThemeColor,
 } from "@earendil-works/pi-coding-agent";
+import type { WorkStatus } from "./activity-tracker.ts";
 import {
   type EditorTheme,
   matchesKey,
@@ -39,6 +40,7 @@ export class LiveVisualizer extends CustomEditor {
   #frame = 0;
   #transcript = "";
   #attachmentCount = 0;
+  #workStatus: WorkStatus = { queued: 0, active: 0, failed: 0 };
 
   constructor(
     tui: TUI,
@@ -77,6 +79,16 @@ export class LiveVisualizer extends CustomEditor {
   setAttachmentCount(count: number): void {
     if (this.#attachmentCount === count) return;
     this.#attachmentCount = count;
+    this.#tui.requestRender();
+  }
+
+  setWorkStatus(status: WorkStatus): void {
+    if (
+      this.#workStatus.queued === status.queued &&
+      this.#workStatus.active === status.active &&
+      this.#workStatus.failed === status.failed
+    ) return;
+    this.#workStatus = status;
     this.#tui.requestRender();
   }
 
@@ -190,8 +202,14 @@ export class LiveVisualizer extends CustomEditor {
       this.#phase === "working"
         ? spinners[this.#frame % spinners.length]
         : staticIcons[this.#phase];
-    const fullLabel = ` ${icon} ${this.#phase} · space mute · esc end `;
-    const shortLabel = ` ${icon} ${this.#phase} `;
+    const work = [
+      this.#workStatus.active > 0 ? `${this.#workStatus.active} active` : "",
+      this.#workStatus.queued > 0 ? `${this.#workStatus.queued} queued` : "",
+      this.#workStatus.failed > 0 ? `${this.#workStatus.failed} failed` : "",
+    ].filter(Boolean).join(" · ");
+    const workLabel = work ? ` · ${work}` : "";
+    const fullLabel = ` ${icon} ${this.#phase}${workLabel} · space mute · esc end `;
+    const shortLabel = ` ${icon} ${this.#phase}${workLabel} `;
     const label =
       innerWidth >= visibleWidth(fullLabel) + 1
         ? fullLabel
