@@ -7,12 +7,12 @@ import {
   buildSessionContextAppend,
   chunkLiveContext,
   parseLiveServerEvent,
-} from "../extensions/protocol.ts";
+} from "../../extensions/live-codex/protocol.ts";
 import {
   buildLiveSidebandUrl,
   getCodexAccountId,
   parseLiveCallId,
-} from "../extensions/transport.ts";
+} from "../../extensions/live-codex/transport.ts";
 
 describe("Frameless Bidi protocol", () => {
   test("parses client delegations", () => {

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { LiveVisualizer } from "../extensions/visualizer.ts";
+import { LiveVisualizer } from "../../extensions/live-codex/visualizer.ts";
 
 describe("Live visualizer", () => {
   test("forwards configured app shortcuts without accepting editor input", () => {

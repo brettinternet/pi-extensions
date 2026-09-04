@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
-import { OutputActivityLatch } from "../extensions/controller.ts";
+import { OutputActivityLatch } from "../../extensions/live-codex/controller.ts";
 
 test("output activity stays active across brief level drops", (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });

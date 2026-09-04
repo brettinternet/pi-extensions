@@ -1,45 +1,31 @@
 {
-  "name": "pi-live-codex",
-  "version": "0.1.3",
-  "description": "Realtime gpt-live-1-codex voice frontend for the Pi coding agent",
+  "name": "pi-extensions",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Personal extensions for the Pi coding agent",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/brettinternet/pi-live-codex.git"
-  },
-  "homepage": "https://github.com/brettinternet/pi-live-codex#readme",
-  "bugs": {
-    "url": "https://github.com/brettinternet/pi-live-codex/issues"
-  },
-  "files": [
-    "extensions",
-    "README.md",
-    "LICENSE"
-  ],
-  "publishConfig": {
-    "access": "public"
+    "url": "git+https://github.com/brettinternet/pi-extensions.git"
   },
   "keywords": [
     "pi-package",
-    "pi-extension",
-    "openai-codex",
-    "gpt-live-1-codex",
-    "voice",
-    "speech"
+    "pi-extension"
   ],
   "engines": {
     "node": ">=22.19.0"
   },
   "scripts": {
     "check": "tsc --noEmit",
-    "test": "node --test test/*.test.ts"
+    "test": "bun test"
   },
   "dependencies": {
     "@oh-my-pi/pi-natives": "18.1.6",
     "ws": "8.21.3"
   },
   "devDependencies": {
+    "@types/bun": "latest",
     "@types/node": "22.19.19",
     "@types/ws": "latest",
     "typescript": "latest"
@@ -52,7 +38,8 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/index.ts"
+      "./extensions/live-codex/index.ts",
+      "./extensions/session-title/index.ts"
     ]
   }
 }

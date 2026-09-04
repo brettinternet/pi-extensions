@@ -6,7 +6,7 @@ import { test } from "node:test";
 import {
   droppedFilePaths,
   loadDroppedImages,
-} from "../extensions/image-attachments.ts";
+} from "../../extensions/live-codex/image-attachments.ts";
 
 test("parses quoted and escaped dropped image paths", () => {
   assert.deepEqual(

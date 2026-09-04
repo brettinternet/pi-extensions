@@ -13,7 +13,7 @@ import { test } from "node:test";
 import {
   acquireVoiceLock,
   VoiceLockHeldError,
-} from "../extensions/voice-lock.ts";
+} from "../../extensions/live-codex/voice-lock.ts";
 
 test("only one live session can hold the voice lock", () => {
   const parent = mkdtempSync(join(tmpdir(), "pi-live-codex-test-"));
