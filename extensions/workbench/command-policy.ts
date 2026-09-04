@@ -6,7 +6,8 @@ export type CommandRiskCategory =
   | "git-mutation"
   | "package-publish"
   | "process-system"
-  | "shell-wrapper";
+  | "shell-wrapper"
+  | "unknown-executable";
 
 export interface CommandRisk {
   category: CommandRiskCategory;
@@ -15,6 +16,18 @@ export interface CommandRisk {
 
 const SHELLS = new Set([
   "ash", "bash", "cmd", "csh", "dash", "fish", "ksh", "nu", "powershell", "pwsh", "sh", "tcsh", "zsh",
+]);
+const INTERPRETERS = new Set([
+  "deno", "lua", "node", "perl", "php", "python", "python2", "python3", "ruby",
+]);
+const WRAPPERS_AND_TASK_RUNNERS = new Set([
+  "ant", "command", "exec", "gmake", "gradle", "gradlew", "just", "make", "mise", "mvn", "mvnw",
+  "nice", "ninja", "nohup", "parallel", "rake", "task", "timeout", "watch", "xargs",
+]);
+const READ_ONLY_COMMANDS = new Set([
+  "basename", "cat", "cmp", "comm", "cut", "df", "dirname", "du", "echo", "false", "head", "jq", "ls",
+  "md5", "md5sum", "nl", "od", "paste", "printf", "pwd", "realpath", "sha1sum", "sha256sum", "stat",
+  "tail", "tr", "true", "uname", "uniq", "wc", "which", "whoami",
 ]);
 const DESTRUCTIVE_FILESYSTEM = new Set([
   "chmod", "chown", "dd", "mkfs", "mv", "rmdir", "rm", "shred", "truncate", "unlink",
@@ -27,14 +40,12 @@ const READ_ONLY_GIT = new Set([
 ]);
 const PACKAGE_MANAGERS = new Set(["bun", "npm", "pnpm", "yarn"]);
 const READ_ONLY_DEPLOY_COMMANDS: Record<string, ReadonlySet<string>> = {
-  kubectl: new Set([
-    "api-resources", "api-versions", "cluster-info", "describe", "explain", "get", "logs", "version",
-  ]),
+  kubectl: new Set(["api-resources", "api-versions", "describe", "explain", "get", "logs", "version"]),
   helm: new Set(["env", "get", "history", "list", "search", "show", "status", "version"]),
-  terraform: new Set(["fmt", "graph", "output", "plan", "providers", "show", "validate", "version"]),
-  pulumi: new Set(["about", "logs", "preview", "version", "whoami"]),
-  flyctl: new Set(["checks", "config", "ips", "logs", "orgs", "platform", "regions", "releases", "status", "version"]),
-  vercel: new Set(["bisect", "inspect", "list", "logs", "whoami"]),
+  terraform: new Set(["graph", "output", "show", "validate", "version"]),
+  pulumi: new Set(["about", "logs", "version", "whoami"]),
+  flyctl: new Set(["logs", "status", "version"]),
+  vercel: new Set(["inspect", "list", "logs", "whoami"]),
 };
 
 function executable(command: string): string {
@@ -70,36 +81,18 @@ function nestedOperation(args: readonly string[], parent: string): string | unde
 }
 
 /**
- * Narrow deny-list policy for direct argv execution. Known mutation surfaces require
- * confirmation; unrecognized direct executables remain allowed and are not treated as shell.
+ * Strict allowlist policy for direct argv execution. Only recognized read-only commands and
+ * narrowly defined routine development operations run without confirmation. Wrappers,
+ * interpreters, task runners, and unknown executables fail closed to confirmation.
  */
 export function classifyCommandRisk(command: readonly string[]): CommandRisk | undefined {
   const name = command[0] ? executable(command[0]) : "";
   const args = command.slice(1);
   if (!name) return { category: "process-system", reason: "empty executable" };
 
-  if (name === "env") {
-    let index = 0;
-    while (index < args.length) {
-      const arg = args[index]!;
-      if (arg === "--") {
-        index += 1;
-        break;
-      }
-      if (["-u", "--unset", "-C", "--chdir", "-S", "--split-string"].includes(arg)) {
-        index += 2;
-        continue;
-      }
-      if (arg.startsWith("-") || /^[^=]+=/.test(arg)) {
-        index += 1;
-        continue;
-      }
-      break;
-    }
-    return index < args.length ? classifyCommandRisk(args.slice(index)) : undefined;
-  }
-  if (SHELLS.has(name)) {
-    return { category: "shell-wrapper", reason: `${name} can execute an unbounded command string or script` };
+  if (name === "env" || SHELLS.has(name) || INTERPRETERS.has(name) ||
+    /^python\d+(?:\.\d+)?$/.test(name) || WRAPPERS_AND_TASK_RUNNERS.has(name)) {
+    return { category: "shell-wrapper", reason: `${name} can execute another command, script, or task` };
   }
   if (DESTRUCTIVE_FILESYSTEM.has(name)) {
     return { category: "delete", reason: `${name} can destructively modify the filesystem` };
@@ -109,8 +102,12 @@ export function classifyCommandRisk(command: readonly string[]): CommandRisk | u
   }
   if (name === "git") {
     const operation = gitOperation(args);
-    if (operation && (READ_ONLY_GIT.has(operation) || operation === "--version" || operation === "--help")) return undefined;
-    return { category: "git-mutation", reason: `git ${operation ?? "with unrecognized options"} is not on the read-only allowlist` };
+    const unsafeReadOption = args.find((arg) =>
+      arg === "--ext-diff" || arg === "--textconv" || arg === "--output" || arg.startsWith("--output="));
+    if (!unsafeReadOption && operation &&
+      (READ_ONLY_GIT.has(operation) || operation === "--version" || operation === "--help")) return undefined;
+    const detail = unsafeReadOption ?? operation ?? "with unrecognized options";
+    return { category: "git-mutation", reason: `git ${detail} is not on the read-only allowlist` };
   }
   if (PACKAGE_MANAGERS.has(name) && args.some((arg) => arg.toLowerCase() === "publish")) {
     return { category: "package-publish", reason: `${name} publish releases a package` };
@@ -127,12 +124,47 @@ export function classifyCommandRisk(command: readonly string[]): CommandRisk | u
   }
   const deployReads = READ_ONLY_DEPLOY_COMMANDS[name];
   if (deployReads) {
-    const operation = firstOperand(args);
+    const operation = args[0]?.toLowerCase();
     if (operation && deployReads.has(operation)) return undefined;
     return { category: "deploy", reason: `${name} ${operation ?? "operation"} may mutate deployment or infrastructure state` };
   }
   if (["ansible-playbook", "cdk", "serverless", "sls"].includes(name)) {
     return { category: "deploy", reason: `${name} may mutate deployment or infrastructure state` };
   }
-  return undefined;
+  if (name === "find") {
+    const destructiveAction = args.find((arg) =>
+      ["-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls"]
+        .includes(arg.toLowerCase()));
+    if (destructiveAction) {
+      return { category: "delete", reason: `find ${destructiveAction} can modify the filesystem or execute another command` };
+    }
+    return undefined;
+  }
+  if (name === "fd") {
+    const executionOption = args.find((arg) =>
+      arg.startsWith("-x") || arg.startsWith("-X") || arg === "--exec" || arg.startsWith("--exec=") ||
+      arg === "--exec-batch" || arg.startsWith("--exec-batch="));
+    if (!executionOption) return undefined;
+    return { category: "shell-wrapper", reason: `fd ${executionOption} executes another command` };
+  }
+  if (name === "rg") {
+    const executionOption = args.find((arg) => arg === "--pre" || arg.startsWith("--pre="));
+    if (!executionOption) return undefined;
+    return { category: "shell-wrapper", reason: `rg ${executionOption} executes another command` };
+  }
+  if (name === "sort") {
+    const unsafeOption = args.find((arg) =>
+      arg.startsWith("-o") || arg === "--output" || arg.startsWith("--output=") ||
+      arg === "--compress-program" || arg.startsWith("--compress-program="));
+    if (!unsafeOption) return undefined;
+    return { category: "delete", reason: `sort ${unsafeOption} can overwrite a file or execute another program` };
+  }
+  if (name === "date") {
+    const setOption = args.find((arg) => arg.startsWith("-s") || arg === "--set" || arg.startsWith("--set="));
+    if (!setOption) return undefined;
+    return { category: "process-system", reason: `date ${setOption} can change the system clock` };
+  }
+  if (name === "bun" && firstOperand(args) === "test") return undefined;
+  if (READ_ONLY_COMMANDS.has(name)) return undefined;
+  return { category: "unknown-executable", reason: `${name} is not on the direct-command allowlist` };
 }
