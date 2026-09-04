@@ -24,6 +24,12 @@ Registers a typed `workbench` tool for visible Neovim, LazyGit, and foreground j
 
 The tool only mutates trusted projects and limits follow-up operations to resources owned by the current Pi session. See [`extensions/workbench/README.md`](extensions/workbench/README.md) for requirements and the event contract.
 
+### Progress
+
+Shows compact, passive main-agent activity below the editor. It observes active tools, recent check outcomes, and successful edit/write targets without registering an LLM tool, changing prompts, or calling another model. Output is limited to two truncated lines; `pi-subagents` FleetView remains the source for delegated work.
+
+See [`extensions/progress/README.md`](extensions/progress/README.md) for exact semantics and limitations.
+
 ### Title
 
 Generates a concise session title once. Generation starts in the background as soon as the first assistant message containing text is finalized (`message_end`); it does not wait for later tool results, additional assistant turns, or the full agent run to settle. The title appears when that background request finishes, is persisted as the Pi session name, and is used verbatim as the terminal title. Existing and manually named sessions are left unchanged.
@@ -75,7 +81,7 @@ Only built-in file and shell tools are available. Linked worktrees, launches bel
 
 ## Install
 
-Install both extensions from the repository:
+Install all extensions from the repository:
 
 ```sh
 pi install git:github.com/brettinternet/pi-extensions
@@ -85,6 +91,7 @@ Or install an individual extension from npm:
 
 ```sh
 pi install npm:pi-live-codex
+pi install npm:pi-progress
 pi install npm:pi-title
 pi install npm:pi-herdr-workbench
 ```
