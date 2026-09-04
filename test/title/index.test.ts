@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import { describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_CONFIG, type Config } from "../../extensions/title/config.js";
@@ -205,6 +206,192 @@ describe("title command", () => {
   });
 });
 
+describe("automatic title generation", () => {
+  test("starts in the background when the first assistant text is finalized", async () => {
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = `/tmp/pi-title-test-${randomUUID()}`;
+
+    try {
+      const handlers = new Map<string, (...args: unknown[]) => unknown>();
+      let sessionTitle: string | undefined;
+      let resolveCompletion!: (response: {
+        content: Array<{ type: string; text?: string }>;
+        stopReason: string;
+      }) => void;
+      const completion = new Promise<{
+        content: Array<{ type: string; text?: string }>;
+        stopReason: string;
+      }>((resolve) => {
+        resolveCompletion = resolve;
+      });
+      let requestCount = 0;
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => {
+        markStarted = resolve;
+      });
+      let markTitleSet!: () => void;
+      const titleSet = new Promise<void>((resolve) => {
+        markTitleSet = resolve;
+      });
+
+      const pi = {
+        on: (name: string, handler: unknown) => {
+          handlers.set(name, handler as (...args: unknown[]) => unknown);
+        },
+        registerCommand: () => {},
+        getSessionName: () => sessionTitle,
+        setSessionName: (title: string) => {
+          sessionTitle = title;
+          markTitleSet();
+        },
+      } as unknown as ExtensionAPI;
+      const ctx = {
+        hasUI: true,
+        model: activeModel,
+        modelRegistry: {
+          getProvider: () => ({
+            streamSimple: () => {
+              requestCount += 1;
+              markStarted();
+              return { result: () => completion };
+            },
+          }),
+          getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "test-key" }),
+        },
+        sessionManager: {
+          getBranch: () => [
+            { type: "message", message: { role: "user", content: "Implement background titles" } },
+          ],
+        },
+        ui: { setTitle: () => {}, notify: () => {} },
+      } as unknown as ExtensionCommandContext;
+
+      titleExtension(pi);
+      const result = handlers.get("message_end")!(
+        {
+          message: {
+            role: "assistant",
+            content: [{ type: "text", text: "Implemented it" }],
+          },
+        },
+        ctx,
+      );
+
+      expect(result).toBeUndefined();
+      await started;
+      expect(sessionTitle).toBeUndefined();
+
+      handlers.get("message_end")!(
+        { message: { role: "assistant", content: [{ type: "text", text: "More detail" }] } },
+        ctx,
+      );
+      expect(requestCount).toBe(1);
+
+      resolveCompletion({ content: [{ type: "text", text: "Background Session Titles" }], stopReason: "stop" });
+      await titleSet;
+      expect(sessionTitle).toBe("Background Session Titles");
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  });
+
+  test("cancels an automatic request before explicit regeneration", async () => {
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = `/tmp/pi-title-test-${randomUUID()}`;
+
+    try {
+      const handlers = new Map<string, (...args: unknown[]) => unknown>();
+      let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+      let sessionTitle: string | undefined;
+      let automaticSignal: AbortSignal | undefined;
+      let markAutomaticStarted!: () => void;
+      const automaticStarted = new Promise<void>((resolve) => {
+        markAutomaticStarted = resolve;
+      });
+      let markAutomaticAborted!: () => void;
+      const automaticAborted = new Promise<void>((resolve) => {
+        markAutomaticAborted = resolve;
+      });
+      let resolveRegeneration!: (response: {
+        content: Array<{ type: string; text?: string }>;
+        stopReason: string;
+      }) => void;
+      const regeneration = new Promise<{
+        content: Array<{ type: string; text?: string }>;
+        stopReason: string;
+      }>((resolve) => {
+        resolveRegeneration = resolve;
+      });
+      let requestCount = 0;
+
+      const pi = {
+        on: (name: string, handler: unknown) => {
+          handlers.set(name, handler as (...args: unknown[]) => unknown);
+        },
+        registerCommand: (_name: string, options: Parameters<ExtensionAPI["registerCommand"]>[1]) => {
+          command = options;
+        },
+        getSessionName: () => sessionTitle,
+        setSessionName: (title: string) => {
+          sessionTitle = title;
+        },
+      } as unknown as ExtensionAPI;
+      const ctx = {
+        hasUI: true,
+        model: activeModel,
+        modelRegistry: {
+          getProvider: () => ({
+            streamSimple: (_model: unknown, _request: unknown, options: { signal: AbortSignal }) => {
+              requestCount += 1;
+              if (requestCount === 1) {
+                automaticSignal = options.signal;
+                markAutomaticStarted();
+                return {
+                  result: () => new Promise((_, reject) => {
+                    options.signal.addEventListener("abort", () => {
+                      markAutomaticAborted();
+                      reject(new Error("aborted"));
+                    }, { once: true });
+                  }),
+                };
+              }
+              return { result: () => regeneration };
+            },
+          }),
+          getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "test-key" }),
+        },
+        sessionManager: {
+          getBranch: () => [
+            { type: "message", message: { role: "user", content: "Implement background titles" } },
+            { type: "message", message: { role: "assistant", content: "Implemented it" } },
+          ],
+        },
+        ui: { setTitle: () => {}, notify: () => {} },
+      } as unknown as ExtensionCommandContext;
+
+      titleExtension(pi);
+      handlers.get("message_end")!(
+        { message: { role: "assistant", content: [{ type: "text", text: "Implemented it" }] } },
+        ctx,
+      );
+      await automaticStarted;
+
+      const regenerate = command!.handler("regenerate", ctx);
+      await automaticAborted;
+      expect(automaticSignal?.aborted).toBeTrue();
+
+      resolveRegeneration({ content: [{ type: "text", text: "Regenerated Title" }], stopReason: "stop" });
+      await regenerate;
+      expect(requestCount).toBe(2);
+      expect(sessionTitle).toBe("Regenerated Title");
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  });
+});
+
 describe("title completion output", () => {
   test("reports a thinking-only completion instead of claiming the exchange is missing", () => {
     expect(() =>
@@ -237,6 +424,7 @@ describe("title completion", () => {
     };
     let requestedModel: Model | undefined;
     let requestedOptions: Record<string, unknown> | undefined;
+    const controller = new AbortController();
     const ctx = {
       modelRegistry: {
         getProvider: () => ({
@@ -257,7 +445,7 @@ describe("title completion", () => {
     } as unknown as Parameters<typeof completeTitle>[0];
 
     await expect(
-      completeTitle(ctx, deepSeekModel, { messages: [] }, config("ignored"), "low"),
+      completeTitle(ctx, deepSeekModel, { messages: [] }, config("ignored"), "low", controller.signal),
     ).resolves.toBe(response);
     expect(requestedModel?.baseUrl).toBe("https://example.test/v1");
     expect(requestedOptions).toMatchObject({
@@ -265,6 +453,7 @@ describe("title completion", () => {
       headers: { "x-test": "value" },
       env: { TEST_ENV: "value" },
       reasoning: "low",
+      signal: controller.signal,
     });
   });
 });

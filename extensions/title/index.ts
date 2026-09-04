@@ -148,6 +148,7 @@ export async function completeTitle(
   request: TitleRequest,
   config: Config,
   thinkingLevel?: ThinkingLevel,
+  signal?: AbortSignal,
 ) {
   const provider = ctx.modelRegistry.getProvider(model.provider);
   if (!provider) throw new Error(`unknown provider: ${model.provider}`);
@@ -159,6 +160,7 @@ export async function completeTitle(
   return provider
     .streamSimple(resolvedModel, request, {
       ...completionOptions(config, thinkingLevel),
+      signal,
       apiKey: auth.apiKey,
       headers: auth.headers,
       env: auth.env,
@@ -184,6 +186,8 @@ export function titleFromCompletion(
 
 export default function titleExtension(pi: ExtensionAPI) {
   let generating = false;
+  let generationController: AbortController | undefined;
+  let backgroundGeneration: Promise<string | undefined> | undefined;
   let lifecycle = 0;
 
   function applyTerminalTitle(ctx: ExtensionContext, title = pi.getSessionName()): void {
@@ -204,21 +208,24 @@ export default function titleExtension(pi: ExtensionAPI) {
     }, 0);
   }
 
-  async function generate(ctx: ExtensionContext, overwrite: boolean): Promise<string | undefined> {
-    if (generating || (!overwrite && pi.getSessionName())) return undefined;
-
-    const exchange = firstCompletedExchange(ctx.sessionManager.getBranch());
-    if (!exchange) return undefined;
-
-    const config = await loadConfig();
-    if (!config.enabled && !overwrite) return undefined;
-
-    const { model, thinkingLevel } = resolveModel(ctx, config);
-    if (!model) throw new Error("no title model is available");
+  async function generate(
+    ctx: ExtensionContext,
+    overwrite: boolean,
+    exchange = firstCompletedExchange(ctx.sessionManager.getBranch()),
+  ): Promise<string | undefined> {
+    if (generating || (!overwrite && pi.getSessionName()) || !exchange) return undefined;
 
     generating = true;
+    const controller = new AbortController();
+    generationController = controller;
     const expectedLifecycle = lifecycle;
     try {
+      const config = await loadConfig();
+      if (!config.enabled && !overwrite) return undefined;
+
+      const { model, thinkingLevel } = resolveModel(ctx, config);
+      if (!model) throw new Error("no title model is available");
+
       const response = await completeTitle(
         ctx,
         model,
@@ -245,44 +252,78 @@ export default function titleExtension(pi: ExtensionAPI) {
         },
         config,
         thinkingLevel,
+        controller.signal,
       );
 
+      if (controller.signal.aborted || lifecycle !== expectedLifecycle) return undefined;
       const title = titleFromCompletion(response, config.maxLength);
-      if (lifecycle !== expectedLifecycle) return undefined;
       if (!overwrite && pi.getSessionName()) return undefined;
 
       pi.setSessionName(title);
       applyTerminalTitle(ctx, title);
       deferTerminalTitle(ctx);
       return title;
+    } catch (error) {
+      if (controller.signal.aborted) return undefined;
+      throw error;
     } finally {
-      if (lifecycle === expectedLifecycle) generating = false;
+      if (generationController === controller) {
+        generationController = undefined;
+        generating = false;
+      }
     }
   }
 
-  pi.on("session_start", (_event, ctx) => {
+  function generateInBackground(
+    ctx: ExtensionContext,
+    exchange: ReturnType<typeof firstCompletedExchange>,
+  ): void {
+    if (backgroundGeneration) return;
+
+    const expectedLifecycle = lifecycle;
+    const request = generate(ctx, false, exchange);
+    backgroundGeneration = request;
+    void request
+      .catch((error) => {
+        if (lifecycle !== expectedLifecycle) return;
+        const message = error instanceof Error ? error.message : String(error);
+        if (ctx.hasUI) ctx.ui.notify(message, "error");
+        else console.warn(`[pi-title] ${message}`);
+      })
+      .finally(() => {
+        if (backgroundGeneration === request) backgroundGeneration = undefined;
+      });
+  }
+
+  function resetGeneration(): void {
     lifecycle += 1;
+    generationController?.abort();
+    generationController = undefined;
+    backgroundGeneration = undefined;
     generating = false;
+  }
+
+  pi.on("session_start", (_event, ctx) => {
+    resetGeneration();
     deferTerminalTitle(ctx);
   });
 
   pi.on("session_shutdown", () => {
-    lifecycle += 1;
-    generating = false;
+    resetGeneration();
   });
 
   pi.on("session_info_changed", (_event, ctx) => {
     deferTerminalTitle(ctx);
   });
 
-  pi.on("agent_settled", async (_event, ctx) => {
-    try {
-      await generate(ctx, false);
-    } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      if (ctx.hasUI) ctx.ui.notify(message, "error");
-      else console.warn(`[pi-title] ${message}`);
-    }
+  pi.on("message_end", (event, ctx) => {
+    if (event.message.role !== "assistant") return;
+
+    const exchange = firstCompletedExchange([
+      ...ctx.sessionManager.getBranch(),
+      { type: "message", message: event.message },
+    ]);
+    if (exchange) generateInBackground(ctx, exchange);
   });
 
   pi.registerCommand("title", {
@@ -342,6 +383,10 @@ export default function titleExtension(pi: ExtensionAPI) {
         }
 
         if (action === "regenerate") {
+          if (backgroundGeneration) {
+            generationController?.abort();
+            await backgroundGeneration.catch(() => undefined);
+          }
           const title = await generate(ctx, true);
           ctx.ui.notify(title ? `Session title: ${title}` : "No completed exchange to title", "info");
           return;

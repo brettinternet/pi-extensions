@@ -19,6 +19,17 @@ describe("title generation inputs", () => {
       ]),
     ).toBeUndefined();
   });
+
+  test("skips an incomplete exchange", () => {
+    expect(
+      firstCompletedExchange([
+        { type: "message", message: { role: "user", content: "First request" } },
+        { type: "message", message: { role: "assistant", content: [{ type: "toolCall" }] } },
+        { type: "message", message: { role: "user", content: "Second request" } },
+        { type: "message", message: { role: "assistant", content: "Completed response" } },
+      ]),
+    ).toEqual({ user: "Second request", assistant: "Completed response" });
+  });
 });
 
 describe("title cleanup", () => {

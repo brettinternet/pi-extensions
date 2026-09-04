@@ -27,18 +27,21 @@ export function textOf(content: unknown): string {
 export function firstCompletedExchange(
   entries: BranchEntry[],
 ): { user: string; assistant: string } | undefined {
-  const userIndex = entries.findIndex(
-    (entry) => entry.type === "message" && entry.message?.role === "user" && textOf(entry.message.content),
-  );
-  if (userIndex < 0) return undefined;
+  let user = "";
+  let assistant: string[] = [];
 
-  const user = textOf(entries[userIndex]?.message?.content);
-  const assistant: string[] = [];
-
-  for (const entry of entries.slice(userIndex + 1)) {
+  for (const entry of entries) {
     if (entry.type !== "message") continue;
-    if (entry.message?.role === "user") break;
-    if (entry.message?.role === "assistant") {
+
+    if (entry.message?.role === "user") {
+      const assistantText = assistant.join("\n").trim();
+      if (user && assistantText) return { user, assistant: assistantText };
+      user = textOf(entry.message.content);
+      assistant = [];
+      continue;
+    }
+
+    if (user && entry.message?.role === "assistant") {
       const text = textOf(entry.message.content);
       if (text) assistant.push(text);
     }
