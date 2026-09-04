@@ -28,3 +28,9 @@ pi:background-activity:v1:snapshot-reply:<requestId>
 ```
 
 The event payload contract is exported from `protocol.ts`. Identity is scoped by provider, activity ID, Pi session, and Herdr workspace. Cancellation replies mean that cancellation was accepted; the terminal `finished` event reports the final outcome. Snapshot requests let consumers discover jobs that were already running before the consumer started. Workbench replies only for an exact current Pi session and caps each reply at 100 activities.
+
+## Command confirmation policy
+
+`job.start` classifies direct argv immediately before execution. Ordinary direct commands (including tests, builds, formatters, and linters) and the Git read-only allowlist (`status`, `diff`, `log`, `show`, `rev-parse`, `ls-files`) run without confirmation. Shell interpreters, destructive filesystem or system commands, all other Git operations, package/release publishing, and recognized deployment or infrastructure mutations require confirmation. Cancellation of an explicitly owned job remains confirmation-free.
+
+A confirmation request is offered first to an active voice adapter, then to Pi's interactive TUI. It fails closed if neither is available. The dialog includes the complete bounded operation JSON and effective working directory. This is intentionally a narrow known-risk classifier rather than a general command sandbox: unknown direct executables are allowed, and scripts, aliases, uncommon launchers, or mutation flags on otherwise unknown tools may evade classification. Project trust and resource ownership checks still apply independently.

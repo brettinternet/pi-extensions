@@ -13,6 +13,10 @@ import {
   BACKGROUND_ACTIVITY_FINISHED_EVENT,
   BACKGROUND_ACTIVITY_STARTED_EVENT,
 } from "./background-activity.ts";
+import {
+  CONFIRMATION_CANCELLED_EVENT,
+  CONFIRMATION_REQUESTED_EVENT,
+} from "./confirmation.ts";
 import { LiveSession } from "./controller.ts";
 import { loadDroppedImages } from "./image-attachments.ts";
 import { acquireVoiceLock, type VoiceLock } from "./voice-lock.ts";
@@ -187,6 +191,14 @@ class LiveExtensionRuntime {
     this.#session?.handleBackgroundActivityFinished(event);
   }
 
+  handleConfirmationRequested(event: unknown): void {
+    this.#session?.handleConfirmationRequested(event);
+  }
+
+  handleConfirmationCancelled(event: unknown): void {
+    this.#session?.handleConfirmationCancelled(event);
+  }
+
   handleAsyncJobStarted(event: unknown): void {
     this.#session?.handleAsyncJobStarted(event);
   }
@@ -276,6 +288,14 @@ export default function piLiveCodex(pi: ExtensionAPI): void {
     BACKGROUND_ACTIVITY_FINISHED_EVENT,
     (event) => runtime.handleBackgroundActivityFinished(event),
   );
+  const unsubscribeConfirmationRequested = pi.events.on(
+    CONFIRMATION_REQUESTED_EVENT,
+    (event) => runtime.handleConfirmationRequested(event),
+  );
+  const unsubscribeConfirmationCancelled = pi.events.on(
+    CONFIRMATION_CANCELLED_EVENT,
+    (event) => runtime.handleConfirmationCancelled(event),
+  );
   const unsubscribeAsyncStarted = pi.events.on(
     "subagent:async-started",
     (event) => runtime.handleAsyncJobStarted(event),
@@ -288,6 +308,8 @@ export default function piLiveCodex(pi: ExtensionAPI): void {
   pi.on("session_shutdown", async () => {
     unsubscribeBackgroundStarted();
     unsubscribeBackgroundFinished();
+    unsubscribeConfirmationRequested();
+    unsubscribeConfirmationCancelled();
     unsubscribeAsyncStarted();
     unsubscribeAsyncCompleted();
     await runtime.stop();

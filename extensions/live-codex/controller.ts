@@ -22,6 +22,16 @@ import {
   requestBackgroundActivitySnapshot,
   SUBAGENT_PROVIDER,
 } from "./background-activity.ts";
+import {
+  CONFIRMATION_ACKNOWLEDGED_PREFIX,
+  CONFIRMATION_RESOLVED_PREFIX,
+  confirmationReply,
+  type ConfirmationRequest,
+  MAX_CONFIRMATIONS_PER_SESSION,
+  MAX_PENDING_CONFIRMATIONS,
+  parseConfirmationRequest,
+  sameConfirmation,
+} from "./confirmation.ts";
 import type { ImageAttachment } from "./image-attachments.ts";
 import { AudioCapture } from "./native.cjs";
 import {
@@ -46,6 +56,7 @@ const LIVE_DELEGATION_MESSAGE_TYPE = "pi-live-codex-delegation";
 const CANCEL_CURRENT_REQUEST = "[[live:cancel-current]]";
 const CANCEL_JOB_REQUEST = /^\[\[live:cancel-job ([A-Za-z0-9-]+)\]\]$/;
 const CANCEL_ACTIVITY_REQUEST = /^\[\[live:cancel-activity (\S+) (\S+)\]\]$/;
+const CONFIRMATION_CONTROL = /^\[\[live:confirmation ([A-Za-z0-9:._-]+) (approve|deny)\]\]$/;
 
 const LIVE_INSTRUCTIONS = `You are the realtime voice surface of one unified coding assistant.
 
@@ -54,6 +65,8 @@ The user speaks to you. Respond directly, briefly, conversationally, and without
 The Pi coding agent is your execution surface with repository context and tools. For coding, investigation, repository changes, commands, or verification, promptly create a client delegation containing the complete request and relevant conversational context. Do not attempt repository work yourself. A new request while work is active must create another client delegation. Independent requests are queued by the client so they remain correctly correlated; do not assume they steer an earlier request.
 
 When the user unambiguously asks to stop the foreground operation currently being performed, create a client delegation whose entire text is exactly ${CANCEL_CURRENT_REQUEST}. When session context identifies the exact provider and activity ID for a background activity the user asks to cancel, create a client delegation whose entire text is [[live:cancel-activity PROVIDER ACTIVITY_ID]]. The legacy form [[live:cancel-job JOB_ID]] remains available only when that raw ID identifies exactly one activity. If the target is ambiguous, ask the user instead of guessing.
+
+Session context may contain a Confirmation Request with an exact request ID, question, and target. Ask the user that question. Only after an explicit, unambiguous approval or rejection, create a client delegation whose entire text is [[live:confirmation REQUEST_ID approve]] or [[live:confirmation REQUEST_ID deny]]. Never infer approval from silence, hesitation, a different request, or ambiguous speech; ask again. If multiple confirmations are pending, name the target and use only its exact request ID.
 
 Treat delegation context as your own internal progress and results. Never mention a backend, delegation, protocol, or separate assistant. Commentary context is silent progress for conversational continuity. Context beginning with "Agent Final Message": is the completed result; present its useful content naturally as your own. Session context beginning with "Background Activity Final": is a later result from work you previously acknowledged; briefly tell the user what finished. Never claim work or verification before a result arrives.`;
 
@@ -182,6 +195,8 @@ export class LiveSession {
   #inputTranscript = "";
   #attachments: ImageAttachment[] = [];
   readonly #delegationAttachments = new Map<string, ImageAttachment[]>();
+  readonly #confirmations = new Map<string, { request: ConfirmationRequest; timer: NodeJS.Timeout }>();
+  readonly #seenConfirmationIds = new Set<string>();
   #attachmentLoadTail: Promise<void> = Promise.resolve();
   #stopSnapshotDiscovery: (() => void) | undefined;
 
@@ -335,6 +350,34 @@ export class LiveSession {
     this.#queueAction(() => this.#finishActivity(finished));
   }
 
+  handleConfirmationRequested(value: unknown): void {
+    if (this.#stopped || this.#confirmations.size >= MAX_PENDING_CONFIRMATIONS ||
+      this.#seenConfirmationIds.size >= MAX_CONFIRMATIONS_PER_SESSION) return;
+    const request = parseConfirmationRequest(value, this.#context);
+    if (!request || this.#seenConfirmationIds.has(request.requestId)) return;
+    this.#seenConfirmationIds.add(request.requestId);
+    const timer = setTimeout(() => this.#confirmations.delete(request.requestId), request.expiresAt - Date.now());
+    this.#confirmations.set(request.requestId, { request, timer });
+    this.#pi.events.emit(
+      `${CONFIRMATION_ACKNOWLEDGED_PREFIX}${request.requestId}`,
+      confirmationReply(request),
+    );
+    this.#queueSend(buildSessionContextAppend(
+      `Confirmation Request:\n\nRequest ID: ${request.requestId}\nQuestion: ${request.title}\nRisk: ${request.riskCategory}\nTarget:\n${request.summary}\n\nAsk the user now. Do not approve or deny without an explicit answer.`,
+      "speakable",
+    ));
+  }
+
+  handleConfirmationCancelled(value: unknown): void {
+    if (typeof value !== "object" || value === null) return;
+    const requestId = (value as { requestId?: unknown }).requestId;
+    if (typeof requestId !== "string") return;
+    const pending = this.#confirmations.get(requestId);
+    if (!pending || !sameConfirmation(value, pending.request)) return;
+    clearTimeout(pending.timer);
+    this.#confirmations.delete(requestId);
+  }
+
   handleAsyncJobStarted(event: unknown): void {
     const scope = currentActivityScope(this.#context);
     const record = isRecord(event) ? event : undefined;
@@ -363,6 +406,14 @@ export class LiveSession {
     this.#stopped = true;
     this.#transportConnected = false;
     this.#pendingSends = [];
+    for (const { request, timer } of this.#confirmations.values()) {
+      clearTimeout(timer);
+      this.#pi.events.emit(
+        `${CONFIRMATION_RESOLVED_PREFIX}${request.requestId}`,
+        confirmationReply(request, "denied"),
+      );
+    }
+    this.#confirmations.clear();
     this.#stopSnapshotDiscovery?.();
     this.#stopSnapshotDiscovery = undefined;
     this.#outputActivity.dispose();
@@ -442,6 +493,19 @@ export class LiveSession {
       this.#appendDelegationContext(
         event.item.id,
         `"Agent Final Message":\n\n${wasActive ? "I stopped the current operation." : "There isn't a foreground operation to stop."}`,
+      );
+      return;
+    }
+    const confirmation = request.match(CONFIRMATION_CONTROL);
+    if (request.startsWith("[[live:confirmation")) {
+      if (!confirmation) return;
+      const pending = this.#confirmations.get(confirmation[1]!);
+      if (!pending || pending.request.expiresAt <= Date.now()) return;
+      clearTimeout(pending.timer);
+      this.#confirmations.delete(pending.request.requestId);
+      this.#pi.events.emit(
+        `${CONFIRMATION_RESOLVED_PREFIX}${pending.request.requestId}`,
+        confirmationReply(pending.request, confirmation[2] === "approve" ? "approved" : "denied"),
       );
       return;
     }

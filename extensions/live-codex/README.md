@@ -33,4 +33,15 @@ Separately installed extensions integrate through `pi.events`; no package import
 
 Identity is always `(provider, activityId)`. `sessionId` must exactly match the active Pi session; a supplied session file and workspace are retained and must also match across start/finish/cancel events.
 
+## Confirmation wire contract
+
+Separately installed extensions can request one-operation authorization through a second versioned `pi.events` contract. Request and resolution text and pending counts are bounded; requests expire and are never persisted.
+
+- `pi:confirmation:v1:requested`: `{ version: 1, requestId, sessionId, sessionFile?, provider, operationId, riskCategory, title, summary, expiresAt }`
+- `pi:confirmation:v1:acknowledged:<requestId>`: echoes `{ version, requestId, sessionId, sessionFile?, provider, operationId }`
+- `pi:confirmation:v1:resolved:<requestId>`: echoes that identity and adds `decision: "approved" | "denied"`
+- `pi:confirmation:v1:cancelled`: echoes the original request when the requester falls back to another confirmation surface
+
+While `/live` is active, Live Codex acknowledges a structurally valid request for the exact active Pi session, speaks its complete question and target, and resolves only an explicit approval or rejection for that request ID. Wrong-session, expired, duplicate, unknown, and mismatched-operation controls are ignored. Ending `/live` denies every pending request.
+
 Only one Pi process can use live voice at a time.

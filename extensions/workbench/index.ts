@@ -4,6 +4,8 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { StringEnum } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
+import { classifyCommandRisk } from "./command-policy.ts";
+import { ConfirmationBroker } from "./confirmation.ts";
 import {
   type WorkbenchInput,
   type WorkbenchResponse,
@@ -240,6 +242,7 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
     pi.exec(command, args, options)
   );
   const ownership = new OwnershipRegistry();
+  const confirmations = new ConfirmationBroker(pi);
   const monitors = new Map<string, AbortController>();
   let currentContext: ExtensionContext | undefined;
 
@@ -376,6 +379,9 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
     if (requiresTrust(input.action) && !ctx.isProjectTrusted()) {
       throw new Error("Workbench mutations require a trusted project");
     }
+    if (input.action === "job.start" && (!input.command || input.command.length === 0)) {
+      throw new Error("job.start requires a non-empty command argv");
+    }
     if (input.action.startsWith("job.") && !["job.start", "job.list"].includes(input.action)) {
       assertOwnedJob(input.jobId);
     }
@@ -416,6 +422,10 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const input = params as WorkbenchInput;
       await prepareAction(input, ctx, signal);
+      if (input.action === "job.start") {
+        const risk = classifyCommandRisk(input.command!);
+        if (risk) await confirmations.confirm(input, risk, ctx, signal);
+      }
       onUpdate?.({
         content: [{ type: "text", text: `Running ${input.action}…` }],
         details: {},
@@ -570,6 +580,7 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
   );
 
   pi.on("session_start", (_event, ctx) => {
+    confirmations.abortAll("Session changed");
     for (const monitor of monitors.values()) monitor.abort();
     monitors.clear();
     currentContext = ctx;
@@ -600,6 +611,7 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", () => {
     currentContext = undefined;
+    confirmations.abortAll();
     unsubscribeSnapshot();
     unsubscribeCancel();
     for (const monitor of monitors.values()) monitor.abort();

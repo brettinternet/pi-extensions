@@ -13,6 +13,11 @@ import {
   type BackgroundActivityStarted,
 } from "../../extensions/live-codex/background-activity.ts";
 import {
+  CONFIRMATION_ACKNOWLEDGED_PREFIX,
+  CONFIRMATION_RESOLVED_PREFIX,
+  type ConfirmationRequest,
+} from "../../extensions/live-codex/confirmation.ts";
+import {
   LiveSession,
   type LiveSessionCallbacks,
   type LiveTransport,
@@ -131,6 +136,25 @@ function finished(
     workspaceId: "workspace",
     outcome: "succeeded",
     summary: "Checks passed",
+  };
+}
+
+function confirmationRequest(
+  requestId = "request-1",
+  overrides: Partial<ConfirmationRequest> = {},
+): ConfirmationRequest {
+  return {
+    version: 1,
+    requestId,
+    sessionId: "session",
+    sessionFile: "/session.jsonl",
+    provider: "herdr-workbench",
+    operationId: "sha256:abc123",
+    riskCategory: "git-mutation",
+    title: "Approve git push?",
+    summary: 'Operation: {"command":["git","push"],"cwd":"/repo"}',
+    expiresAt: Date.now() + 60_000,
+    ...overrides,
   };
 }
 
@@ -359,6 +383,77 @@ test("controller routes cancellation to the activity provider", async () => {
   assert.equal((request as { provider: string }).provider, "workbench");
   assert.match(contextText(harness.transport().sent.at(-1)!), /asked that background activity to stop/);
   await harness.session.stop();
+});
+
+test("voice confirmation resolves once without starting a coding turn", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  const request = confirmationRequest();
+  harness.session.handleConfirmationRequested(request);
+  await flush();
+
+  assert.ok(harness.bus.emitted.some(({ name, value }) =>
+    name === `${CONFIRMATION_ACKNOWLEDGED_PREFIX}${request.requestId}` &&
+    (value as { operationId?: string }).operationId === request.operationId
+  ));
+  assert.match(contextText(harness.transport().sent.at(-1)!), /Approve git push/);
+  assert.match(contextText(harness.transport().sent.at(-1)!), /git.*push/);
+
+  harness.transport().emit(delegation("confirmation-1", `[[live:confirmation ${request.requestId} approve]]`));
+  harness.transport().emit(delegation("confirmation-2", `[[live:confirmation ${request.requestId} approve]]`));
+  await flush();
+  const resolutions = harness.bus.emitted.filter(({ name }) =>
+    name === `${CONFIRMATION_RESOLVED_PREFIX}${request.requestId}`
+  );
+  assert.equal(resolutions.length, 1);
+  assert.equal((resolutions[0]!.value as { decision: string }).decision, "approved");
+  harness.session.handleConfirmationRequested(request);
+  assert.equal(harness.bus.emitted.filter(({ name }) =>
+    name === `${CONFIRMATION_ACKNOWLEDGED_PREFIX}${request.requestId}`
+  ).length, 1);
+  assert.equal(harness.sentToAgent.length, 0);
+  await harness.session.stop();
+});
+
+test("voice denial and ambiguous confirmation controls never approve", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  const denied = confirmationRequest("request-denied");
+  const ambiguous = confirmationRequest("request-ambiguous");
+  harness.session.handleConfirmationRequested(denied);
+  harness.session.handleConfirmationRequested(ambiguous);
+  harness.transport().emit(delegation("denial", `[[live:confirmation ${denied.requestId} deny]]`));
+  harness.transport().emit(delegation("ambiguous", `[[live:confirmation ${ambiguous.requestId} maybe]]`));
+  await flush();
+
+  const deniedResolution = harness.bus.emitted.find(({ name }) =>
+    name === `${CONFIRMATION_RESOLVED_PREFIX}${denied.requestId}`
+  );
+  assert.equal((deniedResolution!.value as { decision: string }).decision, "denied");
+  assert.equal(harness.bus.emitted.some(({ name }) =>
+    name === `${CONFIRMATION_RESOLVED_PREFIX}${ambiguous.requestId}`
+  ), false);
+  assert.equal(harness.sentToAgent.length, 0);
+  await harness.session.stop();
+});
+
+test("confirmation requests reject wrong session, expiry, and duplicates", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  const valid = confirmationRequest("request-valid");
+  harness.session.handleConfirmationRequested(confirmationRequest("wrong-session", { sessionId: "other" }));
+  harness.session.handleConfirmationRequested(confirmationRequest("expired", { expiresAt: Date.now() - 1 }));
+  harness.session.handleConfirmationRequested(valid);
+  harness.session.handleConfirmationRequested(valid);
+  await flush();
+
+  assert.equal(harness.bus.emitted.filter(({ name }) => name.startsWith(CONFIRMATION_ACKNOWLEDGED_PREFIX)).length, 1);
+  await harness.session.stop();
+  const resolutions = harness.bus.emitted.filter(({ name }) =>
+    name === `${CONFIRMATION_RESOLVED_PREFIX}${valid.requestId}`
+  );
+  assert.equal(resolutions.length, 1);
+  assert.equal((resolutions[0]!.value as { decision: string }).decision, "denied");
 });
 
 test("teardown discards pending discovery and cancellation results", async () => {
