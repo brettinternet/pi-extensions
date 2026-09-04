@@ -4,6 +4,7 @@ import {
   CONTEXT_CHUNK_BYTES,
   buildDelegationContextAppend,
   buildLiveSessionPayload,
+  buildSessionContextAppend,
   chunkLiveContext,
   parseLiveServerEvent,
 } from "../extensions/protocol.ts";
@@ -57,6 +58,11 @@ describe("Frameless Bidi protocol", () => {
       instructions: "instructions",
       audio: { output: { voice: "sol" } },
       delegation: { type: "client" },
+    });
+    assert.deepEqual(buildSessionContextAppend("image attached", "commentary"), {
+      type: "session.context.append",
+      channel: "commentary",
+      content: [{ type: "input_text", text: "image attached" }],
     });
     assert.deepEqual(buildDelegationContextAppend("delegate_1", "done"), {
       type: "delegation.context.append",

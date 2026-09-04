@@ -25,10 +25,12 @@ export type LivePhase =
 export interface LiveVisualizerOptions {
   onStop(): void;
   onToggleMute(): void;
+  onDrop(data: string): void;
 }
 
 export class LiveVisualizer extends CustomEditor {
   readonly #tui: TUI;
+  readonly #keybindings: KeybindingsManager;
   readonly #colors: Theme;
   readonly #options: LiveVisualizerOptions;
   #phase: LivePhase = "connecting";
@@ -36,6 +38,7 @@ export class LiveVisualizer extends CustomEditor {
   #displayLevel = 0;
   #frame = 0;
   #transcript = "";
+  #attachmentCount = 0;
 
   constructor(
     tui: TUI,
@@ -46,6 +49,7 @@ export class LiveVisualizer extends CustomEditor {
   ) {
     super(tui, editorTheme, keybindings);
     this.#tui = tui;
+    this.#keybindings = keybindings;
     this.#colors = colors;
     this.#options = options;
   }
@@ -70,6 +74,12 @@ export class LiveVisualizer extends CustomEditor {
     this.#tui.requestRender();
   }
 
+  setAttachmentCount(count: number): void {
+    if (this.#attachmentCount === count) return;
+    this.#attachmentCount = count;
+    this.#tui.requestRender();
+  }
+
   advanceFrame(): void {
     this.#frame += 1;
     this.#displayLevel = Math.max(this.#inputLevel, this.#displayLevel * 0.84);
@@ -77,6 +87,10 @@ export class LiveVisualizer extends CustomEditor {
   }
 
   override handleInput(data: string): void {
+    if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
+      this.#options.onDrop(data);
+      return;
+    }
     if (
       matchesKey(data, "escape") ||
       matchesKey(data, "ctrl+c") ||
@@ -85,7 +99,17 @@ export class LiveVisualizer extends CustomEditor {
       this.#options.onStop();
       return;
     }
-    if (matchesKey(data, "space")) this.#options.onToggleMute();
+    if (matchesKey(data, "space")) {
+      this.#options.onToggleMute();
+      return;
+    }
+    if (this.onExtensionShortcut?.(data)) return;
+    for (const [action, handler] of this.actionHandlers) {
+      if (this.#keybindings.matches(data, action)) {
+        handler();
+        return;
+      }
+    }
   }
 
   override render(maxWidth: number): string[] {
@@ -108,13 +132,40 @@ export class LiveVisualizer extends CustomEditor {
     const spectrum = this.#generateSpectrum(innerWidth, 2).map((row) =>
       border(this.#colors.fg(spectrumColor, row)),
     );
+    const attachmentRows = this.#attachmentCount > 0
+      ? [this.#paddedBorder(
+          `📎 ${this.#attachmentCount} image${this.#attachmentCount === 1 ? "" : "s"} attached`,
+          innerWidth,
+          "muted",
+          border,
+        )]
+      : [];
     const transcriptRows = wrapTextWithAnsi(this.#transcript, innerWidth).map((line) =>
       border(
         this.#colors.fg("accent", line) +
           " ".repeat(Math.max(0, innerWidth - visibleWidth(line))),
       ),
     );
-    return [top, ...spectrum, ...transcriptRows, this.#renderFooter(width, innerWidth)];
+    return [
+      top,
+      ...spectrum,
+      ...attachmentRows,
+      ...transcriptRows,
+      this.#renderFooter(width, innerWidth),
+    ];
+  }
+
+  #paddedBorder(
+    text: string,
+    width: number,
+    color: ThemeColor,
+    border: (content: string) => string,
+  ): string {
+    const line = truncateToWidth(text, width);
+    return border(
+      this.#colors.fg(color, line) +
+        " ".repeat(Math.max(0, width - visibleWidth(line))),
+    );
   }
 
   #renderFooter(width: number, innerWidth: number): string {

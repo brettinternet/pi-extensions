@@ -194,6 +194,17 @@ export function buildLiveSessionPayload(
   };
 }
 
+export function buildSessionContextAppend(
+  text: string,
+  channel?: LiveContextChannel,
+): LiveClientMessage {
+  return {
+    type: "session.context.append",
+    ...(channel ? { channel } : {}),
+    content: [{ type: "input_text", text }],
+  };
+}
+
 export function buildDelegationContextAppend(
   delegationId: string,
   text: string,

@@ -10,6 +10,8 @@ import type {
   TUI,
 } from "@earendil-works/pi-tui";
 import { LiveSession } from "./controller.ts";
+import { loadDroppedImages } from "./image-attachments.ts";
+import { acquireVoiceLock, type VoiceLock } from "./voice-lock.ts";
 import { LiveVisualizer } from "./visualizer.ts";
 
 type EditorFactory = (
@@ -21,6 +23,7 @@ type EditorFactory = (
 class LiveExtensionRuntime {
   readonly #pi: ExtensionAPI;
   #session: LiveSession | undefined;
+  #voiceLock: VoiceLock | undefined;
   #context: ExtensionContext | undefined;
   #visualizer: LiveVisualizer | undefined;
   #animation: NodeJS.Timeout | undefined;
@@ -41,49 +44,121 @@ class LiveExtensionRuntime {
       return;
     }
 
-    this.#context = context;
-    this.#previousEditor = context.ui.getEditorComponent();
-    this.#previousText = context.ui.getEditorText();
+    if (this.#voiceLock) {
+      try {
+        this.#voiceLock.release();
+        this.#voiceLock = undefined;
+      } catch (error) {
+        context.ui.notify(
+          error instanceof Error ? error.message : String(error),
+          "error",
+        );
+        return;
+      }
+    }
 
-    const session = new LiveSession({
-      pi: this.#pi,
-      context,
-      voice,
-      callbacks: {
-        onPhase: (phase) => this.#visualizer?.setPhase(phase),
-        onInputLevel: (level) => this.#visualizer?.setInputLevel(level),
-        onTranscript: (text) => this.#visualizer?.setTranscript(text),
-        onTerminal: (error) => this.#finish(session, error),
-      },
-    });
-    this.#session = session;
-
-    context.ui.setEditorComponent((tui, editorTheme, keybindings) => {
-      const visualizer = new LiveVisualizer(
-        tui,
-        editorTheme,
-        keybindings,
-        context.ui.theme,
-        {
-          onStop: () => void this.stop(),
-          onToggleMute: () => session.toggleMute(),
-        },
-      );
-      this.#visualizer = visualizer;
-      return visualizer;
-    });
-    context.ui.setStatus("pi-live-codex", "connecting");
-    this.#animation = setInterval(() => {
-      this.#visualizer?.advanceFrame();
-    }, 80);
-
+    const previousEditor = context.ui.getEditorComponent();
+    const previousText = context.ui.getEditorText();
     try {
+      this.#voiceLock = acquireVoiceLock(
+        context.sessionManager.getSessionId(),
+      );
+    } catch (error) {
+      context.ui.notify(
+        error instanceof Error ? error.message : String(error),
+        "error",
+      );
+      return;
+    }
+
+    this.#context = context;
+    this.#previousEditor = previousEditor;
+    this.#previousText = previousText;
+
+    let session: LiveSession | undefined;
+    let pendingError: Error | undefined;
+    try {
+      session = new LiveSession({
+        pi: this.#pi,
+        context,
+        voice,
+        callbacks: {
+          onPhase: (phase) => this.#visualizer?.setPhase(phase),
+          onInputLevel: (level) => this.#visualizer?.setInputLevel(level),
+          onTranscript: (text) => this.#visualizer?.setTranscript(text),
+          onAttachmentsChanged: (count) =>
+            this.#visualizer?.setAttachmentCount(count),
+          onTerminal: (error) =>
+            session && this.#finish(session, error ?? pendingError),
+        },
+      });
+      this.#session = session;
+      const activeSession = session;
+
+      context.ui.setEditorComponent((tui, editorTheme, keybindings) => {
+        const visualizer = new LiveVisualizer(
+          tui,
+          editorTheme,
+          keybindings,
+          context.ui.theme,
+          {
+            onStop: () => void this.stop(),
+            onToggleMute: () => activeSession.toggleMute(),
+            onDrop: (data) =>
+              void this.#attachDroppedImages(activeSession, data),
+          },
+        );
+        this.#visualizer = visualizer;
+        return visualizer;
+      });
+      context.ui.setStatus("pi-live-codex", "connecting");
+      this.#animation = setInterval(() => {
+        this.#visualizer?.advanceFrame();
+      }, 80);
+
       await session.start();
       if (this.#session === session) {
         context.ui.setStatus("pi-live-codex", "live");
       }
-    } catch {
-      // LiveSession reports the actionable error through onTerminal.
+    } catch (cause) {
+      const error = cause instanceof Error ? cause : new Error(String(cause));
+      pendingError = error;
+      if (session) {
+        try {
+          await session.stop();
+        } catch {}
+        this.#finish(session, error);
+      } else {
+        this.#reset(error);
+      }
+    }
+  }
+
+  async #attachDroppedImages(
+    session: LiveSession,
+    data: string,
+  ): Promise<void> {
+    const context = this.#context;
+    if (!context || this.#session !== session) return;
+    try {
+      const attachments = await session.loadImages(() =>
+        loadDroppedImages(data, context.cwd),
+      );
+      if (this.#session !== session) return;
+      if (attachments.length === 0) {
+        context.ui.notify("Drop one or more image files while live", "warning");
+        return;
+      }
+      context.ui.notify(
+        `Attached ${attachments.map(({ name }) => name).join(", ")}`,
+        "info",
+      );
+    } catch (cause) {
+      if (this.#session !== session) return;
+      context.ui.notify(
+        cause instanceof Error ? cause.message : String(cause),
+        "error",
+      );
     }
   }
 
@@ -98,25 +173,43 @@ class LiveExtensionRuntime {
   async stop(): Promise<void> {
     const session = this.#session;
     if (!session) return;
-    await session.stop();
-    this.#finish(session);
+    try {
+      await session.stop();
+    } finally {
+      this.#finish(session);
+    }
   }
 
   #finish(session: LiveSession, error?: Error): void {
     if (this.#session !== session) return;
     this.#session = undefined;
+    this.#reset(error);
+  }
+
+  #reset(error?: Error): void {
     clearInterval(this.#animation);
     this.#animation = undefined;
     this.#visualizer = undefined;
-
     const context = this.#context;
     this.#context = undefined;
-    if (!context) return;
-    context.ui.setStatus("pi-live-codex", undefined);
-    context.ui.setEditorComponent(this.#previousEditor);
-    context.ui.setEditorText(this.#previousText);
+    const previousEditor = this.#previousEditor;
+    const previousText = this.#previousText;
     this.#previousEditor = undefined;
     this.#previousText = "";
+    try {
+      this.#voiceLock?.release();
+      this.#voiceLock = undefined;
+    } catch (cause) {
+      error ??= cause instanceof Error ? cause : new Error(String(cause));
+    }
+    if (!context) return;
+    try {
+      context.ui.setStatus("pi-live-codex", undefined);
+      context.ui.setEditorComponent(previousEditor);
+      context.ui.setEditorText(previousText);
+    } catch (cause) {
+      error ??= cause instanceof Error ? cause : new Error(String(cause));
+    }
     if (error) context.ui.notify(error.message, "error");
   }
 }

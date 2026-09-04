@@ -1,10 +1,15 @@
 // Adapted from Oh My Pi's MIT-licensed live session controller.
 import type { AgentMessage } from "@earendil-works/pi-agent-core";
-import type { AssistantMessage, TextContent } from "@earendil-works/pi-ai";
+import type {
+  AssistantMessage,
+  ImageContent,
+  TextContent,
+} from "@earendil-works/pi-ai";
 import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import type { ImageAttachment } from "./image-attachments.ts";
 import { AudioCapture } from "./native.cjs";
 import {
   buildDelegationContextAppend,
@@ -34,6 +39,7 @@ export interface LiveSessionCallbacks {
   onPhase(phase: LivePhase): void;
   onInputLevel(level: number): void;
   onTranscript(text: string): void;
+  onAttachmentsChanged(count: number): void;
   onTerminal(error?: Error): void;
 }
 
@@ -114,8 +120,11 @@ export class LiveSession {
   readonly #outputActivity: OutputActivityLatch;
   #muted = false;
   #stopped = false;
+  #terminalError: Error | undefined;
   #terminalEmitted = false;
   #inputTranscript = "";
+  #attachments: ImageAttachment[] = [];
+  #attachmentLoadTail: Promise<void> = Promise.resolve();
 
   constructor(options: LiveSessionOptions) {
     this.#pi = options.pi;
@@ -172,6 +181,21 @@ export class LiveSession {
     }
   }
 
+  async loadImages(
+    load: () => Promise<ImageAttachment[]>,
+  ): Promise<ImageAttachment[]> {
+    let loaded: ImageAttachment[] = [];
+    const task = this.#attachmentLoadTail.then(async () => {
+      loaded = await load();
+      if (this.#stopped || loaded.length === 0) return;
+      this.#attachments.push(...loaded);
+      this.#callbacks.onAttachmentsChanged(this.#attachments.length);
+    });
+    this.#attachmentLoadTail = task.catch(() => {});
+    await task;
+    return loaded;
+  }
+
   toggleMute(): void {
     if (this.#stopped) return;
     this.#muted = !this.#muted;
@@ -209,19 +233,28 @@ export class LiveSession {
   async #stop(): Promise<void> {
     this.#stopped = true;
     this.#outputActivity.dispose();
-    const recorder = this.#recorder;
-    this.#recorder = undefined;
-    recorder?.stop();
-    await this.#sendTail;
-    const transport = this.#transport;
-    this.#transport = undefined;
-    if (transport) {
+    try {
+      const recorder = this.#recorder;
+      this.#recorder = undefined;
       try {
-        await transport.send(buildSessionClose());
+        recorder?.stop();
       } catch {}
-      await transport.close();
+      try {
+        await this.#sendTail;
+      } catch {}
+      const transport = this.#transport;
+      this.#transport = undefined;
+      if (transport) {
+        try {
+          await transport.send(buildSessionClose());
+        } catch {}
+        try {
+          await transport.close();
+        } catch {}
+      }
+    } finally {
+      this.#emitTerminal(this.#terminalError);
     }
-    this.#emitTerminal();
   }
 
   #handleLiveEvent(event: LiveServerEvent): void {
@@ -243,7 +276,7 @@ export class LiveSession {
         }
         break;
       case "delegation.created":
-        this.#handleDelegation(event);
+        void this.#handleDelegation(event);
         break;
       case "error":
         this.#fail(new Error(event.message));
@@ -256,11 +289,13 @@ export class LiveSession {
     }
   }
 
-  #handleDelegation(
+  async #handleDelegation(
     event: Extract<LiveServerEvent, { type: "delegation.created" }>,
-  ): void {
+  ): Promise<void> {
     if (this.#seenDelegationIds.has(event.item.id)) return;
     this.#seenDelegationIds.add(event.item.id);
+    await this.#attachmentLoadTail;
+    if (this.#stopped) return;
     const request = event.item.content
       .map((content) => content.text)
       .join("\n")
@@ -269,12 +304,21 @@ export class LiveSession {
     this.#activeDelegationId = event.item.id;
     this.#pendingFinal = "";
     this.#callbacks.onPhase("working");
+    const attachments = this.#attachments.splice(0);
+    const content: (TextContent | ImageContent)[] = [
+      { type: "text", text: request },
+      ...attachments.map((attachment) => attachment.content),
+    ];
+    this.#callbacks.onAttachmentsChanged(0);
     this.#pi.sendMessage(
       {
         customType: LIVE_DELEGATION_MESSAGE_TYPE,
-        content: request,
+        content,
         display: true,
-        details: { delegationId: event.item.id },
+        details: {
+          delegationId: event.item.id,
+          attachments: attachments.map(({ name }) => name),
+        },
       },
       { triggerTurn: true, deliverAs: "steer" },
     );
@@ -330,9 +374,9 @@ export class LiveSession {
   }
 
   #fail(error: Error): void {
-    if (this.#terminalEmitted) return;
+    if (this.#terminalEmitted || this.#terminalError) return;
+    this.#terminalError = error;
     this.#callbacks.onPhase("error");
-    this.#emitTerminal(error);
     void this.stop();
   }
 

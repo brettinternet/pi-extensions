@@ -26,7 +26,7 @@ Start Pi in its interactive TUI, then run:
 /live
 ```
 
-Use `/live <voice>` to select a voice. `Ctrl+L` toggles voice mode, `Space` mutes, and `Esc` ends the session.
+Use `/live <voice>` to select a voice. `Ctrl+L` toggles voice mode, `Space` mutes, and `Esc` ends the session. Drop image files into the terminal while live to attach them to your next spoken request.
 
 Only one Pi process can use live voice at a time. A second `/live` is rejected rather than queued, preventing one session's spoken output from being captured by another.
 
