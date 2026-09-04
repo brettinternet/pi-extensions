@@ -1,6 +1,6 @@
 {
   "name": "pi-live-codex",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Realtime gpt-live-1-codex voice frontend for the Pi coding agent",
   "type": "module",
   "license": "MIT",
