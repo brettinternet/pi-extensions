@@ -18,7 +18,7 @@ export const DEFAULT_CONFIG: Config = {
 
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
   const agentDir = env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".pi", "agent");
-  return join(agentDir, "pi-session-title.json");
+  return join(agentDir, "pi-title.json");
 }
 
 function positiveInteger(value: unknown, fallback: number): number {

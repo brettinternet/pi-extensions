@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { cleanTitle, firstCompletedExchange } from "../../extensions/session-title/title.js";
+import { cleanTitle, firstCompletedExchange } from "../../extensions/title/title.js";
 
 describe("title generation inputs", () => {
   test("extracts the first completed user and assistant exchange", () => {

@@ -39,7 +39,7 @@
   "pi": {
     "extensions": [
       "./extensions/live-codex/index.ts",
-      "./extensions/session-title/index.ts"
+      "./extensions/title/index.ts"
     ]
   }
 }

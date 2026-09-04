@@ -1,10 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { configPath, DEFAULT_CONFIG, parseConfig } from "../../extensions/session-title/config.js";
+import { configPath, DEFAULT_CONFIG, parseConfig } from "../../extensions/title/config.js";
 
 describe("configuration", () => {
   test("uses the Pi agent directory override", () => {
     expect(configPath({ PI_CODING_AGENT_DIR: "/tmp/custom-pi" })).toBe(
-      "/tmp/custom-pi/pi-session-title.json",
+      "/tmp/custom-pi/pi-title.json",
     );
   });
 

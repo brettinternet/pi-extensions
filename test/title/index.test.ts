@@ -1,12 +1,13 @@
 import { describe, expect, test } from "bun:test";
-import { DEFAULT_CONFIG, type Config } from "../../extensions/session-title/config.js";
-import {
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { DEFAULT_CONFIG, type Config } from "../../extensions/title/config.js";
+import titleExtension, {
   completeTitle,
   completionOptions,
   resolveModel,
   splitModelReference,
   titleFromCompletion,
-} from "../../extensions/session-title/index.js";
+} from "../../extensions/title/index.js";
 
 type ModelContext = Parameters<typeof resolveModel>[0];
 type Model = NonNullable<ModelContext["model"]>;
@@ -166,6 +167,41 @@ describe("completion options", () => {
   test("omits reasoning when effort is off or not configured", () => {
     expect(completionOptions(config(null))).not.toHaveProperty("reasoning");
     expect(completionOptions(config("openrouter/model:off"), "off")).not.toHaveProperty("reasoning");
+  });
+});
+
+describe("title command", () => {
+  test("registers /title and sets custom titles", async () => {
+    let commandName: string | undefined;
+    let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+    const sessionTitles: string[] = [];
+    const terminalTitles: string[] = [];
+    const notifications: string[] = [];
+    const pi = {
+      on: () => {},
+      registerCommand: (name: string, options: Parameters<ExtensionAPI["registerCommand"]>[1]) => {
+        commandName = name;
+        command = options;
+      },
+      getSessionName: () => sessionTitles.at(-1),
+      setSessionName: (title: string) => sessionTitles.push(title),
+    } as unknown as ExtensionAPI;
+    const ctx = {
+      hasUI: true,
+      ui: {
+        setTitle: (title: string) => terminalTitles.push(title),
+        notify: (message: string) => notifications.push(message),
+      },
+    } as unknown as ExtensionCommandContext;
+
+    titleExtension(pi);
+    await command!.handler("My custom title", ctx);
+    await command!.handler("set status", ctx);
+
+    expect(commandName).toBe("title");
+    expect(sessionTitles).toEqual(["My custom title", "status"]);
+    expect(terminalTitles).toEqual(["My custom title", "status"]);
+    expect(notifications).toEqual(["Session title: My custom title", "Session title: status"]);
   });
 });
 

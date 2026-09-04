@@ -182,12 +182,19 @@ export function titleFromCompletion(
   return title;
 }
 
-export default function sessionTitleExtension(pi: ExtensionAPI) {
+export default function titleExtension(pi: ExtensionAPI) {
   let generating = false;
   let lifecycle = 0;
 
   function applyTerminalTitle(ctx: ExtensionContext, title = pi.getSessionName()): void {
     if (ctx.hasUI && title) ctx.ui.setTitle(title);
+  }
+
+  function setTitle(ctx: ExtensionContext, title: string): void {
+    pi.setSessionName(title);
+    applyTerminalTitle(ctx, title);
+    deferTerminalTitle(ctx);
+    ctx.ui.notify(`Session title: ${title}`, "info");
   }
 
   function deferTerminalTitle(ctx: ExtensionContext): void {
@@ -274,20 +281,35 @@ export default function sessionTitleExtension(pi: ExtensionAPI) {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       if (ctx.hasUI) ctx.ui.notify(message, "error");
-      else console.warn(`[pi-session-title] ${message}`);
+      else console.warn(`[pi-title] ${message}`);
     }
   });
 
-  pi.registerCommand("session-title", {
-    description: "Show or configure automatic session titles",
+  pi.registerCommand("title", {
+    description: "Set a session title or configure automatic titles",
     handler: async (args, ctx) => {
-      const [action, ...rest] = args.trim().split(/\s+/).filter(Boolean);
+      const input = args.trim();
+      const [action, ...rest] = input.split(/\s+/).filter(Boolean);
 
       try {
+        const configActions = new Set(["status", "on", "off", "model", "regenerate", "set"]);
+        if (action && !configActions.has(action)) {
+          setTitle(ctx, input);
+          return;
+        }
+
+        if (action === "set") {
+          const title = rest.join(" ").trim();
+          if (!title) throw new Error("usage: /title set <custom title>");
+          setTitle(ctx, title);
+          return;
+        }
+
         const config = await loadConfig();
         if (!action || action === "status") {
           ctx.ui.notify(
             [
+              `title: ${pi.getSessionName() ?? "none"}`,
               `enabled: ${config.enabled}`,
               `model: ${config.model ?? "active session model"}`,
               `config: ${configPath()}`,
@@ -311,7 +333,7 @@ export default function sessionTitleExtension(pi: ExtensionAPI) {
             return;
           }
           if (reference !== "active" && reference !== "auto" && !splitModelReference(reference)) {
-            throw new Error("usage: /session-title model <provider/model[:effort]|auto|active>");
+            throw new Error("usage: /title model <provider/model[:effort]|auto|active>");
           }
           config.model = reference === "active" ? null : reference;
           await saveConfig(config);
@@ -324,8 +346,6 @@ export default function sessionTitleExtension(pi: ExtensionAPI) {
           ctx.ui.notify(title ? `Session title: ${title}` : "No completed exchange to title", "info");
           return;
         }
-
-        throw new Error("usage: /session-title [status|on|off|model <provider/model[:effort]|auto|active>|regenerate]");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }
