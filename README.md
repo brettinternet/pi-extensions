@@ -51,13 +51,19 @@ Commands:
 
 ## Install
 
-Install the repository or reference a local checkout in Pi's `packages` setting:
+Install both extensions from the repository:
 
 ```sh
 pi install git:github.com/brettinternet/pi-extensions
 ```
 
-Both extensions are loaded from the package metadata.
+Or install only Live Codex from npm:
+
+```sh
+pi install npm:pi-live-codex
+```
+
+Installed extensions are loaded from their package metadata.
 
 ## Development
 

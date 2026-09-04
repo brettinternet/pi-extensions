@@ -1,0 +1,51 @@
+{
+  "name": "pi-live-codex",
+  "version": "0.1.4",
+  "description": "Realtime gpt-live-1-codex voice frontend for the Pi coding agent",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brettinternet/pi-extensions.git",
+    "directory": "extensions/live-codex"
+  },
+  "homepage": "https://github.com/brettinternet/pi-extensions#live-codex",
+  "bugs": {
+    "url": "https://github.com/brettinternet/pi-extensions/issues"
+  },
+  "files": [
+    "*.ts",
+    "*.cts",
+    "*.cjs",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "openai-codex",
+    "gpt-live-1-codex",
+    "voice",
+    "speech"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "dependencies": {
+    "@oh-my-pi/pi-natives": "18.1.6",
+    "ws": "8.21.3"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-agent-core": "*",
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
