@@ -257,10 +257,10 @@ export class LiveSession {
   handleAgentSettled(): void {
     this.#queueAction(() => {
       const settled = this.#activities.settleActive();
-      if (settled?.pendingFinal) {
+      if (settled) {
         this.#appendDelegationContext(
           settled.id,
-          `"Agent Final Message":\n\n${settled.pendingFinal}`,
+          `"Agent Final Message":\n\n${settled.pendingFinal || "The operation ended without a final response."}`,
         );
       }
       this.#emitWorkStatus();
