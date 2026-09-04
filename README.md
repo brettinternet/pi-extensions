@@ -20,7 +20,7 @@ Requires Node.js 22.19+, microphone access, and an OpenAI Codex login (`/login o
 
 ### Title
 
-Generates a concise session title once, after the first completed user/assistant exchange. The title is persisted as the Pi session name and used verbatim as the terminal title. Existing and manually named sessions are left unchanged.
+Generates a concise session title once. Generation starts in the background as soon as the first assistant message containing text is finalized (`message_end`); it does not wait for later tool results, additional assistant turns, or the full agent run to settle. The title appears when that background request finishes, is persisted as the Pi session name, and is used verbatim as the terminal title. Existing and manually named sessions are left unchanged.
 
 Global configuration lives at `~/.pi/agent/pi-title.json` (or under `PI_CODING_AGENT_DIR`):
 
