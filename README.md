@@ -18,6 +18,12 @@ Use `/live <voice>` to select a voice. `Ctrl+L` toggles voice mode, `Space` mute
 
 Requires Node.js 22.19+, microphone access, and an OpenAI Codex login (`/login openai-codex`). Only one Pi process can use live voice at a time.
 
+### Herdr Workbench
+
+Registers a typed `workbench` tool for visible Neovim, LazyGit, and foreground job panes managed by the `brettinternet.workbench` Herdr plugin. Jobs run asynchronously, remain cancellable, and emit session- and workspace-scoped background activity events for voice surfaces and other consumers.
+
+The tool only mutates trusted projects and limits follow-up operations to resources owned by the current Pi session. See [`extensions/workbench/README.md`](extensions/workbench/README.md) for requirements and the event contract.
+
 ### Title
 
 Generates a concise session title once. Generation starts in the background as soon as the first assistant message containing text is finalized (`message_end`); it does not wait for later tool results, additional assistant turns, or the full agent run to settle. The title appears when that background request finishes, is persisted as the Pi session name, and is used verbatim as the terminal title. Existing and manually named sessions are left unchanged.
@@ -80,6 +86,7 @@ Or install an individual extension from npm:
 ```sh
 pi install npm:pi-live-codex
 pi install npm:pi-title
+pi install npm:pi-herdr-workbench
 ```
 
 Installed extensions are loaded from their package metadata.

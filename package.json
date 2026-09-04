@@ -39,7 +39,8 @@
   "pi": {
     "extensions": [
       "./extensions/live-codex/index.ts",
-      "./extensions/title/index.ts"
+      "./extensions/title/index.ts",
+      "./extensions/workbench/index.ts"
     ]
   }
 }

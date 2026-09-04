@@ -1,0 +1,42 @@
+{
+  "name": "pi-herdr-workbench",
+  "version": "0.1.0",
+  "description": "Typed Pi tools for the Herdr agent workbench plugin",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brettinternet/pi-extensions.git",
+    "directory": "extensions/workbench"
+  },
+  "homepage": "https://github.com/brettinternet/pi-extensions#herdr-workbench",
+  "bugs": {
+    "url": "https://github.com/brettinternet/pi-extensions/issues"
+  },
+  "files": [
+    "*.ts",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "herdr",
+    "workbench"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": "*",
+    "@earendil-works/pi-coding-agent": "*",
+    "typebox": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
