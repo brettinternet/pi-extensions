@@ -2,29 +2,6 @@
 
 Personal extensions for the [Pi coding agent](https://pi.dev).
 
-## Colima sandbox
-
-`bin/pi-sandbox` is an opt-in launcher for running Pi's built-in filesystem and shell tools in one disposable Colima container while Pi and model authentication remain on the host. Run it from the root of a normal (non-linked-worktree) Git checkout:
-
-```sh
-~/dev/me/pi-extensions/bin/pi-sandbox --
-~/dev/me/pi-extensions/bin/pi-sandbox -- --model gpt-5 --thinking high
-~/dev/me/pi-extensions/bin/pi-sandbox -- --print "inspect the tests"
-```
-
-The launcher requires Docker's explicit `colima` context and a trusted DCG extension at `~/.dotfiles/ai/pi/extensions/dcg-guard.ts`. It creates a fresh labeled container, mounts only the canonical current directory read-write at `/workspace`, and removes the container on exit or signal. The default guest network is `none`; opt into the Docker bridge network explicitly before the separator:
-
-```sh
-~/dev/me/pi-extensions/bin/pi-sandbox --network=unrestricted --
-```
-
-Only safe model/session arguments are forwarded. Extensions, approval, tool-selection, context/resource-loading, custom system-prompt, export, and other host-surface options are rejected. Pi is started with no extension discovery, no project approval, no skills, no prompt templates, no context files, and no themes; it explicitly loads only the trusted DCG extension and `extensions/colima-sandbox/index.ts`, with `read,bash,edit,write,grep,find,ls` active. There is no sandbox disable switch.
-
-Threat boundary and limitations: the workspace is intentionally read-write, and commands run as a non-root user with a read-only container root, no host environment/credentials/home/SSH agent/Docker socket, dropped capabilities, no-new-privileges, bounded resources, and a sanitized guest environment. Docker/Colima and the Pi host remain trusted; a Colima VM or Docker escape remains a residual risk. Linked Git worktrees, launches below the repository root, and workspaces containing either host-loaded sandbox extension are rejected for the MVP. Custom, MCP, subagent, project extensions/resources, and other additional tools are not supported. Non-running stale containers are swept on the next launch; after a hard host crash, remove any still-running `io.pi.colima-sandbox=true` container manually after confirming no sandbox session owns it.
-
-The interactive `/sandbox` command reports only the container, resolved image ID, mount, network, and boundary. The image is built from the deterministic repository Dockerfile and contains Bash, Git, ripgrep, and Node.
-
-
 ### Live Codex
 
 Realtime `gpt-live-1-codex` voice mode. Speak naturally; repository work is delegated to the active Pi session and results are read back.
@@ -71,6 +48,24 @@ Commands:
 /title model active                      Use the active session model
 /title regenerate                        Replace the current title automatically
 ```
+
+## Colima sandbox
+
+`bin/pi-sandbox` runs Pi's filesystem and shell tools in a disposable Colima container. Run it from a Git repository root:
+
+```sh
+~/dev/me/pi-extensions/bin/pi-sandbox --
+~/dev/me/pi-extensions/bin/pi-sandbox -- --model gpt-5 --thinking high
+~/dev/me/pi-extensions/bin/pi-sandbox -- --print "inspect the tests"
+```
+
+It requires Docker's `colima` context and `~/.dotfiles/ai/pi/extensions/dcg-guard.ts`. The repository is mounted read-write at `/workspace`; host credentials and environment remain unavailable. Networking is disabled by default. Enable it with:
+
+```sh
+~/dev/me/pi-extensions/bin/pi-sandbox --network=unrestricted --
+```
+
+Only built-in file and shell tools are available. Linked worktrees, launches below the repository root, custom tools, MCP, subagents, and project extensions are unsupported. Docker, Colima, and the Pi host remain trusted.
 
 ## Install
 
