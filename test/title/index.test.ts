@@ -207,7 +207,7 @@ describe("title command", () => {
 });
 
 describe("automatic title generation", () => {
-  test("starts in the background when the first assistant text is finalized", async () => {
+  test("starts from the request without delaying the main agent", async () => {
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = `/tmp/pi-title-test-${randomUUID()}`;
 
@@ -225,6 +225,7 @@ describe("automatic title generation", () => {
         resolveCompletion = resolve;
       });
       let requestCount = 0;
+      let titleRequest: { messages?: Array<{ content?: Array<{ text?: string }> }> } | undefined;
       let markStarted!: () => void;
       const started = new Promise<void>((resolve) => {
         markStarted = resolve;
@@ -250,8 +251,9 @@ describe("automatic title generation", () => {
         model: activeModel,
         modelRegistry: {
           getProvider: () => ({
-            streamSimple: () => {
+            streamSimple: (_model: unknown, request: typeof titleRequest) => {
               requestCount += 1;
+              titleRequest = request;
               markStarted();
               return { result: () => completion };
             },
@@ -267,22 +269,19 @@ describe("automatic title generation", () => {
       } as unknown as ExtensionCommandContext;
 
       titleExtension(pi);
-      const result = handlers.get("message_end")!(
-        {
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "Implemented it" }],
-          },
-        },
+      const result = handlers.get("before_agent_start")!(
+        { prompt: "Implement background titles" },
         ctx,
       );
 
       expect(result).toBeUndefined();
       await started;
       expect(sessionTitle).toBeUndefined();
+      expect(titleRequest?.messages?.[0]?.content?.[0]?.text).toContain("Implement background titles");
+      expect(titleRequest?.messages?.[0]?.content?.[0]?.text).not.toContain("assistant response");
 
       handlers.get("message_end")!(
-        { message: { role: "assistant", content: [{ type: "text", text: "More detail" }] } },
+        { message: { role: "assistant", content: [{ type: "text", text: "Implemented it" }] } },
         ctx,
       );
       expect(requestCount).toBe(1);

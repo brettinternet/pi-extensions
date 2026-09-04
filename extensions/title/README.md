@@ -2,7 +2,7 @@
 
 Automatic session titles for the [Pi coding agent](https://pi.dev).
 
-A concise title is generated in the background after the first assistant response, persisted as the Pi session name, and used as the terminal title. Existing and manually named sessions are left unchanged.
+A concise title is generated from the first request as soon as the agent starts, concurrently with the main agent work. It is persisted as the Pi session name and used as the terminal title. Existing and manually named sessions are left unchanged.
 
 ## Install
 

@@ -3,6 +3,8 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { configPath, loadConfig, saveConfig, type Config } from "./config.js";
 import { cleanTitle, firstCompletedExchange, TITLE_SYSTEM_PROMPT } from "./title.js";
 
+type TitleSource = { user: string; assistant?: string };
+
 const AUTOMATIC_MODEL_CANDIDATES = [
   "openai/gpt-5-nano",
   "openrouter/openai/gpt-5-nano",
@@ -211,9 +213,9 @@ export default function titleExtension(pi: ExtensionAPI) {
   async function generate(
     ctx: ExtensionContext,
     overwrite: boolean,
-    exchange = firstCompletedExchange(ctx.sessionManager.getBranch()),
+    source: TitleSource | undefined = firstCompletedExchange(ctx.sessionManager.getBranch()),
   ): Promise<string | undefined> {
-    if (generating || (!overwrite && pi.getSessionName()) || !exchange) return undefined;
+    if (generating || (!overwrite && pi.getSessionName()) || !source) return undefined;
 
     generating = true;
     const controller = new AbortController();
@@ -238,10 +240,11 @@ export default function titleExtension(pi: ExtensionAPI) {
                 {
                   type: "text",
                   text: [
-                    "--- First user message ---",
-                    exchange.user.slice(0, 2400),
-                    "--- First assistant response ---",
-                    exchange.assistant.slice(0, 2400),
+                    "--- First user request ---",
+                    source.user.slice(0, 4800),
+                    ...(source.assistant
+                      ? ["--- First assistant response ---", source.assistant.slice(0, 2400)]
+                      : []),
                     "--- End session data ---",
                   ].join("\n"),
                 },
@@ -274,14 +277,11 @@ export default function titleExtension(pi: ExtensionAPI) {
     }
   }
 
-  function generateInBackground(
-    ctx: ExtensionContext,
-    exchange: ReturnType<typeof firstCompletedExchange>,
-  ): void {
+  function generateInBackground(ctx: ExtensionContext, source: TitleSource | undefined): void {
     if (backgroundGeneration) return;
 
     const expectedLifecycle = lifecycle;
-    const request = generate(ctx, false, exchange);
+    const request = generate(ctx, false, source);
     backgroundGeneration = request;
     void request
       .catch((error) => {
@@ -314,6 +314,10 @@ export default function titleExtension(pi: ExtensionAPI) {
 
   pi.on("session_info_changed", (_event, ctx) => {
     deferTerminalTitle(ctx);
+  });
+
+  pi.on("before_agent_start", (event, ctx) => {
+    generateInBackground(ctx, { user: event.prompt });
   });
 
   pi.on("message_end", (event, ctx) => {
