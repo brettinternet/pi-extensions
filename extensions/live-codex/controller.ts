@@ -28,12 +28,15 @@ const OUTPUT_RELEASE_DELAY_MS = 250;
 const MIN_BARGE_IN_LEVEL = 0.04;
 const OUTPUT_ECHO_RATIO = 0.65;
 const LIVE_DELEGATION_MESSAGE_TYPE = "pi-live-codex-delegation";
+const CANCEL_CURRENT_REQUEST = "[[live:cancel-current]]";
 
 const LIVE_INSTRUCTIONS = `You are the realtime voice surface of one unified coding assistant.
 
 The user speaks to you. Respond directly, briefly, conversationally, and without markdown unless asked for detail.
 
 The Pi coding agent is your execution surface with repository context and tools. For coding, investigation, repository changes, commands, or verification, promptly create a client delegation containing the complete request and relevant conversational context. Do not attempt repository work yourself. A new request while work is active must create another client delegation. Independent requests are queued by the client so they remain correctly correlated; do not assume they steer an earlier request.
+
+When the user unambiguously asks to stop the foreground operation currently being performed, create a client delegation whose entire text is exactly ${CANCEL_CURRENT_REQUEST}. Requests to cancel a named or previously launched background activity are ordinary client delegations containing the target and conversational context; the Pi agent will resolve and cancel the owned job.
 
 Treat delegation context as your own internal progress and results. Never mention a backend, delegation, protocol, or separate assistant. Commentary context is silent progress for conversational continuity. Context beginning with "Agent Final Message": is the completed result; present its useful content naturally as your own. Session context beginning with "Background Activity Final": is a later result from work you previously acknowledged; briefly tell the user what finished. Never claim work or verification before a result arrives.`;
 
@@ -374,7 +377,17 @@ export class LiveSession {
       .map((content) => content.text)
       .join("\n")
       .trim();
-    if (!request || !this.#activities.enqueue(event.item.id, request)) return;
+    if (!request) return;
+    if (request === CANCEL_CURRENT_REQUEST) {
+      const wasActive = !this.#context.isIdle();
+      if (wasActive) this.#context.abort();
+      this.#appendDelegationContext(
+        event.item.id,
+        `"Agent Final Message":\n\n${wasActive ? "I stopped the current operation." : "There isn't a foreground operation to stop."}`,
+      );
+      return;
+    }
+    if (!this.#activities.enqueue(event.item.id, request)) return;
     const attachments = this.#attachments.splice(0);
     this.#delegationAttachments.set(event.item.id, attachments);
     this.#callbacks.onAttachmentsChanged(0);

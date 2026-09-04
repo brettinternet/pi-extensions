@@ -18,6 +18,8 @@ Start Pi in its interactive TUI, then run:
 /live
 ```
 
-Use `/live <voice>` to select a voice. `Ctrl+L` toggles voice mode, `Space` mutes, and `Esc` ends the session. Drop image files into the terminal while live to attach them to your next spoken request.
+Use `/live <voice>` to select a voice. `Ctrl+L` toggles voice mode, `Space` mutes, and `Esc` ends the voice session. Drop image files into the terminal while live to attach them to your next spoken request.
+
+You can make additional requests while work is running. Independent requests are dispatched to Pi in order, while detached subagent jobs continue concurrently. Their completion is correlated with the request that launched them and announced through the live session. A clear request to stop the current foreground operation aborts that Pi turn; named background cancellation is handled by Pi against the owned job.
 
 Only one Pi process can use live voice at a time.
