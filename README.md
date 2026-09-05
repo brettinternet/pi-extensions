@@ -2,51 +2,78 @@
 
 Personal extensions for the [Pi coding agent](https://pi.dev).
 
-In Pi's interactive TUI, slash-command descriptions show each command's argument shape. Type a command and press `Tab` to complete subcommands, common values, voices, and available model references; model thinking levels complete after `:`.
+Slash-command descriptions show each command's argument shape. Press `Tab` to complete subcommands, common values, voices, and model references. Thinking levels complete after `:`.
+
+## Extensions
+
+| Extension | What it does | Details |
+|---|---|---|
+| **Live Codex** | Realtime `gpt-live-1-codex` voice mode for Pi. | [`docs`](extensions/live-codex/global-voice-broker.md) |
+| **Loop** | Runs a prompt a bounded number of times in fresh Pi sessions. | [`README`](extensions/loop/README.md) |
+| **Herdr Workbench** | Provides visible Neovim, LazyGit, and foreground-job panes. | [`README`](extensions/workbench/README.md) |
+| **Progress** | Shows compact, passive main-agent activity below the editor. | [`README`](extensions/progress/README.md) |
+| **Title** | Generates and persists a concise session title. | Configuration below |
 
 ### Live Codex
 
-Realtime `gpt-live-1-codex` voice mode. Speak naturally; repository work is delegated to the active Pi session and results are read back.
-
-![prompt with live voice enabled](docs/screenshot.png)
-
-Start Pi in its interactive TUI, then run:
+Start Pi in its interactive TUI:
 
 ```text
 /live
+/live <voice>
 ```
 
-Use `/live <voice>` to select a voice. Known Realtime voices are offered by argument completion, while custom voice names remain accepted. `Ctrl+L` toggles voice mode and `Esc` ends the session. While live, printable non-whitespace input opens the editor; bare `Space` mutes only while it is empty and otherwise inserts. Press `Enter` with nonblank text to stage a verbatim typed note (bounded to 4,000 characters) for the next ordinary spoken request; it is sent as a separate text block alongside dropped images and never starts a standalone Pi turn. A valid dropped image also reveals the editor. Staged notes wait through controls, block handoff, and return to the normal editor on stop.
+![prompt with live voice enabled](docs/screenshot.png)
 
-Requires Node.js 22.19+, microphone access, and an OpenAI Codex login (`/login openai-codex`). Only one Pi session owns live voice at a time. Starting `/live` in another session offers an authenticated handoff: old foreground/background Pi work continues, while its voice surface stops and voice starts in the requesting session. Queued voice requests and pending voice-routed confirmations must be resolved in the old session first; running work alone does not block handoff. See [`extensions/live-codex/global-voice-broker.md`](extensions/live-codex/global-voice-broker.md) for the future broker design.
+Known realtime voices support completion; custom voice names are also accepted. `Ctrl+L` toggles voice mode and `Esc` ends it.
+
+While live, printable non-whitespace input opens the editor. Bare `Space` mutes only while the editor is empty. Press `Enter` with nonblank text to stage a verbatim note, limited to 4,000 characters, for the next spoken request. Dropped images and staged notes are sent with that request.
+
+Only one Pi session owns live voice at a time. Starting `/live` elsewhere offers an authenticated handoff. Existing Pi work continues, but the previous voice surface stops. Queued voice requests and pending voice-routed confirmations must be resolved in the old session first.
+
+Requires Node.js 22.19+, microphone access, and an OpenAI Codex login:
+
+```text
+/login openai-codex
+```
 
 ### Loop
 
-Runs a prompt a bounded number of times, creating a fresh Pi session for every iteration. Filesystem changes carry forward, but conversational messages do not. Use `/loop <count> <prompt>` to start, `/loop <count>` to retune future iterations, `/loop status` to inspect, and `/loop` or `/loop stop` to request a graceful stop. Aborted or error output pauses the run; `/loop resume` retries that iteration in another fresh session. State and session ownership are persisted in custom entries, and a compact widget appears while active or paused.
+Each iteration gets a fresh Pi session. Filesystem changes carry forward; conversational messages do not.
 
-See [`extensions/loop/README.md`](extensions/loop/README.md) for command details.
+```text
+/loop <count> <prompt>   Start
+/loop <count>            Retune future iterations
+/loop status             Inspect
+/loop                    Request graceful stop
+/loop stop               Request graceful stop
+/loop resume             Retry a paused iteration
+```
+
+Aborted or failed output pauses the run. State and session ownership are persisted in custom entries, with a compact active/paused widget.
 
 ### Herdr Workbench
 
-Registers a typed `workbench` tool for visible Neovim, LazyGit, and foreground job panes managed by the `brettinternet.workbench` Herdr plugin. Jobs run asynchronously, remain cancellable, and emit session- and workspace-scoped background activity events for voice surfaces and other consumers.
+Registers a typed `workbench` tool for visible Neovim, LazyGit, and foreground-job panes managed by the `brettinternet.workbench` Herdr plugin.
 
-The tool only mutates trusted projects and limits follow-up operations to resources owned by the current Pi session. See [`extensions/workbench/README.md`](extensions/workbench/README.md) for requirements and the event contract.
+Jobs run asynchronously, remain cancellable, and emit session- and workspace-scoped background activity events. The tool only mutates trusted projects and limits follow-up operations to resources owned by the current Pi session.
 
 ### Progress
 
-Shows compact, passive main-agent activity below the editor. It observes active tools, recent check outcomes, and successful edit/write targets without registering an LLM tool, changing prompts, or calling another model. Output is limited to two truncated lines; `pi-subagents` FleetView remains the source for delegated work.
+Shows up to two truncated lines of passive activity below the editor. It observes active tools, recent check outcomes, and successful edit/write targets without registering an LLM tool, changing prompts, or calling another model.
 
-See [`extensions/progress/README.md`](extensions/progress/README.md) for exact semantics and limitations.
+`pi-subagents` FleetView remains the source for delegated work.
 
 ### Title
 
-Generates a concise session title once. Generation starts in the background as soon as the first assistant message containing text is finalized (`message_end`); it does not wait for later tool results, additional assistant turns, or the full agent run to settle. The title appears when that background request finishes, is persisted as the Pi session name, and is used verbatim as the terminal title. Existing and manually named sessions are left unchanged.
+Generates one session title in the background after the first assistant message containing text is finalized. The title does not wait for later tool results or the full run. It appears when generation finishes, is persisted as the Pi session name, and is used verbatim as the terminal title.
 
-Global configuration lives at `~/.pi/agent/pi-title.jsonc` (or under `PI_CODING_AGENT_DIR`):
+Existing and manually named sessions are unchanged.
+
+Configuration: `~/.pi/agent/pi-title.jsonc` or the directory set by `PI_CODING_AGENT_DIR`.
 
 ```jsonc
 {
-  // Generate titles automatically.
   "enabled": true,
   "model": null,
   "maxTokens": 30,
@@ -54,22 +81,24 @@ Global configuration lives at `~/.pi/agent/pi-title.jsonc` (or under `PI_CODING_
 }
 ```
 
-Comments and trailing commas are supported. The legacy `pi-title.json` path is still read when no `.jsonc` file exists; `.jsonc` takes precedence when both exist. Configuration changed through `/title` preserves existing comments.
+Comments and trailing commas are supported. The legacy `pi-title.json` is read only when `.jsonc` does not exist; `.jsonc` takes precedence. `/title` configuration changes preserve comments.
 
-By default, an omitted or `null` model uses the active session model. Set `"model": "auto"` to use an available lightweight model, or set an explicit `provider/model[:effort]` reference.
+Model behavior:
 
-Commands:
+- Omitted or `null`: use the active session model.
+- `"auto"`: use an available lightweight model.
+- Explicit `provider/model[:effort]`: use that model.
 
 ```text
-/title                                   Show the current title, status, and config path
+/title                                   Show title, status, and config path
 /title My custom title                   Set a custom title
-/title set status                        Set a custom title that matches a subcommand
+/title set status                        Set a subcommand-shaped custom title
 /title on                                Enable automatic titles
 /title off                               Disable automatic titles
 /title model openai/gpt-5-nano           Select a dedicated title model
 /title model auto                        Use the lightweight-model fallback
 /title model active                      Use the active session model
-/title regenerate                        Replace the current title automatically
+/title regenerate                        Replace the title automatically
 ```
 
 ## Colima sandbox
@@ -82,7 +111,12 @@ Commands:
 ~/dev/me/pi-extensions/bin/pi-sandbox -- --print "inspect the tests"
 ```
 
-It requires Docker's `colima` context and `~/.dotfiles/ai/pi/extensions/dcg-guard.ts`. The repository is mounted read-write at `/workspace`; host credentials and environment remain unavailable. Networking is disabled by default. Enable it with:
+Requirements:
+
+- Docker's `colima` context
+- `~/.dotfiles/ai/pi/extensions/dcg-guard.ts`
+
+The repository is mounted read-write at `/workspace`. Host credentials and environment remain unavailable. Networking is disabled by default:
 
 ```sh
 ~/dev/me/pi-extensions/bin/pi-sandbox --network=unrestricted --
@@ -92,13 +126,13 @@ Only built-in file and shell tools are available. Linked worktrees, launches bel
 
 ## Install
 
-Install all extensions from the repository:
+Install all extensions:
 
 ```sh
 pi install git:github.com/brettinternet/pi-extensions
 ```
 
-Or install an individual extension from npm:
+Or install individual extensions from npm:
 
 ```sh
 pi install npm:pi-live-codex
