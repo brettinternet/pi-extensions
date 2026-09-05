@@ -40,6 +40,9 @@ const READ_ONLY_GIT = new Set([
   "diff", "log", "ls-files", "rev-parse", "show", "status",
 ]);
 const PACKAGE_MANAGERS = new Set(["bun", "npm", "pnpm", "yarn"]);
+const ROUTINE_DEVELOPMENT_TASKS = new Set([
+  "build", "check", "lint", "test", "typecheck", "type-check",
+]);
 const READ_ONLY_DEPLOY_COMMANDS: Record<string, ReadonlySet<string>> = {
   kubectl: new Set(["api-resources", "api-versions", "describe", "explain", "get", "logs", "version"]),
   helm: new Set(["env", "get", "history", "list", "search", "show", "status", "version"]),
@@ -86,6 +89,22 @@ function isRoutinePythonTest(name: string, args: readonly string[]): boolean {
     (args[1] === "unittest" || args[1] === "pytest");
 }
 
+function isRoutineDevelopmentCommand(name: string, args: readonly string[]): boolean {
+  const operation = firstOperand(args);
+  if (["make", "gmake", "just", "task"].includes(name)) {
+    const tasks = args.filter((arg) => !arg.startsWith("-")).map((arg) => arg.toLowerCase());
+    return tasks.length > 0 && tasks.every((task) => ROUTINE_DEVELOPMENT_TASKS.has(task));
+  }
+  if (PACKAGE_MANAGERS.has(name)) {
+    if (operation === "test") return true;
+    const script = args[0]?.toLowerCase() === "run" ? args[1]?.toLowerCase() : undefined;
+    return script !== undefined && ROUTINE_DEVELOPMENT_TASKS.has(script);
+  }
+  if (name === "cargo") return operation !== undefined &&
+    ["build", "check", "test"].includes(operation);
+  return name === "go" && operation === "test";
+}
+
 /**
  * Strict allowlist policy for direct argv execution. Only recognized read-only commands and
  * narrowly defined routine development operations run without confirmation. Wrappers,
@@ -96,7 +115,8 @@ export function classifyCommandRisk(command: readonly string[]): CommandRisk | u
   const args = command.slice(1);
   if (!name) return { category: "process-system", reason: "empty executable" };
 
-  if (name === "pytest" || isRoutinePythonTest(name, args)) return undefined;
+  if (name === "pytest" || isRoutinePythonTest(name, args) ||
+    isRoutineDevelopmentCommand(name, args)) return undefined;
   if (name === "env" || SHELLS.has(name) || INTERPRETERS.has(name) ||
     PYTHON_INTERPRETER.test(name) || WRAPPERS_AND_TASK_RUNNERS.has(name)) {
     return { category: "shell-wrapper", reason: `${name} can execute another command, script, or task` };
@@ -171,7 +191,6 @@ export function classifyCommandRisk(command: readonly string[]): CommandRisk | u
     if (!setOption) return undefined;
     return { category: "process-system", reason: `date ${setOption} can change the system clock` };
   }
-  if (name === "bun" && firstOperand(args) === "test") return undefined;
   if (READ_ONLY_COMMANDS.has(name)) return undefined;
   return { category: "unknown-executable", reason: `${name} is not on the direct-command allowlist` };
 }

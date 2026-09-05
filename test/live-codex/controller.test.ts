@@ -490,6 +490,8 @@ test("voice confirmation resolves once without starting a coding turn", async ()
   assert.match(confirmationContext, new RegExp(request.requestId));
   assert.match(confirmationContext, /Approve git push/);
   assert.match(confirmationContext, /git.*push/);
+  assert.ok(confirmationContext.indexOf(request.summary) <
+    confirmationContext.indexOf("Say approve or deny"));
   assert.equal(harness.terminal.length, 0);
 
   harness.transport().emit({

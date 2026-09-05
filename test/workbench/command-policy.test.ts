@@ -10,6 +10,11 @@ describe("workbench command risk policy", () => {
     expect(category(["python", "-m", "unittest", "discover", "-v"])).toBeUndefined();
     expect(category(["python2", "-m", "pytest", "tests"])).toBeUndefined();
     expect(category(["/usr/bin/python3.12", "-m", "unittest"])).toBeUndefined();
+    expect(category(["task", "check"])).toBeUndefined();
+    expect(category(["make", "test", "build"])).toBeUndefined();
+    expect(category(["bun", "run", "typecheck"])).toBeUndefined();
+    expect(category(["cargo", "check"])).toBeUndefined();
+    expect(category(["go", "test", "./..."])).toBeUndefined();
     expect(category(["rg", "TODO", "src"])).toBeUndefined();
     expect(category(["find", ".", "-name", "*.ts"])).toBeUndefined();
     expect(category(["/usr/bin/git", "status", "--short"])).toBeUndefined();
@@ -36,6 +41,9 @@ describe("workbench command risk policy", () => {
     expect(category(["python3.12", "-m", "pytest.ini"])).toBe("shell-wrapper");
     expect(category(["env", "MODE=test", "rg", "TODO"])).toBe("shell-wrapper");
     expect(category(["mise", "exec", "git", "--", "push"])).toBe("shell-wrapper");
+    expect(category(["task", "check", "deploy"])).toBe("shell-wrapper");
+    expect(category(["make", "install"])).toBe("shell-wrapper");
+    expect(category(["bun", "run", "release"])).toBe("unknown-executable");
     expect(category(["xargs", "rm"])).toBe("shell-wrapper");
     expect(category(["make", "deploy"])).toBe("shell-wrapper");
     expect(category(["fd", "-e", "tmp", "-x", "rm"])).toBe("shell-wrapper");

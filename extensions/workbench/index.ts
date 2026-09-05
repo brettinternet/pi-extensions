@@ -380,6 +380,7 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
   ): Promise<{
     forceCloseTarget?: ForceCloseTarget;
     expectedEditorPaneId?: string;
+    downgradeForce?: boolean;
   }> {
     assertSupportedForce(input);
     if (requiresTrust(input.action) && !ctx.isProjectTrusted()) {
@@ -390,10 +391,17 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
     }
     let forceCloseTarget: ForceCloseTarget | undefined;
     let expectedEditorPaneId: string | undefined;
+    let downgradeForce = false;
     if (input.action.startsWith("job.") && !["job.start", "job.list"].includes(input.action)) {
       const jobId = assertOwnedJob(input.jobId);
       if (input.action === "job.close" && input.force === true) {
-        forceCloseTarget = { kind: "job", id: jobId };
+        const status = await client.execute({ action: "job.status", jobId }, ctx.cwd, signal);
+        const state = stringField(recordField(status, "job"), "status");
+        if (state && ["completed", "failed", "cancelled"].includes(state)) {
+          downgradeForce = true;
+        } else {
+          forceCloseTarget = { kind: "job", id: jobId };
+        }
       }
     }
     if (input.action === "pane.focus") {
@@ -409,7 +417,14 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
         throw new Error("The current workspace editor is not owned by this Pi session");
       }
       expectedEditorPaneId = paneId;
-      if (input.force === true) forceCloseTarget = { kind: "editor", id: paneId };
+      if (input.force === true) {
+        const dirtyBuffers = editor?.dirtyBuffers;
+        if (Array.isArray(dirtyBuffers) && dirtyBuffers.length === 0) {
+          downgradeForce = true;
+        } else {
+          forceCloseTarget = { kind: "editor", id: paneId };
+        }
+      }
     }
     if (input.action === "lazygit.close") {
       const workspaceId = await currentWorkspace(ctx, signal);
@@ -418,7 +433,7 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
       );
       if (!owned) throw new Error("The current workspace LazyGit pane is not owned by this Pi session");
     }
-    return { forceCloseTarget, expectedEditorPaneId };
+    return { forceCloseTarget, expectedEditorPaneId, downgradeForce };
   }
 
   pi.registerTool({
@@ -431,11 +446,13 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
       "Use workbench job.start with command as an argv array; use a shell argv only when the user explicitly requests shell syntax.",
       "Default workbench focus to false unless the user asks to show, watch, reveal, or switch to the target.",
       "Use workbench job status/read/cancel/close only with job IDs returned by this Pi session.",
+      "Close owned panes without force first. Use force only to discard known unsaved editor changes or close a job that is still active after an explicit user request.",
     ],
     parameters,
     async execute(toolCallId, params, signal, onUpdate, ctx) {
       const input = params as WorkbenchInput;
-      const { forceCloseTarget, expectedEditorPaneId } = await prepareAction(input, ctx, signal);
+      const { forceCloseTarget, expectedEditorPaneId, downgradeForce } =
+        await prepareAction(input, ctx, signal);
       if (forceCloseTarget) {
         await confirmations.confirmForceClose(input, forceCloseTarget, ctx, signal);
         if (forceCloseTarget.kind === "editor" && !ownership.editors.has(forceCloseTarget.id)) {
@@ -451,9 +468,12 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
         content: [{ type: "text", text: `Running ${input.action}…` }],
         details: {},
       });
-      const executionInput = expectedEditorPaneId
+      const preparedInput = expectedEditorPaneId
         ? { ...input, expectedPaneId: expectedEditorPaneId }
         : input;
+      const executionInput = downgradeForce
+        ? { ...preparedInput, force: false }
+        : preparedInput;
       let response = truncateResponse(await client.execute(executionInput, ctx.cwd, signal));
       if (input.action === "job.list" && Array.isArray(response.jobs)) {
         response = {

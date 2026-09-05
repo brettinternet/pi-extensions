@@ -34,6 +34,7 @@ async function createHarness(options: {
   force?: boolean;
   owned?: boolean;
   dirty?: boolean;
+  jobStatus?: "running" | "completed" | "failed" | "cancelled";
   voiceDecision?: VoiceDecision;
   beforeResolution?: (request: ConfirmationRequest) => void;
   replaceEditorBeforeResolution?: boolean;
@@ -129,7 +130,21 @@ async function createHarness(options: {
             editor: {
               paneId: currentEditorPaneId,
               workspaceId: "workspace-owned",
+              dirtyBuffers: options.dirty ? [{ name: "modified.txt" }] : [],
             },
+          }),
+        };
+      }
+      if (controllerArgs[0] === "job" && controllerArgs[1] === "status") {
+        order.push("job.status");
+        return {
+          code: 0,
+          killed: false,
+          stderr: "",
+          stdout: JSON.stringify({
+            ok: true,
+            action: "job.status",
+            job: { jobId: "job-owned", status: options.jobStatus ?? "running" },
           }),
         };
       }
@@ -148,7 +163,7 @@ async function createHarness(options: {
             }),
           };
         }
-        if (options.dirty) {
+        if (options.dirty && !controllerArgs.includes("--force")) {
           return {
             code: 1,
             killed: false,
@@ -220,6 +235,7 @@ describe("workbench force close boundary", () => {
     const harness = await createHarness({
       action: "editor.close",
       force: true,
+      dirty: true,
       voiceDecision: "approved",
     });
     await harness.execute();
@@ -253,6 +269,29 @@ describe("workbench force close boundary", () => {
     harness.shutdown();
   });
 
+  test("downgrades unnecessary force for clean and completed owned panes", async () => {
+    const editor = await createHarness({ action: "editor.close", force: true });
+    await editor.execute();
+    expect(editor.requests).toHaveLength(0);
+    expect(editor.closeCalls()).toEqual([[
+      "editor",
+      "close",
+      "--expected-pane-id",
+      "pane-owned",
+    ]]);
+    editor.shutdown();
+
+    const job = await createHarness({
+      action: "job.close",
+      force: true,
+      jobStatus: "completed",
+    });
+    await job.execute();
+    expect(job.requests).toHaveLength(0);
+    expect(job.closeCalls()).toEqual([["job", "close", "job-owned"]]);
+    job.shutdown();
+  });
+
   test("checks ownership before requesting force-close confirmation", async () => {
     const editor = await createHarness({ action: "editor.close", force: true, owned: false, voiceDecision: "approved" });
     await expect(editor.execute()).rejects.toThrow("not owned");
@@ -271,6 +310,7 @@ describe("workbench force close boundary", () => {
     const harness = await createHarness({
       action: "editor.close",
       force: true,
+      dirty: true,
       voiceDecision: "approved",
     });
     await harness.execute();
@@ -282,6 +322,7 @@ describe("workbench force close boundary", () => {
     const harness = await createHarness({
       action: "editor.close",
       force: true,
+      dirty: true,
       voiceDecision: "approved",
       replaceEditorBeforeResolution: true,
     });
