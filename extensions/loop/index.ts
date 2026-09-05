@@ -6,11 +6,12 @@ import type {
   SessionEntry,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 
 export const LOOP_STATE_ENTRY = "pi-loop-state-v1";
 export const LOOP_WIDGET_KEY = "pi-loop";
 export const LOOP_USAGE =
-  "usage: /loop <positive-count> <prompt> | /loop <positive-count> | /loop status | /loop resume | /loop stop";
+  "usage: /loop <positive-count> <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop status | /loop resume | /loop stop";
 
 export type LoopStatus = "active" | "stopping" | "paused" | "completed" | "stopped" | "inactive";
 
@@ -29,6 +30,7 @@ export interface LoopState {
 export type ParsedLoopCommand =
   | { kind: "start"; count: number; prompt: string }
   | { kind: "retune"; count: number }
+  | { kind: "adjust"; delta: number }
   | { kind: "status" }
   | { kind: "resume" }
   | { kind: "stop" }
@@ -101,9 +103,18 @@ export function parseLoopCommand(args: string): ParsedLoopCommand {
       : { kind: "pause", runId: fields[0], iteration };
   }
 
+  if (/^[+\-]\d/.test(first)) {
+    if (rest || !/^[+\-]\d+$/.test(first)) {
+      throw new Error(`adjustment must be +<count> or -<count>; ${LOOP_USAGE}`);
+    }
+    const count = Number(first.slice(1));
+    if (!isPositiveInteger(count)) throw new Error(`count must be a positive integer; ${LOOP_USAGE}`);
+    return { kind: "adjust", delta: first[0] === "+" ? count : -count };
+  }
+
   // Treat anything that starts like a count as a count error, rather than as
-  // an opaque command, so zero, signs, decimals, and overflow are explicit.
-  if (/^[+\-]?\d/.test(first) || /^\d/.test(first)) {
+  // an opaque command, so zero, decimals, and overflow are explicit.
+  if (/^\d/.test(first)) {
     if (!/^\d+$/.test(first)) throw new Error(`count must be a positive integer; ${LOOP_USAGE}`);
     const count = Number(first);
     if (!isPositiveInteger(count)) throw new Error(`count must be a positive integer; ${LOOP_USAGE}`);
@@ -144,7 +155,7 @@ export function parseLoopState(value: unknown): LoopState | undefined {
     !value.prompt.trim() ||
     !isPositiveInteger(value.currentIteration) ||
     !isNonNegativeInteger(value.remainingBudget) ||
-    (value.pendingRetune !== null && !isPositiveInteger(value.pendingRetune))
+    (value.pendingRetune !== null && !isNonNegativeInteger(value.pendingRetune))
   ) {
     return undefined;
   }
@@ -251,9 +262,16 @@ function isTerminal(state: LoopState | undefined): boolean {
   return Boolean(state && TERMINAL_STATUSES.has(state.status));
 }
 
-function shortPrompt(prompt: string): string {
-  const normalized = prompt.replace(/\s+/g, " ").trim();
-  return normalized.length > 72 ? `${normalized.slice(0, 69)}...` : normalized;
+export function formatLoopWidget(state: LoopState, width: number): string {
+  const futureIterations = state.pendingRetune ?? state.remainingBudget;
+  const remainingIterations = futureIterations + 1;
+  const totalIterations = state.currentIteration + futureIterations;
+  const prompt = state.prompt.replace(/\s+/g, " ").trim();
+  return truncateToWidth(
+    `loop ${state.status} ${remainingIterations}/${totalIterations} · ${prompt}`,
+    width,
+    "…",
+  );
 }
 
 export default function loopExtension(pi: ExtensionAPI): void {
@@ -286,18 +304,23 @@ export default function loopExtension(pi: ExtensionAPI): void {
     if (ctx.hasUI) ctx.ui.setWidget(LOOP_WIDGET_KEY, undefined);
   }
 
+  function showWidget(ctx: ExtensionContext, state: LoopState): void {
+    if (ctx.mode !== "tui") {
+      ctx.ui.setWidget(LOOP_WIDGET_KEY, [formatLoopWidget(state, Number.MAX_SAFE_INTEGER)], { placement: "belowEditor" });
+      return;
+    }
+    ctx.ui.setWidget(LOOP_WIDGET_KEY, (_tui, _theme) => ({
+      render: (width) => [formatLoopWidget(state, width)],
+      invalidate: () => {},
+    }), { placement: "belowEditor" });
+  }
+
   function renderWidget(ctx: ExtensionContext, state = runState): void {
     if (!ctx.hasUI || !statusIsVisible(state)) {
       clearWidget(ctx);
       return;
     }
-    const pending = state.pendingRetune === null ? "" : ` · next ${state.pendingRetune}`;
-    const prompt = shortPrompt(state.prompt);
-    ctx.ui.setWidget(
-      LOOP_WIDGET_KEY,
-      [`loop · ${state.status} · #${state.currentIteration} · ${state.remainingBudget} future${pending} · ${prompt}`],
-      { placement: "belowEditor" },
-    );
+    showWidget(ctx, state);
   }
 
   function currentState(ctx: ContextWithSession): LoopState | undefined {
@@ -332,13 +355,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     // The new extension instance restores this entry in before_agent_start.
     // This callback still owns the command context, so it is the safe place to
     // start the turn after the replacement is complete.
-    if (replacement.hasUI) {
-      replacement.ui.setWidget(
-        LOOP_WIDGET_KEY,
-        [`loop · active · #${state.currentIteration} · ${state.remainingBudget} future · ${shortPrompt(state.prompt)}`],
-        { placement: "belowEditor" },
-      );
-    }
+    if (replacement.hasUI) showWidget(replacement, state);
     await replacement.sendUserMessage(state.prompt);
   }
 
@@ -552,15 +569,21 @@ export default function loopExtension(pi: ExtensionAPI): void {
       return;
     }
 
-    if (parsed.kind === "retune") {
+    if (parsed.kind === "retune" || parsed.kind === "adjust") {
       if (!state || state.status !== "active") {
         notify(ctx, "a loop must be active to retune its remaining budget", "error");
         return;
       }
-      const retuned = { ...state, pendingRetune: parsed.count };
+      const currentBudget = state.pendingRetune ?? state.remainingBudget;
+      const nextBudget = parsed.kind === "retune" ? parsed.count : currentBudget + parsed.delta;
+      if (nextBudget < 0) {
+        notify(ctx, `cannot subtract more than the ${currentBudget} future iteration${currentBudget === 1 ? "" : "s"}`, "error");
+        return;
+      }
+      const retuned = { ...state, pendingRetune: nextBudget };
       persist(pi, retuned);
       renderWidget(ctx, retuned);
-      notify(ctx, `loop will run ${parsed.count} future iteration${parsed.count === 1 ? "" : "s"}`, "info");
+      notify(ctx, `loop will run ${nextBudget} future iteration${nextBudget === 1 ? "" : "s"}`, "info");
       return;
     }
 
@@ -670,11 +693,13 @@ export default function loopExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("loop", {
-    description: "<count> <prompt> | <count> | status | resume | stop — Run a bounded fresh-session loop",
+    description: "<count> <prompt> | <count> | ±<count> | status | resume | stop — Run a bounded fresh-session loop",
     getArgumentCompletions: (prefix) => completeArguments(prefix, [
       { value: "status", label: "status", description: "Show the current loop state" },
       { value: "resume", label: "resume", description: "Retry a paused iteration" },
       { value: "stop", label: "stop", description: "Stop gracefully" },
+      { value: "+1", label: "+1", description: "Add one future iteration" },
+      { value: "-1", label: "-1", description: "Remove one future iteration" },
       { value: "1 ", label: "1 <prompt>", description: "Run a prompt once" },
       { value: "3 ", label: "3 <prompt>", description: "Run a prompt three times" },
       { value: "5 ", label: "5 <prompt>", description: "Run a prompt five times" },

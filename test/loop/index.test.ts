@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import loopExtension, {
   LOOP_STATE_ENTRY,
   formatLoopStatus,
+  formatLoopWidget,
   parseLoopCommand,
   readLoopState,
   type LoopState,
@@ -156,6 +158,13 @@ function commandContext(harness: Harness): ExtensionCommandContext {
   return harness.commandContext();
 }
 
+function latestWidgetLines(harness: Harness, width = 80): string[] | undefined {
+  const value = harness.widgets.at(-1)?.value;
+  if (Array.isArray(value)) return value as string[];
+  if (typeof value !== "function") return undefined;
+  return (value({}, {}) as { render: (width: number) => string[] }).render(width);
+}
+
 describe("loop parser and state", () => {
   test("parses starts, retunes, controls, and rejects ambiguous input", () => {
     expect(parseLoopCommand("3 fix the failing tests")).toEqual({
@@ -164,9 +173,13 @@ describe("loop parser and state", () => {
       prompt: "fix the failing tests",
     });
     expect(parseLoopCommand("4")).toEqual({ kind: "retune", count: 4 });
+    expect(parseLoopCommand("+2")).toEqual({ kind: "adjust", delta: 2 });
+    expect(parseLoopCommand("-1")).toEqual({ kind: "adjust", delta: -1 });
     expect(parseLoopCommand("status")).toEqual({ kind: "status" });
     expect(parseLoopCommand("")).toEqual({ kind: "stop" });
     expect(() => parseLoopCommand("0 prompt")).toThrow("positive integer");
+    expect(() => parseLoopCommand("+0")).toThrow("positive integer");
+    expect(() => parseLoopCommand("-2 prompt")).toThrow("adjustment");
     expect(() => parseLoopCommand("2.5 prompt")).toThrow("positive integer");
     expect(() => parseLoopCommand("status now")).toThrow("does not accept");
   });
@@ -179,6 +192,9 @@ describe("loop parser and state", () => {
     ]);
     expect(command.getArgumentCompletions?.("3")).toEqual([
       { value: "3 ", label: "3 <prompt>", description: "Run a prompt three times" },
+    ]);
+    expect(command.getArgumentCompletions?.("+")).toEqual([
+      { value: "+1", label: "+1", description: "Add one future iteration" },
     ]);
     expect(command.getArgumentCompletions?.("__")).toBeNull();
   });
@@ -197,6 +213,24 @@ describe("loop parser and state", () => {
     expect(formatLoopStatus(state)).toContain("pending retune: 5");
     expect(formatLoopStatus(state)).not.toContain("secret prompt");
   });
+
+  test("formats a one-line countdown and truncates the prompt to the available width", () => {
+    const state: LoopState = {
+      version: 1,
+      runId: "run-1",
+      prompt: "inspect the repository\nand fix the failing tests",
+      currentIteration: 1,
+      remainingBudget: 3,
+      pendingRetune: null,
+      status: "active",
+    };
+    expect(formatLoopWidget(state, 80)).toBe(
+      "loop active 4/4 · inspect the repository and fix the failing tests",
+    );
+    const narrow = formatLoopWidget(state, 32);
+    expect(stripTerminalSequences(narrow)).toBe("loop active 4/4 · inspect the r…");
+    expect(visibleWidth(narrow)).toBe(32);
+  });
 });
 
 describe("loop lifecycle", () => {
@@ -208,6 +242,7 @@ describe("loop lifecycle", () => {
     expect(harness.prompts).toEqual(["inspect the repository"]);
     expect(harness.current.entries.every((entry) => entry.customType === LOOP_STATE_ENTRY)).toBeTrue();
     expect(stateOf(harness.current)).toMatchObject({ currentIteration: 1, remainingBudget: 1, status: "active" });
+    expect(latestWidgetLines(harness)).toEqual(["loop active 2/2 · inspect the repository"]);
   });
 
   test("continues exactly once at the settled boundary", async () => {
@@ -243,8 +278,27 @@ describe("loop lifecycle", () => {
     await harness.command.handler("2 repeat the check", harness.context);
     await harness.command.handler("4", commandContext(harness));
     expect(harness.state()).toMatchObject({ remainingBudget: 1, pendingRetune: 4 });
+    expect(latestWidgetLines(harness)).toEqual(["loop active 5/5 · repeat the check"]);
     await harness.settle();
     expect(harness.state()).toMatchObject({ currentIteration: 2, remainingBudget: 3, pendingRetune: null });
+    expect(latestWidgetLines(harness)).toEqual(["loop active 4/5 · repeat the check"]);
+  });
+
+  test("adds and subtracts future iterations while active", async () => {
+    const harness = createHarness();
+    await harness.command.handler("3 repeat the check", harness.context);
+    await harness.command.handler("+2", commandContext(harness));
+    expect(harness.state()?.pendingRetune).toBe(4);
+    expect(latestWidgetLines(harness)).toEqual(["loop active 5/5 · repeat the check"]);
+
+    await harness.command.handler("-4", commandContext(harness));
+    expect(harness.state()?.pendingRetune).toBe(0);
+    await harness.command.handler("-1", commandContext(harness));
+    expect(harness.state()?.pendingRetune).toBe(0);
+    expect(harness.notifications.at(-1)).toContain("cannot subtract more");
+
+    await harness.settle();
+    expect(harness.state()).toMatchObject({ status: "completed", currentIteration: 1 });
   });
 
   test("stops gracefully and stops paused runs immediately", async () => {
