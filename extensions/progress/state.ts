@@ -23,6 +23,7 @@ export interface CheckActivity {
 }
 
 export interface ProgressSnapshot {
+  runStarted: boolean;
   agentActive: boolean;
   tools: ToolActivity[];
   checks: CheckActivity[];
@@ -108,12 +109,14 @@ export function describeTool(
 }
 
 export class ProgressState {
+  #runStarted = false;
   #agentActive = false;
   readonly #tools = new Map<string, ToolActivity>();
   readonly #checks: CheckActivity[] = [];
   readonly #touchedPaths = new Map<string, true>();
 
   reset(): void {
+    this.#runStarted = false;
     this.#agentActive = false;
     this.#tools.clear();
     this.#checks.length = 0;
@@ -121,6 +124,7 @@ export class ProgressState {
   }
 
   beginRun(): void {
+    this.#runStarted = true;
     this.#agentActive = true;
     this.#tools.clear();
     this.#checks.length = 0;
@@ -178,6 +182,7 @@ export class ProgressState {
 
   snapshot(): ProgressSnapshot {
     return {
+      runStarted: this.#runStarted,
       agentActive: this.#agentActive,
       tools: [...this.#tools.values()],
       checks: [...this.#checks],

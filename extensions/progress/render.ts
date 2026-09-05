@@ -28,6 +28,7 @@ export function renderProgress(
   width: number,
 ): string[] {
   const hasFacts =
+    snapshot.runStarted ||
     snapshot.agentActive ||
     snapshot.tools.length > 0 ||
     snapshot.checks.length > 0 ||

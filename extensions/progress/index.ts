@@ -16,6 +16,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
     if (!ctx.hasUI || ctx !== currentContext) return;
     const snapshot = state.snapshot();
     const hasFacts =
+      snapshot.runStarted ||
       snapshot.agentActive ||
       snapshot.tools.length > 0 ||
       snapshot.checks.length > 0 ||

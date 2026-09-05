@@ -86,12 +86,14 @@ describe("progress state", () => {
     state.settleRun();
 
     expect(state.snapshot()).toMatchObject({
+      runStarted: true,
       agentActive: false,
       checks: [{ outcome: "passed" }],
     });
 
     state.beginRun();
     expect(state.snapshot()).toEqual({
+      runStarted: true,
       agentActive: true,
       tools: [],
       checks: [],

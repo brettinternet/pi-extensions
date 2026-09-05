@@ -2,7 +2,7 @@
 
 Compact, passive activity progress for the [Pi coding agent](https://pi.dev).
 
-The extension observes Pi's existing lifecycle events and renders at most two truncated lines below the editor. It does not register an LLM tool, alter prompts, call a model, or claim semantic task completion.
+The extension observes Pi's existing lifecycle events and renders at most two truncated lines below the editor. Settled progress remains visible until the next user-initiated run begins. It does not register an LLM tool, alter prompts, call a model, or claim semantic task completion.
 
 ```text
 progress · ● edit src/index.ts · ✓ bun test

@@ -11,6 +11,7 @@ describe("progress rendering", () => {
   test("renders active work and touched paths in at most two compact lines", () => {
     const lines = renderProgress(
       {
+        runStarted: true,
         agentActive: true,
         tools: [
           { id: "1", name: "edit", label: "edit src/a.ts", path: "src/a.ts" },
@@ -32,6 +33,7 @@ describe("progress rendering", () => {
     expect(
       renderProgress(
         {
+          runStarted: true,
           agentActive: false,
           tools: [],
           checks: [{ id: "1", label: "task check", outcome: "failed" }],
@@ -45,6 +47,21 @@ describe("progress rendering", () => {
     expect(
       renderProgress(
         {
+          runStarted: true,
+          agentActive: false,
+          tools: [],
+          checks: [],
+          touchedPaths: [],
+        },
+        theme,
+        80,
+      ),
+    ).toEqual(["progress · ✓ settled"]);
+
+    expect(
+      renderProgress(
+        {
+          runStarted: false,
           agentActive: false,
           tools: [],
           checks: [],
@@ -59,6 +76,7 @@ describe("progress rendering", () => {
   test("truncates rather than wrapping into additional rows", () => {
     const lines = renderProgress(
       {
+        runStarted: true,
         agentActive: true,
         tools: [{ id: "1", name: "bash", label: `bash ${"x".repeat(100)}` }],
         checks: [],

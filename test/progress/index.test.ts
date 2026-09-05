@@ -94,6 +94,36 @@ describe("progress extension", () => {
     ]);
   });
 
+  test("keeps a read-only result until the next request starts", async () => {
+    const { handlers, widgets, ctx } = setup();
+    handlers.get("session_start")!({}, ctx);
+    handlers.get("before_agent_start")!({}, ctx);
+    handlers.get("tool_execution_start")!(
+      {
+        toolCallId: "read-1",
+        toolName: "read",
+        args: { path: "/repo/src/a.ts" },
+      },
+      ctx,
+    );
+    handlers.get("tool_result")!(
+      {
+        toolCallId: "read-1",
+        toolName: "read",
+        input: { path: "/repo/src/a.ts" },
+        isError: false,
+      },
+      ctx,
+    );
+    handlers.get("agent_settled")!({}, ctx);
+    await flushRender();
+    expect(latestLines(widgets)).toEqual(["progress · ✓ settled"]);
+
+    handlers.get("before_agent_start")!({}, ctx);
+    await flushRender();
+    expect(latestLines(widgets)).toEqual(["progress · ● thinking"]);
+  });
+
   test("shows check outcomes and clears state for the next request", async () => {
     const { handlers, widgets, ctx } = setup();
     handlers.get("session_start")!({}, ctx);
