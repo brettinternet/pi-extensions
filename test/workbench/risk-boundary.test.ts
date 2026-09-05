@@ -5,6 +5,7 @@ import { describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
   CONFIRMATION_ACKNOWLEDGED_PREFIX,
+  CONFIRMATION_RELEASED_PREFIX,
   CONFIRMATION_REQUESTED_EVENT,
   CONFIRMATION_RESOLVED_PREFIX,
   type ConfirmationRequest,
@@ -13,8 +14,10 @@ import workbenchExtension from "../../extensions/workbench/index.ts";
 
 async function createHarness(options: {
   command: string[];
-  voiceDecision?: "approved" | "denied";
+  voiceDecision?: "approved" | "denied" | "released";
+  voiceDecisions?: Array<"approved" | "denied" | "released">;
   tuiDecision?: boolean;
+  trusted?: boolean;
 }) {
   const root = await mkdtemp(join(tmpdir(), "pi-workbench-risk-"));
   await writeFile(join(root, "workbench.py"), "# test\n");
@@ -22,6 +25,7 @@ async function createHarness(options: {
   const lifecycle = new Map<string, (...args: unknown[]) => unknown>();
   let tool: ToolDefinition | undefined;
   let executions = 0;
+  let voiceDecisionIndex = 0;
   const events = {
     on(name: string, handler: (value: unknown) => void) {
       const values = handlers.get(name) ?? new Set();
@@ -59,7 +63,7 @@ async function createHarness(options: {
     cwd: "/repo",
     mode,
     hasUI: mode === "tui",
-    isProjectTrusted: () => true,
+    isProjectTrusted: () => options.trusted ?? true,
     sessionManager: {
       getSessionId: () => "session-risk",
       getSessionFile: () => "/session-risk.jsonl",
@@ -67,7 +71,9 @@ async function createHarness(options: {
     },
     ui: { confirm: async () => options.tuiDecision ?? false, notify: () => {} },
   } as unknown as ExtensionContext;
-  if (options.voiceDecision) {
+  const voiceDecisions = options.voiceDecisions ??
+    (options.voiceDecision ? [options.voiceDecision] : []);
+  if (voiceDecisions.length > 0) {
     events.on(CONFIRMATION_REQUESTED_EVENT, (value) => {
       const request = value as ConfirmationRequest;
       const reply = {
@@ -79,10 +85,17 @@ async function createHarness(options: {
         operationId: request.operationId,
       };
       events.emit(`${CONFIRMATION_ACKNOWLEDGED_PREFIX}${request.requestId}`, reply);
-      setImmediate(() => events.emit(`${CONFIRMATION_RESOLVED_PREFIX}${request.requestId}`, {
-        ...reply,
-        decision: options.voiceDecision,
-      }));
+      const decision = voiceDecisions[Math.min(voiceDecisionIndex++, voiceDecisions.length - 1)]!;
+      setImmediate(() => {
+        if (decision === "released") {
+          events.emit(`${CONFIRMATION_RELEASED_PREFIX}${request.requestId}`, reply);
+        } else {
+          events.emit(`${CONFIRMATION_RESOLVED_PREFIX}${request.requestId}`, {
+            ...reply,
+            decision,
+          });
+        }
+      });
     });
   }
   workbenchExtension(pi);
@@ -94,7 +107,13 @@ async function createHarness(options: {
     undefined,
     ctx,
   );
-  return { execute, executions: () => executions, shutdown: () => lifecycle.get("session_shutdown")!() };
+  return {
+    execute,
+    executions: () => executions,
+    settle: () => lifecycle.get("agent_settled")?.({}, ctx),
+    agentStart: () => lifecycle.get("agent_start")!({}, ctx),
+    shutdown: () => lifecycle.get("session_shutdown")!(),
+  };
 }
 
 describe("workbench execution boundary", () => {
@@ -117,6 +136,45 @@ describe("workbench execution boundary", () => {
   test("voice rejection never crosses the execution boundary", async () => {
     const harness = await createHarness({ command: ["git", "push"], voiceDecision: "denied" });
     await expect(harness.execute()).rejects.toThrow("denied");
+    expect(harness.executions()).toBe(0);
+    harness.shutdown();
+  });
+
+  test("voice release hands the same tool call to TUI and executes once", async () => {
+    const harness = await createHarness({
+      command: ["git", "push"],
+      voiceDecision: "released",
+      tuiDecision: true,
+    });
+    await harness.execute();
+    expect(harness.executions()).toBe(1);
+    harness.shutdown();
+  });
+
+  test("keeps a retry blocked in one loop and resets on the next agent loop", async () => {
+    const harness = await createHarness({
+      command: ["git", "push"],
+      voiceDecisions: ["denied", "approved"],
+    });
+    await expect(harness.execute()).rejects.toThrow("denied");
+
+    harness.settle();
+    await expect(harness.execute()).rejects.toThrow("blocked until a new agent run");
+    expect(harness.executions()).toBe(0);
+
+    // A live-style extension-originated message starts a new Pi agent loop.
+    harness.agentStart();
+    await harness.execute();
+    expect(harness.executions()).toBe(1);
+    harness.shutdown();
+  });
+
+  test("keeps the project-trust boundary ahead of command execution", async () => {
+    const harness = await createHarness({
+      command: ["python", "-m", "unittest", "discover"],
+      trusted: false,
+    });
+    await expect(harness.execute()).rejects.toThrow("trusted project");
     expect(harness.executions()).toBe(0);
     harness.shutdown();
   });

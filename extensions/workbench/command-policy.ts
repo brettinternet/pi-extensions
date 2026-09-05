@@ -20,6 +20,7 @@ const SHELLS = new Set([
 const INTERPRETERS = new Set([
   "deno", "lua", "node", "perl", "php", "python", "python2", "python3", "ruby",
 ]);
+const PYTHON_INTERPRETER = /^python(?:\d+(?:\.\d+)?)?$/;
 const WRAPPERS_AND_TASK_RUNNERS = new Set([
   "ant", "command", "exec", "gmake", "gradle", "gradlew", "just", "make", "mise", "mvn", "mvnw",
   "nice", "ninja", "nohup", "parallel", "rake", "task", "timeout", "watch", "xargs",
@@ -80,6 +81,11 @@ function nestedOperation(args: readonly string[], parent: string): string | unde
   return parentIndex < 0 ? undefined : firstOperand(args.slice(parentIndex + 1));
 }
 
+function isRoutinePythonTest(name: string, args: readonly string[]): boolean {
+  return PYTHON_INTERPRETER.test(name) && args[0] === "-m" &&
+    (args[1] === "unittest" || args[1] === "pytest");
+}
+
 /**
  * Strict allowlist policy for direct argv execution. Only recognized read-only commands and
  * narrowly defined routine development operations run without confirmation. Wrappers,
@@ -90,8 +96,9 @@ export function classifyCommandRisk(command: readonly string[]): CommandRisk | u
   const args = command.slice(1);
   if (!name) return { category: "process-system", reason: "empty executable" };
 
+  if (name === "pytest" || isRoutinePythonTest(name, args)) return undefined;
   if (name === "env" || SHELLS.has(name) || INTERPRETERS.has(name) ||
-    /^python\d+(?:\.\d+)?$/.test(name) || WRAPPERS_AND_TASK_RUNNERS.has(name)) {
+    PYTHON_INTERPRETER.test(name) || WRAPPERS_AND_TASK_RUNNERS.has(name)) {
     return { category: "shell-wrapper", reason: `${name} can execute another command, script, or task` };
   }
   if (DESTRUCTIVE_FILESYSTEM.has(name)) {

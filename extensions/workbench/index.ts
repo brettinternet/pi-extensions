@@ -604,6 +604,7 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", (_event, ctx) => {
     confirmations.abortAll("Session changed");
+    confirmations.resetRun();
     for (const monitor of monitors.values()) monitor.abort();
     monitors.clear();
     currentContext = ctx;
@@ -630,6 +631,10 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
         void monitorJob(jobId, resource.workspaceId, ctx);
       }
     }
+  });
+
+  pi.on("agent_start", () => {
+    confirmations.resetRun();
   });
 
   pi.on("session_shutdown", () => {

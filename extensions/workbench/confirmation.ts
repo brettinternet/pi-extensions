@@ -8,6 +8,7 @@ import type { CommandRisk } from "./command-policy.ts";
 export const CONFIRMATION_REQUESTED_EVENT = "pi:confirmation:v1:requested";
 export const CONFIRMATION_ACKNOWLEDGED_PREFIX = "pi:confirmation:v1:acknowledged:";
 export const CONFIRMATION_RESOLVED_PREFIX = "pi:confirmation:v1:resolved:";
+export const CONFIRMATION_RELEASED_PREFIX = "pi:confirmation:v1:released:";
 export const CONFIRMATION_CANCELLED_EVENT = "pi:confirmation:v1:cancelled";
 
 export const CONFIRMATION_PROVIDER = "herdr-workbench";
@@ -86,33 +87,168 @@ function abortError(signal: AbortSignal): Error {
   return signal.reason instanceof Error ? signal.reason : new Error("Confirmation aborted");
 }
 
-function waitForEvent<T>(
+type ConfirmationWaitResult =
+  | { kind: "fallback" }
+  | { kind: "expired" }
+  | { kind: "released" }
+  | { kind: "resolution"; resolution: ConfirmationResolution };
+
+/**
+ * Subscribe to every voice handoff event before the request is emitted. The live
+ * adapter can acknowledge and release a request synchronously, so separate
+ * sequential waits would lose that race.
+ */
+function waitForConfirmation(
   pi: ExtensionAPI,
-  event: string,
-  parse: (value: unknown) => T | undefined,
+  request: ConfirmationRequest,
   signal: AbortSignal,
-  timeoutMs: number,
-): Promise<T | undefined> {
+): Promise<ConfirmationWaitResult> {
   return new Promise((resolve, reject) => {
+    let phase: "ack" | "outcome" = "ack";
     let settled = false;
-    const finish = (value?: T, error?: Error): void => {
+    let acknowledgementTimer: NodeJS.Timeout | undefined;
+    let expiryTimer: NodeJS.Timeout | undefined;
+    const unsubscribers: Array<() => void> = [];
+
+    const cleanup = (): void => {
+      clearTimeout(acknowledgementTimer);
+      clearTimeout(expiryTimer);
+      acknowledgementTimer = undefined;
+      expiryTimer = undefined;
+      for (const unsubscribe of unsubscribers) unsubscribe();
+      signal.removeEventListener("abort", onAbort);
+    };
+    const finish = (value?: ConfirmationWaitResult, error?: Error): void => {
       if (settled) return;
       settled = true;
-      clearTimeout(timer);
-      unsubscribe();
-      signal.removeEventListener("abort", onAbort);
+      cleanup();
       if (error) reject(error);
-      else resolve(value);
+      else if (value) resolve(value);
     };
-    const unsubscribe = pi.events.on(event, (value) => {
-      const parsed = parse(value);
-      if (parsed !== undefined) finish(parsed);
-    });
-    const timer = setTimeout(() => finish(), Math.max(0, timeoutMs));
     const onAbort = (): void => finish(undefined, abortError(signal));
+    const onAcknowledged = (value: unknown): void => {
+      if (phase !== "ack" || !parseReply(value, request)) return;
+      phase = "outcome";
+      clearTimeout(acknowledgementTimer);
+      acknowledgementTimer = undefined;
+      // Defer the deadline check one microtask so synchronous request handlers
+      // cannot mutate the request after ACK and bypass the expiry check.
+      queueMicrotask(() => {
+        if (phase !== "outcome" || settled) return;
+        const remaining = request.expiresAt - Date.now();
+        if (remaining <= 0) {
+          finish({ kind: "expired" });
+          return;
+        }
+        expiryTimer = setTimeout(() => finish({ kind: "expired" }), remaining);
+      });
+    };
+    const onResolved = (value: unknown): void => {
+      if (phase !== "outcome") return;
+      const resolution = parseConfirmationResolution(value, request);
+      if (resolution) finish({ kind: "resolution", resolution });
+    };
+    const onReleased = (value: unknown): void => {
+      if (phase !== "outcome" || parseReply(value, request) === undefined) return;
+      if (typeof value === "object" && value !== null && "decision" in value) return;
+      finish({ kind: "released" });
+    };
+
+    unsubscribers.push(pi.events.on(
+      `${CONFIRMATION_ACKNOWLEDGED_PREFIX}${request.requestId}`,
+      onAcknowledged,
+    ));
+    unsubscribers.push(pi.events.on(
+      `${CONFIRMATION_RESOLVED_PREFIX}${request.requestId}`,
+      onResolved,
+    ));
+    unsubscribers.push(pi.events.on(
+      `${CONFIRMATION_RELEASED_PREFIX}${request.requestId}`,
+      onReleased,
+    ));
+    acknowledgementTimer = setTimeout(
+      () => finish({ kind: "fallback" }),
+      LIVE_ACK_WAIT_MS,
+    );
     signal.addEventListener("abort", onAbort, { once: true });
     if (signal.aborted) onAbort();
   });
+}
+
+function confirmationOperation(
+  input: WorkbenchInput,
+  cwd: string,
+  target?: ForceCloseTarget,
+): Record<string, unknown> {
+  const effectiveCwd = input.cwd || cwd;
+  if (target) {
+    return {
+      action: input.action,
+      force: input.force === true,
+      ...(target.kind === "job" ? { jobId: input.jobId } : {}),
+      target: { kind: target.kind, id: target.id },
+    };
+  }
+  switch (input.action) {
+    case "layout":
+    case "editor.status":
+    case "job.list":
+    case "lazygit.close":
+      return { action: input.action };
+    case "pane.focus":
+      return { action: input.action, paneId: input.paneId };
+    case "editor.open":
+      return {
+        action: input.action,
+        path: input.path,
+        ...(input.line !== undefined ? { line: input.line } : {}),
+        ...(input.column !== undefined ? { column: input.column } : {}),
+        cwd: effectiveCwd,
+        placement: input.placement ?? "auto",
+        focus: input.focus === true,
+      };
+    case "editor.close":
+      return {
+        action: input.action,
+        ...(input.expectedPaneId ? { expectedPaneId: input.expectedPaneId } : {}),
+        force: input.force === true,
+      };
+    case "job.start":
+      return {
+        action: input.action,
+        command: input.command ?? [],
+        cwd: effectiveCwd,
+        placement: input.placement ?? "auto",
+        focus: input.focus === true,
+        interactive: input.interactive === true,
+      };
+    case "job.status":
+    case "job.cancel":
+      return { action: input.action, jobId: input.jobId };
+    case "job.read":
+      return {
+        action: input.action,
+        jobId: input.jobId,
+        ...(input.lines !== undefined ? { lines: input.lines } : {}),
+      };
+    case "job.close":
+      return {
+        action: input.action,
+        jobId: input.jobId,
+        force: input.force === true,
+      };
+    case "lazygit.open":
+      return {
+        action: input.action,
+        cwd: effectiveCwd,
+        placement: input.placement ?? "auto",
+        focus: input.focus === true,
+      };
+  }
+}
+
+function operationId(operation: string): string {
+  return `sha256:${createHash("sha256").update(operation).digest("hex")}`;
 }
 
 export function buildConfirmationRequest(
@@ -122,7 +258,7 @@ export function buildConfirmationRequest(
   scope: { sessionId: string; sessionFile?: string },
   now = Date.now(),
 ): ConfirmationRequest {
-  const operation = JSON.stringify({ ...input, cwd });
+  const operation = JSON.stringify(confirmationOperation(input, cwd));
   const summary = `Operation: ${operation}`;
   if (!boundedText(summary, MAX_CONFIRMATION_SUMMARY_CHARS)) {
     throw new Error(`Command confirmation summary exceeds ${MAX_CONFIRMATION_SUMMARY_CHARS} characters`);
@@ -132,7 +268,7 @@ export function buildConfirmationRequest(
     requestId: randomUUID(),
     ...scope,
     provider: CONFIRMATION_PROVIDER,
-    operationId: `sha256:${createHash("sha256").update(operation).digest("hex")}`,
+    operationId: operationId(operation),
     riskCategory: risk.category,
     title: `Approve ${risk.category} command?`.slice(0, MAX_CONFIRMATION_TITLE_CHARS),
     summary,
@@ -166,10 +302,7 @@ export function buildForceCloseConfirmationRequest(
   if (input.action !== expectedAction || !target.id.trim()) {
     throw new Error("force-close confirmation target does not match the close action");
   }
-  const operationTarget = target.kind === "editor"
-    ? { paneId: target.id }
-    : { jobId: target.id };
-  const operation = JSON.stringify({ ...input, cwd, target: operationTarget });
+  const operation = JSON.stringify(confirmationOperation(input, cwd, target));
   const details = forceCloseDetails(target);
   const summary = `${details.summary}\nOperation: ${operation}`;
   if (!boundedText(summary, MAX_CONFIRMATION_SUMMARY_CHARS)) {
@@ -180,7 +313,7 @@ export function buildForceCloseConfirmationRequest(
     requestId: randomUUID(),
     ...scope,
     provider: CONFIRMATION_PROVIDER,
-    operationId: `sha256:${createHash("sha256").update(operation).digest("hex")}`,
+    operationId: operationId(operation),
     riskCategory: "force-close",
     title: details.title,
     summary,
@@ -191,9 +324,19 @@ export function buildForceCloseConfirmationRequest(
 export class ConfirmationBroker {
   readonly #pi: ExtensionAPI;
   readonly #pending = new Map<string, AbortController>();
+  readonly #pendingOperationIds = new Set<string>();
+  readonly #blockedOperationIds = new Set<string>();
+  #tuiTail: Promise<void> = Promise.resolve();
+  #runGeneration = 0;
 
   constructor(pi: ExtensionAPI) {
     this.#pi = pi;
+  }
+
+  /** Clear terminal confirmation failures when a new agent run begins. */
+  resetRun(): void {
+    this.#runGeneration += 1;
+    this.#blockedOperationIds.clear();
   }
 
   async confirm(
@@ -204,10 +347,11 @@ export class ConfirmationBroker {
   ): Promise<void> {
     this.#assertCapacity();
     const sessionFile = ctx.sessionManager.getSessionFile();
-    const request = buildConfirmationRequest(input, input.cwd ?? ctx.cwd, risk, {
+    const request = buildConfirmationRequest(input, input.cwd || ctx.cwd, risk, {
       sessionId: ctx.sessionManager.getSessionId(),
       ...(sessionFile ? { sessionFile } : {}),
     });
+    this.#assertOperationAvailable(request.operationId);
     await this.#awaitConfirmation(request, risk.reason, ctx, signal);
   }
 
@@ -219,10 +363,11 @@ export class ConfirmationBroker {
   ): Promise<void> {
     this.#assertCapacity();
     const sessionFile = ctx.sessionManager.getSessionFile();
-    const request = buildForceCloseConfirmationRequest(input, input.cwd ?? ctx.cwd, target, {
+    const request = buildForceCloseConfirmationRequest(input, input.cwd || ctx.cwd, target, {
       sessionId: ctx.sessionManager.getSessionId(),
       ...(sessionFile ? { sessionFile } : {}),
     });
+    this.#assertOperationAvailable(request.operationId);
     await this.#awaitConfirmation(request, forceCloseDetails(target).reason, ctx, signal);
   }
 
@@ -232,54 +377,56 @@ export class ConfirmationBroker {
     }
   }
 
+  #assertOperationAvailable(operationId: string): void {
+    if (this.#blockedOperationIds.has(operationId)) {
+      throw new Error("Confirmation for this operation is blocked until a new agent run");
+    }
+    if (this.#pendingOperationIds.has(operationId)) {
+      throw new Error("Confirmation for this operation is already pending");
+    }
+  }
+
   async #awaitConfirmation(
     request: ConfirmationRequest,
     reason: string,
     ctx: ExtensionContext,
     signal?: AbortSignal,
   ): Promise<void> {
+    const generation = this.#runGeneration;
     const controller = new AbortController();
     const combined = signal
       ? AbortSignal.any([signal, controller.signal])
       : controller.signal;
     this.#pending.set(request.requestId, controller);
+    this.#pendingOperationIds.add(request.operationId);
     try {
-      const acknowledgement = waitForEvent(
-        this.#pi,
-        `${CONFIRMATION_ACKNOWLEDGED_PREFIX}${request.requestId}`,
-        (value) => parseReply(value, request),
-        combined,
-        LIVE_ACK_WAIT_MS,
-      );
+      const outcome = waitForConfirmation(this.#pi, request, combined);
       this.#pi.events.emit(CONFIRMATION_REQUESTED_EVENT, request);
-      if (await acknowledgement) {
-        const remaining = request.expiresAt - Date.now();
-        if (remaining <= 0) throw new Error("Confirmation request expired");
-        const resolution = await waitForEvent(
-          this.#pi,
-          `${CONFIRMATION_RESOLVED_PREFIX}${request.requestId}`,
-          (value) => parseConfirmationResolution(value, request),
-          combined,
-          remaining,
-        );
-        if (!resolution) throw new Error("Confirmation request expired without a decision");
-        if (resolution.decision !== "approved") throw new Error("Command was denied by the user");
+      const result = await outcome;
+      if (result.kind === "resolution") {
+        if (result.resolution.decision !== "approved") {
+          throw new Error("Command was denied by the user");
+        }
         return;
       }
-
-      this.#pi.events.emit(CONFIRMATION_CANCELLED_EVENT, request);
-      if (!ctx.hasUI || ctx.mode !== "tui") {
-        throw new Error(`Confirmation required for ${request.riskCategory}, but voice and interactive TUI confirmation are unavailable`);
+      if (result.kind === "expired") {
+        throw new Error("Confirmation request expired without a decision");
       }
-      const approved = await ctx.ui.confirm(request.title, `${request.summary}\n\nReason: ${reason}`, {
-        signal: combined,
-        timeout: Math.max(0, request.expiresAt - Date.now()),
-      });
-      if (combined.aborted) throw abortError(combined);
-      if (Date.now() >= request.expiresAt) throw new Error("Confirmation request expired");
-      if (!approved) throw new Error("Command was denied by the user");
+
+      // A missing voice adapter and a released voice session both use the same
+      // serialized TUI path. The release event is deliberately not an approval.
+      try {
+        this.#pi.events.emit(CONFIRMATION_CANCELLED_EVENT, request);
+      } catch {}
+      await this.#confirmInTui(request, reason, ctx, combined);
+    } catch (cause) {
+      if (generation === this.#runGeneration) {
+        this.#blockedOperationIds.add(request.operationId);
+      }
+      throw cause;
     } finally {
       this.#pending.delete(request.requestId);
+      this.#pendingOperationIds.delete(request.operationId);
       try {
         this.#pi.events.emit(CONFIRMATION_CANCELLED_EVENT, request);
       } catch {}
@@ -287,8 +434,33 @@ export class ConfirmationBroker {
     }
   }
 
+  async #confirmInTui(
+    request: ConfirmationRequest,
+    reason: string,
+    ctx: ExtensionContext,
+    signal: AbortSignal,
+  ): Promise<void> {
+    const task = this.#tuiTail.then(async () => {
+      if (signal.aborted) throw abortError(signal);
+      if (Date.now() >= request.expiresAt) throw new Error("Confirmation request expired");
+      if (!ctx.hasUI || ctx.mode !== "tui") {
+        throw new Error(`Confirmation required for ${request.riskCategory}, but voice and interactive TUI confirmation are unavailable`);
+      }
+      const approved = await ctx.ui.confirm(request.title, `${request.summary}\n\nReason: ${reason}`, {
+        signal,
+        timeout: Math.max(0, request.expiresAt - Date.now()),
+      });
+      if (signal.aborted) throw abortError(signal);
+      if (Date.now() >= request.expiresAt) throw new Error("Confirmation request expired");
+      if (!approved) throw new Error("Command was denied by the user");
+    });
+    this.#tuiTail = task.catch(() => {});
+    await task;
+  }
+
   abortAll(reason = "Session shut down"): void {
     for (const controller of this.#pending.values()) controller.abort(new Error(reason));
     this.#pending.clear();
+    this.#pendingOperationIds.clear();
   }
 }

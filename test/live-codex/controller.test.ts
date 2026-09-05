@@ -14,6 +14,7 @@ import {
 } from "../../extensions/live-codex/background-activity.ts";
 import {
   CONFIRMATION_ACKNOWLEDGED_PREFIX,
+  CONFIRMATION_RELEASED_PREFIX,
   CONFIRMATION_RESOLVED_PREFIX,
   type ConfirmationRequest,
 } from "../../extensions/live-codex/confirmation.ts";
@@ -440,8 +441,25 @@ test("voice confirmation resolves once without starting a coding turn", async ()
     name === `${CONFIRMATION_ACKNOWLEDGED_PREFIX}${request.requestId}` &&
     (value as { operationId?: string }).operationId === request.operationId
   ));
-  assert.match(contextText(harness.transport().sent.at(-1)!), /Approve git push/);
-  assert.match(contextText(harness.transport().sent.at(-1)!), /git.*push/);
+  const confirmationMessages = harness.transport().sent.slice(-3);
+  assert.equal(confirmationMessages.length, 3);
+  assert.equal(confirmationMessages[0]!.type, "session.update");
+  const activeInstructions = (confirmationMessages[0] as { session: { instructions: string } }).session.instructions;
+  assert.match(activeInstructions, new RegExp(request.requestId));
+  assert.equal(activeInstructions.includes(request.title), false);
+  assert.equal(activeInstructions.includes(request.summary), false);
+  assert.match(contextText(confirmationMessages[1]!), /Approve git push/);
+  assert.match(contextText(confirmationMessages[1]!), /git.*push/);
+  assert.deepEqual(confirmationMessages[2], {
+    type: "response.create",
+    response: { output_modalities: ["audio"] },
+  });
+
+  harness.transport().emit({
+    type: "output_transcript.added",
+    item: { text: "Please approve the git push." },
+  });
+  assert.equal(harness.agentTranscripts.at(-1), "Please approve the git push.");
 
   harness.transport().emit(delegation("confirmation-1", `[[live:confirmation ${request.requestId} approve]]`));
   harness.transport().emit(delegation("confirmation-2", `[[live:confirmation ${request.requestId} approve]]`));
@@ -456,6 +474,241 @@ test("voice confirmation resolves once without starting a coding turn", async ()
     name === `${CONFIRMATION_ACKNOWLEDGED_PREFIX}${request.requestId}`
   ).length, 1);
   assert.equal(harness.sentToAgent.length, 0);
+  await flush();
+  const restored = harness.transport().sent.at(-1);
+  assert.deepEqual(restored, {
+    type: "session.update",
+    session: { instructions: activeInstructions.split("\n\nSYSTEM CONFIRMATION MODE:")[0] },
+  });
+  await harness.session.stop();
+});
+
+test("ordinary and malformed delegations are suppressed while confirmation is pending", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  const request = confirmationRequest("suppressed-confirmation");
+  harness.session.handleConfirmationRequested(request);
+  await flush();
+
+  harness.transport().emit(delegation("ordinary", "Yep, go ahead"));
+  harness.transport().emit(delegation("malformed", `[[live:confirmation ${request.requestId} maybe]]`));
+  await flush();
+
+  assert.equal(harness.sentToAgent.length, 0);
+  const corrective = harness.transport().sent
+    .filter((message) => message.type === "delegation.context.append")
+    .map(contextText)
+    .join("\n");
+  assert.match(corrective, /confirmation is still pending/i);
+  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 1);
+  await harness.session.stop();
+});
+
+test("manual stop releases pending confirmations only after terminal cleanup", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  const request = confirmationRequest("released-confirmation");
+  harness.session.handleConfirmationRequested(request);
+  await flush();
+  await harness.session.stop();
+
+  assert.equal(harness.terminal.length, 1);
+  assert.equal(harness.bus.emitted.filter(({ name }) =>
+    name === `${CONFIRMATION_RESOLVED_PREFIX}${request.requestId}`
+  ).length, 0);
+  const release = harness.bus.emitted.find(({ name }) =>
+    name === `${CONFIRMATION_RELEASED_PREFIX}${request.requestId}`
+  );
+  assert.ok(release);
+  assert.equal("decision" in (release!.value as object), false);
+});
+
+test("session shutdown does not release confirmations for interactive handoff", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  const request = confirmationRequest("shutdown-confirmation");
+  harness.session.handleConfirmationRequested(request);
+  await flush();
+  await harness.session.stop("shutdown");
+
+  assert.equal(harness.bus.emitted.some(({ name }) =>
+    name === `${CONFIRMATION_RELEASED_PREFIX}${request.requestId}`
+  ), false);
+  assert.equal(harness.bus.emitted.some(({ name }) =>
+    name === `${CONFIRMATION_RESOLVED_PREFIX}${request.requestId}`
+  ), false);
+});
+
+test("confirmation inference waits for an already-active default response", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  harness.transport().emit({
+    type: "response.created",
+    response: {
+      id: "response-active",
+      conversation_id: "conversation-default",
+      status: "in_progress",
+    },
+  });
+  const request = confirmationRequest("active-response-confirmation");
+  harness.session.handleConfirmationRequested(request);
+  await flush();
+
+  assert.equal(harness.transport().sent.some(({ type }) => type === "response.create"), false);
+  assert.equal(harness.transport().sent.some((message) =>
+    contextText(message).includes(request.title)
+  ), true);
+
+  harness.transport().emit({
+    type: "response.done",
+    response: {
+      id: "response-active",
+      conversation_id: "conversation-default",
+      status: "completed",
+    },
+  });
+  await flush();
+  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 1);
+  assert.equal(harness.terminal.length, 0);
+  await harness.session.stop();
+});
+
+test("two buffered confirmation prompts coalesce into one response", async () => {
+  const connection = deferred();
+  const harness = createHarness(connection.promise);
+  const startPromise = harness.session.start();
+  const first = confirmationRequest("buffered-confirmation-1");
+  const second = confirmationRequest("buffered-confirmation-2", {
+    title: "Approve the second command?",
+    summary: 'Operation: {"command":["git","pull"],"cwd":"/repo"}',
+  });
+  harness.session.handleConfirmationRequested(first);
+  harness.session.handleConfirmationRequested(second);
+  await flush();
+  assert.deepEqual(harness.transport().sent, []);
+
+  connection.resolve();
+  await startPromise;
+  await flush();
+  const sent = harness.transport().sent;
+  assert.equal(sent.filter(({ type }) => type === "response.create").length, 1);
+  const promptText = sent.filter((message) => message.type === "session.context.append")
+    .map(contextText).join("\n");
+  assert.ok(promptText.indexOf(first.requestId) >= 0);
+  assert.ok(promptText.indexOf(second.requestId) > promptText.indexOf(first.requestId));
+  assert.equal(harness.terminal.length, 0);
+  await harness.session.stop();
+});
+
+test("resolving one confirmation prompts the remaining request after response.done", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  harness.transport().emit({
+    type: "response.created",
+    response: { id: "response-before-prompts", conversation_id: "conversation-default", status: "in_progress" },
+  });
+  const first = confirmationRequest("resolved-confirmation-1");
+  const second = confirmationRequest("resolved-confirmation-2");
+  harness.session.handleConfirmationRequested(first);
+  harness.session.handleConfirmationRequested(second);
+  await flush();
+  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 0);
+
+  harness.transport().emit({
+    type: "response.done",
+    response: { id: "response-before-prompts", conversation_id: "conversation-default", status: "completed" },
+  });
+  await flush();
+  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 1);
+  harness.transport().emit({
+    type: "response.created",
+    response: { id: "response-first-prompt", conversation_id: "conversation-default", status: "in_progress" },
+  });
+
+  harness.transport().emit(delegation("resolve-first", `[[live:confirmation ${first.requestId} approve]]`));
+  await flush();
+  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 1);
+
+  harness.transport().emit({
+    type: "response.done",
+    response: { id: "response-first-prompt", conversation_id: "conversation-default", status: "completed" },
+  });
+  await flush();
+  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 2);
+  assert.equal(harness.terminal.length, 0);
+  await harness.session.stop();
+});
+
+test("cancelling one confirmation keeps the remaining prompt queued", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  harness.transport().emit({
+    type: "response.created",
+    response: { id: "response-cancel-before", conversation_id: "conversation-default", status: "in_progress" },
+  });
+  const first = confirmationRequest("cancelled-confirmation-1");
+  const second = confirmationRequest("cancelled-confirmation-2");
+  harness.session.handleConfirmationRequested(first);
+  harness.session.handleConfirmationRequested(second);
+  await flush();
+  harness.session.handleConfirmationCancelled(first);
+  await flush();
+  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 0);
+
+  harness.transport().emit({
+    type: "response.done",
+    response: { id: "response-cancel-before", conversation_id: "conversation-default", status: "completed" },
+  });
+  await flush();
+  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 1);
+  assert.equal(harness.terminal.length, 0);
+  await harness.session.stop();
+});
+
+test("expiring one confirmation keeps the remaining prompt queued", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  harness.transport().emit({
+    type: "response.created",
+    response: { id: "response-expiry-before", conversation_id: "conversation-default", status: "in_progress" },
+  });
+  const first = confirmationRequest("expired-confirmation-1", { expiresAt: Date.now() + 15 });
+  const second = confirmationRequest("expired-confirmation-2", { expiresAt: Date.now() + 60_000 });
+  harness.session.handleConfirmationRequested(first);
+  harness.session.handleConfirmationRequested(second);
+  await flush();
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 0);
+
+  harness.transport().emit({
+    type: "response.done",
+    response: { id: "response-expiry-before", conversation_id: "conversation-default", status: "completed" },
+  });
+  await flush();
+  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 1);
+  assert.equal(harness.terminal.length, 0);
+  await harness.session.stop();
+});
+
+test("confirmation prompt buffers its active response until transport connection succeeds", async () => {
+  const connection = deferred();
+  const harness = createHarness(connection.promise);
+  const startPromise = harness.session.start();
+  const request = confirmationRequest("buffered-confirmation");
+  harness.session.handleConfirmationRequested(request);
+  await flush();
+  assert.deepEqual(harness.transport().sent, []);
+
+  connection.resolve();
+  await startPromise;
+  await flush();
+  const messages = harness.transport().sent.slice(0, 3);
+  assert.equal(messages[0]!.type, "session.update");
+  assert.match(contextText(messages[1]!), /Confirmation Request/);
+  assert.deepEqual(messages[2], {
+    type: "response.create",
+    response: { output_modalities: ["audio"] },
+  });
   await harness.session.stop();
 });
 
@@ -496,8 +749,12 @@ test("confirmation requests reject wrong session, expiry, and duplicates", async
   const resolutions = harness.bus.emitted.filter(({ name }) =>
     name === `${CONFIRMATION_RESOLVED_PREFIX}${valid.requestId}`
   );
-  assert.equal(resolutions.length, 1);
-  assert.equal((resolutions[0]!.value as { decision: string }).decision, "denied");
+  assert.equal(resolutions.length, 0);
+  const releases = harness.bus.emitted.filter(({ name }) =>
+    name === `${CONFIRMATION_RELEASED_PREFIX}${valid.requestId}`
+  );
+  assert.equal(releases.length, 1);
+  assert.equal("decision" in (releases[0]!.value as object), false);
 });
 
 test("teardown discards pending discovery and cancellation results", async () => {

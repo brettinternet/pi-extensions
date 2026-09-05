@@ -17,7 +17,7 @@ import {
   CONFIRMATION_CANCELLED_EVENT,
   CONFIRMATION_REQUESTED_EVENT,
 } from "./confirmation.ts";
-import { LiveSession } from "./controller.ts";
+import { LiveSession, type LiveStopMode } from "./controller.ts";
 import { loadDroppedImages } from "./image-attachments.ts";
 import { acquireVoiceLock, type VoiceLock } from "./voice-lock.ts";
 import { LiveVisualizer } from "./visualizer.ts";
@@ -210,11 +210,11 @@ class LiveExtensionRuntime {
     this.#session?.handleAsyncJobCompleted(event);
   }
 
-  async stop(): Promise<void> {
+  async stop(mode: LiveStopMode = "handoff"): Promise<void> {
     const session = this.#session;
     if (!session) return;
     try {
-      await session.stop();
+      await session.stop(mode);
     } finally {
       this.#finish(session);
     }
@@ -315,6 +315,6 @@ export default function piLiveCodex(pi: ExtensionAPI): void {
     unsubscribeConfirmationCancelled();
     unsubscribeAsyncStarted();
     unsubscribeAsyncCompleted();
-    await runtime.stop();
+    await runtime.stop("shutdown");
   });
 }

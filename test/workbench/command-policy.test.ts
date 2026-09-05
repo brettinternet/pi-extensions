@@ -4,8 +4,12 @@ import { classifyCommandRisk } from "../../extensions/workbench/command-policy.t
 const category = (command: string[]): string | undefined => classifyCommandRisk(command)?.category;
 
 describe("workbench command risk policy", () => {
-  test("allows recognized read-only commands and routine tests", () => {
+  test("allows recognized read-only commands and exact routine test runners", () => {
     expect(category(["bun", "test"])).toBeUndefined();
+    expect(category(["pytest", "tests", "-q"])).toBeUndefined();
+    expect(category(["python", "-m", "unittest", "discover", "-v"])).toBeUndefined();
+    expect(category(["python2", "-m", "pytest", "tests"])).toBeUndefined();
+    expect(category(["/usr/bin/python3.12", "-m", "unittest"])).toBeUndefined();
     expect(category(["rg", "TODO", "src"])).toBeUndefined();
     expect(category(["find", ".", "-name", "*.ts"])).toBeUndefined();
     expect(category(["/usr/bin/git", "status", "--short"])).toBeUndefined();
@@ -23,7 +27,13 @@ describe("workbench command risk policy", () => {
 
   test("confirms shells, interpreters, wrappers, task runners, and unknown executables", () => {
     expect(category(["bash", "-lc", "echo ok"])).toBe("shell-wrapper");
+    expect(category(["python"])).toBe("shell-wrapper");
     expect(category(["python", "-c", "print('ok')"])).toBe("shell-wrapper");
+    expect(category(["python", "script.py"])).toBe("shell-wrapper");
+    expect(category(["python", "-m", "unittest.discover"])).toBe("shell-wrapper");
+    expect(category(["python", "-m", "coverage"])).toBe("shell-wrapper");
+    expect(category(["python", "-B", "-m", "unittest"])).toBe("shell-wrapper");
+    expect(category(["python3.12", "-m", "pytest.ini"])).toBe("shell-wrapper");
     expect(category(["env", "MODE=test", "rg", "TODO"])).toBe("shell-wrapper");
     expect(category(["mise", "exec", "git", "--", "push"])).toBe("shell-wrapper");
     expect(category(["xargs", "rm"])).toBe("shell-wrapper");

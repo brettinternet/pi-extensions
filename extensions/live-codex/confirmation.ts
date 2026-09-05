@@ -5,6 +5,7 @@ import type { ExtensionContext } from "@earendil-works/pi-coding-agent";
 export const CONFIRMATION_REQUESTED_EVENT = "pi:confirmation:v1:requested";
 export const CONFIRMATION_ACKNOWLEDGED_PREFIX = "pi:confirmation:v1:acknowledged:";
 export const CONFIRMATION_RESOLVED_PREFIX = "pi:confirmation:v1:resolved:";
+export const CONFIRMATION_RELEASED_PREFIX = "pi:confirmation:v1:released:";
 export const CONFIRMATION_CANCELLED_EVENT = "pi:confirmation:v1:cancelled";
 
 export const MAX_PENDING_CONFIRMATIONS = 32;
@@ -98,7 +99,7 @@ export function confirmationReply(
     version: 1,
     requestId: request.requestId,
     sessionId: request.sessionId,
-    ...(request.sessionFile ? { sessionFile: request.sessionFile } : {}),
+    ...(request.sessionFile !== undefined ? { sessionFile: request.sessionFile } : {}),
     provider: request.provider,
     operationId: request.operationId,
     ...(decision ? { decision } : {}),
