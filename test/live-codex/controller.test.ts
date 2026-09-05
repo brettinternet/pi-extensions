@@ -20,6 +20,7 @@ import {
 } from "../../extensions/live-codex/confirmation.ts";
 import {
   LiveSession,
+  MAX_TYPED_NOTE_CHARS,
   type LiveSessionCallbacks,
   type LiveTransport,
   OutputActivityLatch,
@@ -259,6 +260,157 @@ async function activateVoiceDelegation(
   await flush();
   harness.sentToAgent.length = 0;
 }
+
+test("typed note is attached and mirrored exactly once", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  const note = "  preserve this\n\tconst value = 1;\n";
+  harness.session.stageTypedNote(note);
+  await harness.session.loadImages(async () => [{
+    name: "screenshot.png",
+    content: { type: "image", data: "image-data", mimeType: "image/png" },
+  }]);
+
+  harness.transport().emit(delegation("with-note", "Run the checks"));
+  await flush();
+
+  const first = harness.sentToAgent[0] as { content: unknown[] };
+  assert.deepEqual(first.content, [
+    { type: "text", text: "Run the checks" },
+    { type: "text", text: note },
+    { type: "image", data: "image-data", mimeType: "image/png" },
+  ]);
+  const mirrored = harness.transport().sent.filter((message) =>
+    message.type === "delegation.context.append" &&
+    message.delegation_item_id === "with-note" &&
+    contextText(message) === note &&
+    message.channel === "commentary",
+  );
+  assert.equal(mirrored.length, 1);
+
+  harness.session.handleAgentSettled();
+  await flush();
+  harness.transport().emit(delegation("without-note", "Run it again"));
+  await flush();
+  harness.session.handleAgentSettled();
+  await flush();
+
+  const second = harness.sentToAgent[1] as { content: unknown[] };
+  assert.deepEqual(second.content, [{ type: "text", text: "Run it again" }]);
+  assert.equal(harness.transport().sent.filter((message) =>
+    message.type === "delegation.context.append" &&
+    contextText(message) === note,
+  ).length, 1);
+  await harness.session.stop();
+});
+
+test("typed note survives cancellation controls and confirmation mode", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+
+  harness.transport().emit(delegation("cancel", "[[live:cancel-current]]"));
+  await flush();
+  assert.equal(harness.sentToAgent.length, 0);
+
+  const request = confirmationRequest("typed-note-confirmation");
+  await activateVoiceDelegation(harness, "confirmation-owner");
+  harness.session.stageTypedNote("keep me");
+  harness.session.handleConfirmationRequested(request);
+  harness.transport().emit(delegation("blocked", "Do not consume this"));
+  await flush();
+  assert.equal(harness.sentToAgent.length, 0);
+
+  harness.transport().emit(delegation("approval", `[[live:confirmation ${request.requestId} approve]]`));
+  await flush();
+  harness.transport().emit(delegation("ordinary-after-confirmation", "Use the note"));
+  await flush();
+  harness.session.handleAgentSettled();
+  await flush();
+
+  const sent = harness.sentToAgent[0] as { content: unknown[] };
+  assert.deepEqual(sent.content, [
+    { type: "text", text: "Use the note" },
+    { type: "text", text: "keep me" },
+  ]);
+  await harness.session.stop();
+});
+
+test("typed notes are claimed by the next delegation at event receipt", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+
+  harness.session.stageTypedNote("note A");
+  harness.transport().emit(delegation("request-a", "Use A"));
+  harness.session.stageTypedNote("note B");
+  harness.transport().emit(delegation("request-b", "Use B"));
+  await flush();
+
+  assert.deepEqual((harness.sentToAgent[0] as { content: unknown[] }).content, [
+    { type: "text", text: "Use A" },
+    { type: "text", text: "note A" },
+  ]);
+  harness.session.handleAgentSettled();
+  await flush();
+  assert.deepEqual((harness.sentToAgent[1] as { content: unknown[] }).content, [
+    { type: "text", text: "Use B" },
+    { type: "text", text: "note B" },
+  ]);
+  await harness.session.stop();
+});
+
+test("delegations received during confirmation cannot consume typed notes", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  await activateVoiceDelegation(harness, "confirmation-owner");
+  const request = confirmationRequest("receipt-confirmation");
+  harness.session.stageTypedNote("keep this note");
+  harness.session.handleConfirmationRequested(request);
+
+  harness.transport().emit(delegation("blocked-before-approval", "Do not run"));
+  harness.transport().emit({
+    type: "turn.done",
+    turn: { role: "user", transcript: "Approve." },
+  });
+  await flush();
+  harness.session.handleAgentSettled();
+  await flush();
+
+  assert.equal(harness.sentToAgent.length, 0);
+  harness.transport().emit(delegation("after-approval", "Use the note now"));
+  await flush();
+  assert.deepEqual((harness.sentToAgent[0] as { content: unknown[] }).content, [
+    { type: "text", text: "Use the note now" },
+    { type: "text", text: "keep this note" },
+  ]);
+  await harness.session.stop();
+});
+
+test("queued typed notes block handoff and are recoverable on stop", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  harness.setIdle(false);
+  harness.session.stageTypedNote("handoff note");
+  harness.transport().emit(delegation("queued-note", "Run later"));
+  await flush();
+
+  assert.match(harness.session.handoffBlockers().join(" "), /staged typed note/);
+  assert.equal(harness.session.takePendingTypedNote(), "handoff note");
+  await harness.session.stop();
+});
+
+test("typed notes are bounded without normalizing their content", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  const note = `  ${"x".repeat(MAX_TYPED_NOTE_CHARS)}\ntruncated`;
+  harness.session.stageTypedNote(note);
+  harness.transport().emit(delegation("bounded-note", "Use the bounded note"));
+  await flush();
+
+  const sent = harness.sentToAgent[0] as { content: Array<{ type: string; text?: string }> };
+  assert.equal(sent.content[1]?.text, note.slice(0, MAX_TYPED_NOTE_CHARS));
+  assert.equal(sent.content[1]?.text?.startsWith("  x"), true);
+  await harness.session.stop();
+});
 
 function contextText(message: LiveClientMessage): string {
   return "content" in message

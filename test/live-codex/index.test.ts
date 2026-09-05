@@ -5,9 +5,19 @@ import type {
   ExtensionCommandContext,
 } from "@earendil-works/pi-coding-agent";
 import piLiveCodex, {
+  combineRestoredDrafts,
   LIVE_TRANSCRIPT_LIMIT_FLAG,
   parseTranscriptLimit,
 } from "../../extensions/live-codex/index.ts";
+
+test("restores pre-live drafts and pending notes in a deterministic order", () => {
+  assert.equal(combineRestoredDrafts("draft", "typed note"), "draft\n\ntyped note");
+  assert.equal(
+    combineRestoredDrafts("draft", "typed note", "unfinished"),
+    "draft\n\ntyped note\n\nunfinished",
+  );
+  assert.equal(combineRestoredDrafts("", "typed note"), "typed note");
+});
 
 test("parses the live transcript limit as a positive safe integer", () => {
   assert.equal(parseTranscriptLimit(undefined), 4);

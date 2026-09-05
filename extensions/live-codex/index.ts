@@ -34,6 +34,16 @@ import {
 
 export const LIVE_TRANSCRIPT_LIMIT_FLAG = "live-transcript-limit";
 
+export function combineRestoredDrafts(
+  previousText: string,
+  pendingTypedNote: string | undefined,
+  liveDraft = "",
+): string {
+  return [previousText, pendingTypedNote ?? "", liveDraft]
+    .filter((part) => part.length > 0)
+    .join("\n\n");
+}
+
 export function parseTranscriptLimit(
   value: string | boolean | undefined,
 ): number {
@@ -189,11 +199,13 @@ class LiveExtensionRuntime {
             onToggleMute: () => activeSession.toggleMute(),
             onDrop: (data) =>
               void this.#attachDroppedImages(activeSession, data),
+            onTypedNote: (text) => activeSession.stageTypedNote(text),
           },
         );
         this.#visualizer = visualizer;
         return visualizer;
       });
+      context.ui.setEditorText("");
       context.ui.setStatus("pi-live-codex", "connecting");
       this.#animation = setInterval(() => {
         this.#visualizer?.advanceFrame();
@@ -315,15 +327,19 @@ class LiveExtensionRuntime {
 
   #finish(session: LiveSession, error?: Error): void {
     if (this.#session !== session) return;
+    const pendingTypedNote = session.takePendingTypedNote();
     this.#session = undefined;
-    this.#reset(error);
+    this.#reset(error, pendingTypedNote);
   }
 
-  #reset(error?: Error): void {
+  #reset(error?: Error, pendingTypedNote?: string): void {
     clearInterval(this.#animation);
     this.#animation = undefined;
-    this.#visualizer = undefined;
     const context = this.#context;
+    const liveDraft = context && this.#visualizer
+      ? context.ui.getEditorText()
+      : "";
+    this.#visualizer = undefined;
     this.#context = undefined;
     const previousEditor = this.#previousEditor;
     const previousText = this.#previousText;
@@ -339,7 +355,9 @@ class LiveExtensionRuntime {
     try {
       context.ui.setStatus("pi-live-codex", undefined);
       context.ui.setEditorComponent(previousEditor);
-      context.ui.setEditorText(previousText);
+      context.ui.setEditorText(
+        combineRestoredDrafts(previousText, pendingTypedNote, liveDraft),
+      );
     } catch (cause) {
       error ??= cause instanceof Error ? cause : new Error(String(cause));
     }

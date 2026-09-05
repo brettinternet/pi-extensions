@@ -37,6 +37,7 @@ export interface LiveVisualizerOptions {
   onStop(): void;
   onToggleMute(): void;
   onDrop(data: string): void;
+  onTypedNote?(text: string): void;
   transcriptLimit?: number;
 }
 
@@ -179,17 +180,23 @@ export class LiveVisualizer extends CustomEditor {
       this.#options.onStop();
       return;
     }
-    if (matchesKey(data, "space")) {
+    if (matchesKey(data, "space") && this.getText().length === 0) {
       this.#options.onToggleMute();
       return;
     }
-    if (this.onExtensionShortcut?.(data)) return;
-    for (const [action, handler] of this.actionHandlers) {
-      if (this.#keybindings.matches(data, action)) {
-        handler();
-        return;
+    if (
+      matchesKey(data, "enter") ||
+      this.#keybindings.matches(data, "tui.input.submit")
+    ) {
+      const text = this.getExpandedText();
+      if (text.trim()) {
+        this.#options.onTypedNote?.(text);
+        this.setText("");
+        this.#tui.requestRender();
       }
+      return;
     }
+    super.handleInput(data);
   }
 
   override render(maxWidth: number): string[] {
@@ -229,11 +236,15 @@ export class LiveVisualizer extends CustomEditor {
         border,
       )
     );
+    const editorRows = this.getText().length > 0 || this.#attachmentCount > 0
+      ? super.render(width)
+      : [];
     return [
       top,
       ...spectrum,
       ...attachmentRows,
       ...transcriptRows,
+      ...editorRows,
       this.#renderFooter(width, innerWidth),
     ];
   }

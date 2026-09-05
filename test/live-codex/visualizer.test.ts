@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { LiveVisualizer } from "../../extensions/live-codex/visualizer.ts";
+import { LiveVisualizer, type LiveVisualizerOptions } from "../../extensions/live-codex/visualizer.ts";
 
-function createVisualizer(transcriptLimit?: number): LiveVisualizer {
+function createVisualizer(
+  transcriptLimit?: number,
+  overrides: Partial<LiveVisualizerOptions> = {},
+): LiveVisualizer {
   return new LiveVisualizer(
-    { requestRender() {} } as never,
-    {} as never,
-    {} as never,
+    { requestRender() {}, terminal: { rows: 24 } } as never,
+    { borderColor: (text: string) => text, selectList: {} } as never,
+    { matches: () => false, getKeys: () => [] } as never,
     {
       fg: (_color: string, text: string) => text,
       inverse: (text: string) => text,
@@ -17,6 +20,7 @@ function createVisualizer(transcriptLimit?: number): LiveVisualizer {
       onToggleMute() {},
       onDrop() {},
       transcriptLimit,
+      ...overrides,
     },
   );
 }
@@ -29,7 +33,60 @@ function transcriptRows(visualizer: LiveVisualizer, width = 80): string[] {
 }
 
 describe("Live visualizer", () => {
-  test("forwards configured app shortcuts without accepting editor input", () => {
+  test("opens the inherited editor for printable input and keeps it hidden when empty", () => {
+    const visualizer = createVisualizer();
+
+    assert.equal(visualizer.render(40).length, 4);
+    visualizer.handleInput("x");
+
+    assert.equal(visualizer.getText(), "x");
+    assert.ok(visualizer.render(40).length > 4);
+    visualizer.handleInput("\x7f");
+    assert.equal(visualizer.getText(), "");
+    assert.equal(visualizer.render(40).length, 4);
+  });
+
+  test("uses bare space for mute only while the editor is empty", () => {
+    let muted = 0;
+    const visualizer = createVisualizer(undefined, {
+      onToggleMute: () => muted++,
+    });
+
+    visualizer.handleInput(" ");
+    assert.equal(muted, 1);
+    assert.equal(visualizer.getText(), "");
+
+    visualizer.handleInput("x");
+    visualizer.handleInput(" ");
+    assert.equal(muted, 1);
+    assert.equal(visualizer.getText(), "x ");
+  });
+
+  test("stages verbatim multiline text without invoking normal submission", () => {
+    const submitted: string[] = [];
+    const notes: string[] = [];
+    const visualizer = createVisualizer(undefined, {
+      onTypedNote: (text) => notes.push(text),
+    });
+    visualizer.onSubmit = (text) => submitted.push(text);
+    visualizer.setText("first line\n  const value = 1;\n");
+
+    visualizer.handleInput("\n");
+
+    assert.deepEqual(notes, ["first line\n  const value = 1;\n"]);
+    assert.deepEqual(submitted, []);
+    assert.equal(visualizer.getText(), "");
+  });
+
+  test("renders the inherited editor for attachments even without text", () => {
+    const visualizer = createVisualizer();
+
+    visualizer.setAttachmentCount(1);
+
+    assert.ok(visualizer.render(40).length > 4);
+  });
+
+  test("forwards configured app shortcuts and accepts editor input", () => {
     let expanded = 0;
     const visualizer = new LiveVisualizer(
       { requestRender() {} } as never,
@@ -52,7 +109,7 @@ describe("Live visualizer", () => {
     visualizer.handleInput("x");
 
     assert.equal(expanded, 1);
-    assert.equal(visualizer.getText(), "existing draft");
+    assert.equal(visualizer.getText(), "existing draftx");
   });
 
   test("forwards dropped files", () => {

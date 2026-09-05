@@ -14,7 +14,7 @@ Start Pi in its interactive TUI, then run:
 /live
 ```
 
-Use `/live <voice>` to select a voice. `Ctrl+L` toggles voice mode, `Space` mutes, and `Esc` ends the session. Drop image files into the terminal while live to attach them to your next spoken request.
+Use `/live <voice>` to select a voice. `Ctrl+L` toggles voice mode and `Esc` ends the session. While live, printable non-whitespace input opens the editor; bare `Space` mutes only while it is empty and otherwise inserts. Press `Enter` with nonblank text to stage a verbatim typed note (bounded to 4,000 characters) for the next ordinary spoken request; it is sent as a separate text block alongside dropped images and never starts a standalone Pi turn. A valid dropped image also reveals the editor. Staged notes wait through controls, block handoff, and return to the normal editor on stop.
 
 Requires Node.js 22.19+, microphone access, and an OpenAI Codex login (`/login openai-codex`). Only one Pi session owns live voice at a time. Starting `/live` in another session offers an authenticated handoff: old foreground/background Pi work continues, while its voice surface stops and voice starts in the requesting session. Queued voice requests and pending voice-routed confirmations must be resolved in the old session first; running work alone does not block handoff. See [`extensions/live-codex/global-voice-broker.md`](extensions/live-codex/global-voice-broker.md) for the future broker design.
 

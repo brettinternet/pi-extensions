@@ -59,6 +59,8 @@ const CANCEL_JOB_REQUEST = /^\[\[live:cancel-job ([A-Za-z0-9-]+)\]\]$/;
 const CANCEL_ACTIVITY_REQUEST = /^\[\[live:cancel-activity (\S+) (\S+)\]\]$/;
 const CONFIRMATION_CONTROL = /^\[\[live:confirmation ([A-Za-z0-9:._-]+) (approve|deny)\]\]$/;
 
+export const MAX_TYPED_NOTE_CHARS = 4_000;
+
 const LIVE_INSTRUCTIONS = `You are the realtime voice surface of one unified coding assistant.
 
 The user speaks to you. Respond directly, briefly, conversationally, and without markdown unless asked for detail.
@@ -225,7 +227,10 @@ export class LiveSession {
   #pendingDelegationEvents = 0;
   #outputTurnComplete = true;
   #attachments: ImageAttachment[] = [];
+  #nextTypedNoteSequence = 0;
+  #pendingTypedNotes: Array<{ sequence: number; text: string }> = [];
   readonly #delegationAttachments = new Map<string, ImageAttachment[]>();
+  readonly #delegationTypedNotes = new Map<string, string>();
   readonly #confirmations = new Map<string, {
     request: ConfirmationRequest;
     timer: NodeJS.Timeout;
@@ -330,6 +335,32 @@ export class LiveSession {
     return loaded;
   }
 
+  stageTypedNote(text: string): void {
+    if (this.#stopped || !text.trim()) return;
+    const existingLength = Array.from(
+      this.#pendingTypedNotes.map(({ text }) => text).join("\n"),
+    ).length;
+    const separatorLength = this.#pendingTypedNotes.length > 0 ? 1 : 0;
+    const remaining = MAX_TYPED_NOTE_CHARS - existingLength - separatorLength;
+    if (remaining <= 0) return;
+    const note = Array.from(text).slice(0, remaining).join("");
+    if (!note.trim()) return;
+    this.#pendingTypedNotes.push({
+      sequence: ++this.#nextTypedNoteSequence,
+      text: note,
+    });
+  }
+
+  takePendingTypedNote(): string | undefined {
+    const notes = [
+      ...this.#delegationTypedNotes.values(),
+      ...this.#pendingTypedNotes.map(({ text }) => text),
+    ];
+    this.#delegationTypedNotes.clear();
+    this.#pendingTypedNotes = [];
+    return notes.length > 0 ? notes.join("\n") : undefined;
+  }
+
   toggleMute(): void {
     if (this.#stopped) return;
     this.#muted = !this.#muted;
@@ -399,6 +430,11 @@ export class LiveSession {
     if (this.#confirmations.size > 0) {
       blockers.push(
         "The old voice session has pending voice-routed confirmations. Approve or deny them in the old session first, then retry.",
+      );
+    }
+    if (this.#pendingTypedNotes.length > 0 || this.#delegationTypedNotes.size > 0) {
+      blockers.push(
+        "The old voice session has a staged typed note. Speak an ordinary request to deliver it or stop live mode first, then retry.",
       );
     }
     return blockers;
@@ -620,16 +656,23 @@ export class LiveSession {
           this.#callbacks.onAgentTranscript(transcript.trim(), true, false);
         }
         break;
-      case "delegation.created":
+      case "delegation.created": {
+        const typedNoteCutoff = this.#nextTypedNoteSequence;
+        const confirmationPendingAtReceipt = this.#confirmations.size > 0;
         this.#pendingDelegationEvents += 1;
         this.#queueAction(async () => {
           try {
-            await this.#handleDelegation(event);
+            await this.#handleDelegation(
+              event,
+              typedNoteCutoff,
+              confirmationPendingAtReceipt,
+            );
           } finally {
             this.#pendingDelegationEvents -= 1;
           }
         });
         break;
+      }
       case "error":
         this.#fail(new Error(event.message));
         break;
@@ -650,6 +693,8 @@ export class LiveSession {
 
   async #handleDelegation(
     event: Extract<LiveServerEvent, { type: "delegation.created" }>,
+    typedNoteCutoff: number,
+    confirmationPendingAtReceipt: boolean,
   ): Promise<void> {
     if (this.#seenDelegationIds.has(event.item.id)) return;
     this.#seenDelegationIds.add(event.item.id);
@@ -737,13 +782,25 @@ export class LiveSession {
       }
       return;
     }
-    if (this.#confirmations.size > 0) {
-      this.#correctConfirmationDelegation(event.item.id);
+    if (confirmationPendingAtReceipt || this.#confirmations.size > 0) {
+      if (this.#confirmations.size > 0) {
+        this.#correctConfirmationDelegation(event.item.id);
+      }
       return;
     }
     if (!this.#activities.enqueue(event.item.id, request)) return;
+    const claimedNotes = this.#pendingTypedNotes.filter(
+      ({ sequence }) => sequence <= typedNoteCutoff,
+    );
+    this.#pendingTypedNotes = this.#pendingTypedNotes.filter(
+      ({ sequence }) => sequence > typedNoteCutoff,
+    );
+    const typedNote = claimedNotes.length > 0
+      ? claimedNotes.map(({ text }) => text).join("\n")
+      : undefined;
     const attachments = this.#attachments.splice(0);
     this.#delegationAttachments.set(event.item.id, attachments);
+    if (typedNote) this.#delegationTypedNotes.set(event.item.id, typedNote);
     this.#callbacks.onAttachmentsChanged(0);
     this.#persistActivity("queued", event.item.id, undefined, { request });
     this.#emitWorkStatus();
@@ -758,9 +815,14 @@ export class LiveSession {
     const delegation = this.#activities.activateNext();
     if (!delegation) return;
     const attachments = this.#delegationAttachments.get(delegation.id) ?? [];
+    const typedNote = this.#delegationTypedNotes.get(delegation.id);
     this.#delegationAttachments.delete(delegation.id);
+    const typedNoteContent: TextContent[] = typedNote
+      ? [{ type: "text", text: typedNote }]
+      : [];
     const content: (TextContent | ImageContent)[] = [
       { type: "text", text: delegation.request },
+      ...typedNoteContent,
       ...attachments.map((attachment) => attachment.content),
     ];
     try {
@@ -776,8 +838,16 @@ export class LiveSession {
         },
         { triggerTurn: true, deliverAs: "followUp" },
       );
+      this.#delegationTypedNotes.delete(delegation.id);
+      if (typedNote) {
+        this.#appendDelegationContext(delegation.id, typedNote, "commentary");
+      }
       this.#persistActivity("active", delegation.id);
     } catch (cause) {
+      if (typedNote) {
+        this.#delegationTypedNotes.delete(delegation.id);
+        this.#pendingTypedNotes.unshift({ sequence: 0, text: typedNote });
+      }
       const error = cause instanceof Error ? cause : new Error(String(cause));
       this.#appendDelegationContext(
         delegation.id,
