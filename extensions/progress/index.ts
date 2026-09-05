@@ -289,7 +289,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
             return;
           }
           if (reference !== "off" && !isInferenceModelReference(reference)) {
-            throw new Error("usage: /progress model <provider/model[:off|minimal]|off>");
+            throw new Error("usage: /progress model <provider/model[:off|minimal|low|medium|high|xhigh|max]|off>");
           }
           config.model = reference === "off" ? null : reference;
           await saveConfig(config);
@@ -304,7 +304,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
           return;
         }
 
-        throw new Error("usage: /progress [status|model <provider/model[:off|minimal]|off>]");
+        throw new Error("usage: /progress [status|model <provider/model[:off|minimal|low|medium|high|xhigh|max]|off>]");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }

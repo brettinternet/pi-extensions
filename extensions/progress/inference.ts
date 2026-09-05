@@ -4,9 +4,28 @@ import type { ProgressConfig } from "./config.ts";
 import { serializeDigest, type ActivityDigestSnapshot } from "./digest.ts";
 import type { SemanticSnapshot } from "./state.ts";
 
-export type ThinkingLevel = "off" | "minimal";
+export type ThinkingLevel = "off" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 type InferenceModel = NonNullable<ExtensionContext["model"]>;
 type InferenceRequest = Parameters<ExtensionContext["modelRegistry"]["complete"]>[1];
+
+const THINKING_LEVELS: Record<ThinkingLevel, true> = {
+  off: true,
+  minimal: true,
+  low: true,
+  medium: true,
+  high: true,
+  xhigh: true,
+  max: true,
+};
+
+const THINKING_TOKEN_BUDGETS: Record<Exclude<ThinkingLevel, "off">, number> = {
+  minimal: 1_024,
+  low: 2_048,
+  medium: 8_192,
+  high: 16_384,
+  xhigh: 16_384,
+  max: 16_384,
+};
 
 const OUTPUT_KEYS = new Set(["phase", "current", "completed", "blocked", "confidence"]);
 export const MIN_CONFIDENCE = 0.5;
@@ -39,20 +58,28 @@ export function resolveInferenceModel(
 
   let model = ctx.modelRegistry.find(full.provider, full.modelId);
   let thinkingLevel: ThinkingLevel = "off";
+  let explicitThinkingLevel = false;
   if (!model) {
-    const suffix = /:(off|minimal)$/.exec(full.modelId);
-    if (suffix) {
-      const modelId = full.modelId.slice(0, -suffix[0].length);
-      model = ctx.modelRegistry.find(full.provider, modelId);
-      thinkingLevel = suffix[1] as ThinkingLevel;
+    const colon = full.modelId.lastIndexOf(":");
+    const suffix = full.modelId.slice(colon + 1) as ThinkingLevel;
+    if (colon > 0 && Object.hasOwn(THINKING_LEVELS, suffix)) {
+      model = ctx.modelRegistry.find(full.provider, full.modelId.slice(0, colon));
+      thinkingLevel = suffix;
+      explicitThinkingLevel = true;
     }
   }
   if (!model) throw new Error(`configured model is unavailable: ${reference}`);
   if (!ctx.modelRegistry.hasConfiguredAuth(model)) {
     throw new Error(`configured model is not authenticated: ${model.provider}/${model.id}`);
   }
-  if (thinkingLevel === "minimal" && (!model.reasoning || model.thinkingLevelMap?.minimal === null)) {
-    throw new Error(`configured thinking level "minimal" is unavailable for ${model.provider}/${model.id}`);
+  if (explicitThinkingLevel) {
+    const mapped = model.thinkingLevelMap?.[thinkingLevel];
+    const unsupported = model.reasoning
+      ? mapped === null || ((thinkingLevel === "xhigh" || thinkingLevel === "max") && mapped === undefined)
+      : thinkingLevel !== "off";
+    if (unsupported) {
+      throw new Error(`configured thinking level "${thinkingLevel}" is unavailable for ${model.provider}/${model.id}`);
+    }
   }
   return { model, thinkingLevel };
 }
@@ -72,11 +99,12 @@ export function inferenceRequest(
 }
 
 export function inferenceOptions(config: ProgressConfig, thinkingLevel: ThinkingLevel, signal?: AbortSignal) {
+  const thinkingTokens = thinkingLevel === "off" ? 0 : THINKING_TOKEN_BUDGETS[thinkingLevel];
   return {
-    maxTokens: config.maxTokens + (thinkingLevel === "minimal" ? 1_024 : 0),
+    maxTokens: config.maxTokens + thinkingTokens,
     cacheRetention: "none" as const,
     sessionId: randomUUID(),
-    ...(thinkingLevel === "minimal" ? { reasoning: thinkingLevel } : {}),
+    ...(thinkingLevel !== "off" ? { reasoning: thinkingLevel } : {}),
     signal,
   };
 }

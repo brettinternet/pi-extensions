@@ -10,12 +10,18 @@ import {
 } from "../../extensions/progress/inference.ts";
 
 type Model = NonNullable<ExtensionContext["model"]>;
-const model = { provider: "openai", id: "gpt-5-nano", reasoning: true } as Model;
+const model = {
+  provider: "openai",
+  id: "gpt-5-nano",
+  reasoning: true,
+  thinkingLevelMap: { xhigh: "xhigh", max: "max" },
+} as Model;
 
-function modelContext(authenticated = true) {
+function modelContext(authenticated = true, availableModel: Model = model) {
   return {
     modelRegistry: {
-      find: (provider: string, id: string) => provider === model.provider && id === model.id ? model : undefined,
+      find: (provider: string, id: string) =>
+        provider === availableModel.provider && id === availableModel.id ? availableModel : undefined,
       hasConfiguredAuth: () => authenticated,
     },
   } as unknown as Pick<ExtensionContext, "modelRegistry">;
@@ -32,7 +38,13 @@ const valid = {
 describe("progress inference model resolution", () => {
   test("resolves only the exact explicit model and checks authentication", () => {
     expect(resolveInferenceModel(modelContext(), "openai/gpt-5-nano")).toEqual({ model, thinkingLevel: "off" });
-    expect(resolveInferenceModel(modelContext(), "openai/gpt-5-nano:minimal")).toEqual({ model, thinkingLevel: "minimal" });
+    for (const thinkingLevel of ["off", "minimal", "low", "medium", "high", "xhigh", "max"] as const) {
+      expect(resolveInferenceModel(modelContext(), `openai/gpt-5-nano:${thinkingLevel}`)).toEqual({ model, thinkingLevel });
+    }
+    const limitedModel = { ...model, thinkingLevelMap: { minimal: null } } as Model;
+    expect(() => resolveInferenceModel(modelContext(true, limitedModel), "openai/gpt-5-nano:minimal")).toThrow(
+      'thinking level "minimal" is unavailable',
+    );
     expect(() => resolveInferenceModel(modelContext(), "openai/nano")).toThrow("unavailable");
     expect(() => resolveInferenceModel(modelContext(false), "openai/gpt-5-nano")).toThrow("not authenticated");
   });
@@ -43,7 +55,18 @@ describe("progress inference model resolution", () => {
     expect(first.cacheRetention).toBe("none");
     expect(first.sessionId).not.toBe(second.sessionId);
     expect(first).not.toHaveProperty("reasoning");
-    expect(inferenceOptions(DEFAULT_CONFIG, "minimal")).toMatchObject({ reasoning: "minimal" });
+    expect(inferenceOptions(DEFAULT_CONFIG, "minimal")).toMatchObject({
+      reasoning: "minimal",
+      maxTokens: DEFAULT_CONFIG.maxTokens + 1_024,
+    });
+    expect(inferenceOptions(DEFAULT_CONFIG, "low")).toMatchObject({
+      reasoning: "low",
+      maxTokens: DEFAULT_CONFIG.maxTokens + 2_048,
+    });
+    expect(inferenceOptions(DEFAULT_CONFIG, "high")).toMatchObject({
+      reasoning: "high",
+      maxTokens: DEFAULT_CONFIG.maxTokens + 16_384,
+    });
   });
 });
 

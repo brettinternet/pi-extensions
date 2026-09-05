@@ -33,7 +33,7 @@ Semantic phase labels are disabled unless an explicit model is configured in `~/
 }
 ```
 
-The configuration accepts JSON with comments and trailing commas. A legacy `pi-progress.json` file is used only when `pi-progress.jsonc` is absent. The model reference must resolve exactly and have configured authentication. `:off` and `:minimal` thinking suffixes are supported; reasoning defaults to off. There is no automatic model selection or fallback to the active session model.
+The configuration accepts JSON with comments and trailing commas. A legacy `pi-progress.json` file is used only when `pi-progress.jsonc` is absent. The model reference must resolve exactly and have configured authentication. The optional thinking suffix supports `:off`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, and `:max`, subject to the selected model's capabilities; reasoning defaults to off. There is no automatic model selection or fallback to the active session model.
 
 Inference receives only a bounded, redacted activity digest: a truncated user request and final response excerpt, previous inference, compact tool names/arguments/outcomes/durations, edit/write paths, and recognized check commands. It does not receive system prompts, reasoning, tool output, file contents, diffs, environment variables, credentials, or the full transcript. Paths, commands, and request/response excerpts are disclosed to the configured model provider. Requests use fresh IDs with prompt-cache retention disabled.
 
@@ -42,7 +42,7 @@ Inference is advisory UI metadata. It does not alter model context, register an 
 ```text
 /progress status                              Show configuration and the last error
 /progress model                               Show the configured inference model
-/progress model openai/gpt-5-nano:minimal     Set the inference model
+/progress model openai/gpt-5-nano:low         Set the inference model and thinking level
 /progress model off                           Disable inference
 ```
 
