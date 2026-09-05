@@ -22,8 +22,12 @@ export const INFERENCE_SYSTEM_PROMPT = [
 
 function splitReference(reference: string): { provider: string; modelId: string } | undefined {
   const slash = reference.indexOf("/");
-  if (slash <= 0 || slash === reference.length - 1) return undefined;
+  if (slash <= 0 || slash === reference.length - 1 || /\s/.test(reference)) return undefined;
   return { provider: reference.slice(0, slash), modelId: reference.slice(slash + 1) };
+}
+
+export function isInferenceModelReference(reference: string): boolean {
+  return Boolean(splitReference(reference));
 }
 
 export function resolveInferenceModel(

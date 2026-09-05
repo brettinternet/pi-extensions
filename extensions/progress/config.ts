@@ -1,7 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
-import { join } from "node:path";
-import { parse, printParseErrorCode, type ParseError } from "jsonc-parser";
+import { dirname, join } from "node:path";
+import { applyEdits, modify, parse, printParseErrorCode, type ParseError } from "jsonc-parser";
 
 export interface ProgressConfig {
   model: string | null;
@@ -104,4 +104,35 @@ export async function loadConfig(
     }
     throw error;
   }
+}
+
+function updateConfigText(text: string, config: ProgressConfig): string {
+  parseConfigText(text);
+  let updated = text;
+  const formattingOptions = { insertSpaces: true, tabSize: 2, eol: "\n" };
+  for (const [key, value] of Object.entries(config)) {
+    updated = applyEdits(updated, modify(updated, [key], value, { formattingOptions }));
+  }
+  return `${updated.trimEnd()}\n`;
+}
+
+export async function saveConfig(
+  config: ProgressConfig,
+  path = configPath(),
+): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+
+  let contents: string;
+  try {
+    contents = updateConfigText(await readFile(path, "utf8"), config);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+      throw new Error(`failed to update ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+    contents = `${JSON.stringify(config, null, 2)}\n`;
+  }
+
+  const temporaryPath = `${path}.tmp-${process.pid}`;
+  await writeFile(temporaryPath, contents, "utf8");
+  await rename(temporaryPath, path);
 }

@@ -1,8 +1,8 @@
 import { describe, expect, test } from "bun:test";
-import { mkdtemp, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { configPath, DEFAULT_CONFIG, loadConfig, parseConfig } from "../../extensions/progress/config.ts";
+import { configPath, DEFAULT_CONFIG, loadConfig, parseConfig, saveConfig } from "../../extensions/progress/config.ts";
 
 describe("progress inference configuration", () => {
   test("is disabled by default and honors the Pi agent directory", () => {
@@ -29,6 +29,17 @@ describe("progress inference configuration", () => {
     await writeFile(path, '{\n  // Use an inexpensive model.\n  "model": "openai/gpt-5-nano",\n}\n');
 
     expect(await loadConfig(path)).toEqual({ ...DEFAULT_CONFIG, model: "openai/gpt-5-nano" });
+  });
+
+  test("preserves comments when commands update the config", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "pi-progress-config-"));
+    const path = join(directory, "pi-progress.jsonc");
+    await writeFile(path, '{\n  // Keep this explanation.\n  "model": "openai/old"\n}\n');
+
+    await saveConfig({ ...DEFAULT_CONFIG, model: "openai/new" }, path);
+
+    expect(await readFile(path, "utf8")).toContain("// Keep this explanation.");
+    expect(await loadConfig(path)).toEqual({ ...DEFAULT_CONFIG, model: "openai/new" });
   });
 
   test("falls back to JSON but gives JSONC precedence", async () => {

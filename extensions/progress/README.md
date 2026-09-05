@@ -37,7 +37,16 @@ The configuration accepts JSON with comments and trailing commas. A legacy `pi-p
 
 Inference receives only a bounded, redacted activity digest: a truncated user request and final response excerpt, previous inference, compact tool names/arguments/outcomes/durations, edit/write paths, and recognized check commands. It does not receive system prompts, reasoning, tool output, file contents, diffs, environment variables, credentials, or the full transcript. Paths, commands, and request/response excerpts are disclosed to the configured model provider. Requests use fresh IDs with prompt-cache retention disabled.
 
-Inference is advisory UI metadata. It does not alter model context, register an LLM-callable tool, control execution, or provide verification evidence. Invalid, low-confidence, failed, timed-out, cancelled, and stale responses are discarded. Use `/progress status` to inspect configuration and the last inference error.
+Inference is advisory UI metadata. It does not alter model context, register an LLM-callable tool, control execution, or provide verification evidence. Invalid, low-confidence, failed, timed-out, cancelled, and stale responses are discarded.
+
+```text
+/progress status                              Show configuration and the last error
+/progress model                               Show the configured inference model
+/progress model openai/gpt-5-nano:minimal     Set the inference model
+/progress model off                           Disable inference
+```
+
+Input, token, and timeout limits remain file-only safeguards.
 
 ## Install
 

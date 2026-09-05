@@ -2,12 +2,13 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
-import { configPath, loadConfig, type ProgressConfig } from "./config.ts";
+import { configPath, loadConfig, saveConfig, type ProgressConfig } from "./config.ts";
 import { ActivityDigest } from "./digest.ts";
 import {
   completeInference,
   inferenceFromCompletion,
   inferenceRequest,
+  isInferenceModelReference,
   parseInference,
   resolveInferenceModel,
 } from "./inference.ts";
@@ -265,22 +266,47 @@ export default function progressExtension(pi: ExtensionAPI): void {
   pi.registerCommand("progress", {
     description: "Show deterministic progress and inference status",
     handler: async (args, ctx) => {
-      if (args.trim() && args.trim() !== "status") {
-        ctx.ui.notify("usage: /progress status", "error");
-        return;
-      }
+      const input = args.trim();
+      const [action, ...rest] = input.split(/\s+/).filter(Boolean);
       try {
         const config = await loadConfig();
-        configuredModel = config.model;
-        ctx.ui.notify([
-          `inference: ${config.model ? (inferencePromise ? "running" : "enabled") : "disabled"}`,
-          `model: ${configuredModel ?? "none"}`,
-          `last error: ${lastInferenceError ?? "none"}`,
-          `config: ${configPath()}`,
-        ].join("\n"), "info");
+
+        if (!action || action === "status") {
+          configuredModel = config.model;
+          ctx.ui.notify([
+            `inference: ${config.model ? (inferencePromise ? "running" : "enabled") : "disabled"}`,
+            `model: ${configuredModel ?? "none"}`,
+            `last error: ${lastInferenceError ?? "none"}`,
+            `config: ${configPath()}`,
+          ].join("\n"), "info");
+          return;
+        }
+
+        if (action === "model") {
+          const reference = rest.join(" ").trim();
+          if (!reference) {
+            ctx.ui.notify(`Progress model: ${config.model ?? "off"}`, "info");
+            return;
+          }
+          if (reference !== "off" && !isInferenceModelReference(reference)) {
+            throw new Error("usage: /progress model <provider/model[:off|minimal]|off>");
+          }
+          config.model = reference === "off" ? null : reference;
+          await saveConfig(config);
+          configuredModel = config.model;
+          cancelInference();
+          lastInferenceError = undefined;
+          if (!config.model) {
+            state.setSemantic(undefined);
+            scheduleRender(ctx);
+          }
+          ctx.ui.notify(`Progress model: ${config.model ?? "off"}`, "info");
+          return;
+        }
+
+        throw new Error("usage: /progress [status|model <provider/model[:off|minimal]|off>]");
       } catch (error) {
-        reportInferenceError(ctx, error);
-        ctx.ui.notify(`config: ${configPath()}\nlast error: ${lastInferenceError}`, "error");
+        ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }
     },
   });

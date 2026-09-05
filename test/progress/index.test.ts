@@ -1,10 +1,15 @@
 import { describe, expect, test } from "bun:test";
+import { mkdtemp } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type {
   ExtensionAPI,
+  ExtensionCommandContext,
   ExtensionContext,
   Theme,
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
+import { loadConfig } from "../../extensions/progress/config.ts";
 import progressExtension from "../../extensions/progress/index.ts";
 
 type Handler = (
@@ -19,6 +24,8 @@ const theme = {
 
 function setup() {
   const handlers = new Map<string, Handler>();
+  let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+  const notifications: string[] = [];
   const widgets: Array<{
     key: string;
     content: WidgetFactory | undefined;
@@ -26,7 +33,9 @@ function setup() {
   }> = [];
   const pi = {
     on: (name: string, handler: Handler) => handlers.set(name, handler),
-    registerCommand: () => {},
+    registerCommand: (_name: string, options: Parameters<ExtensionAPI["registerCommand"]>[1]) => {
+      command = options;
+    },
     appendEntry: () => {},
   } as unknown as ExtensionAPI;
   const ctx = {
@@ -38,12 +47,12 @@ function setup() {
         content: WidgetFactory | undefined,
         options?: { placement?: string },
       ) => widgets.push({ key, content, options }),
-      notify: () => {},
+      notify: (message: string) => notifications.push(message),
     },
     sessionManager: { getBranch: () => [] },
   } as unknown as ExtensionContext;
   progressExtension(pi);
-  return { handlers, widgets, ctx };
+  return { handlers, widgets, command: command!, notifications, ctx };
 }
 
 async function flushRender(): Promise<void> {
@@ -157,6 +166,35 @@ describe("progress extension", () => {
     handlers.get("before_agent_start")!({}, ctx);
     await flushRender();
     expect(latestLines(widgets)).toEqual(["progress · ● thinking"]);
+  });
+
+  test("sets, shows, and disables the inference model", async () => {
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    const directory = await mkdtemp(join(tmpdir(), "pi-progress-command-"));
+    process.env.PI_CODING_AGENT_DIR = directory;
+    try {
+      const { command, notifications, ctx } = setup();
+      const commandContext = ctx as unknown as ExtensionCommandContext;
+      await command.handler("model openai/gpt-5-nano:minimal", commandContext);
+      expect(await loadConfig(join(directory, "pi-progress.jsonc"))).toEqual({
+        model: "openai/gpt-5-nano:minimal",
+        maxInputChars: 12_000,
+        maxTokens: 180,
+        timeoutMs: 15_000,
+      });
+
+      await command.handler("model", commandContext);
+      await command.handler("model off", commandContext);
+      expect(notifications).toEqual([
+        "Progress model: openai/gpt-5-nano:minimal",
+        "Progress model: openai/gpt-5-nano:minimal",
+        "Progress model: off",
+      ]);
+      expect((await loadConfig(join(directory, "pi-progress.jsonc"))).model).toBeNull();
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+    }
   });
 
   test("removes its widget when the session shuts down", () => {
