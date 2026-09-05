@@ -230,6 +230,7 @@ export class LiveSession {
   readonly #seenConfirmationIds = new Set<string>();
   #activeConfirmationId: string | undefined;
   #suppressResolvedConfirmationDelegation = false;
+  #suppressResolvedConfirmationTranscript = false;
   #attachmentLoadTail: Promise<void> = Promise.resolve();
   #stopSnapshotDiscovery: (() => void) | undefined;
 
@@ -448,18 +449,22 @@ export class LiveSession {
     return true;
   }
 
-  #handleConfirmationTranscript(transcript: string): void {
+  #handleConfirmationTranscript(
+    transcript: string,
+    suppressDuplicateDelegation = true,
+  ): boolean {
     const requestId = this.#activeConfirmationId;
     const decision = transcriptConfirmationDecision(transcript);
-    if (!requestId || !decision) return;
+    if (!requestId || !decision) return false;
     const pending = this.#confirmations.get(requestId);
-    if (!pending || pending.request.expiresAt <= Date.now()) return;
+    if (!pending || pending.request.expiresAt <= Date.now()) return false;
     this.#removeConfirmation(requestId);
-    this.#suppressResolvedConfirmationDelegation = true;
+    if (suppressDuplicateDelegation) this.#suppressResolvedConfirmationDelegation = true;
     this.#pi.events.emit(
       `${CONFIRMATION_RESOLVED_PREFIX}${requestId}`,
       confirmationReply(pending.request, decision),
     );
+    return true;
   }
 
   handleConfirmationCancelled(value: unknown): void {
@@ -511,6 +516,7 @@ export class LiveSession {
     this.#confirmations.clear();
     this.#activeConfirmationId = undefined;
     this.#suppressResolvedConfirmationDelegation = false;
+    this.#suppressResolvedConfirmationTranscript = false;
     this.#stopSnapshotDiscovery?.();
     this.#stopSnapshotDiscovery = undefined;
     this.#outputActivity.dispose();
@@ -562,7 +568,10 @@ export class LiveSession {
       case "input_transcript.added": {
         this.#outputTurnComplete = true;
         const startsNew = !this.#inputTranscript;
-        if (startsNew) this.#suppressResolvedConfirmationDelegation = false;
+        if (startsNew) {
+          this.#suppressResolvedConfirmationDelegation = false;
+          this.#suppressResolvedConfirmationTranscript = false;
+        }
         this.#inputTranscript = event.item.text.startsWith(this.#inputTranscript)
           ? event.item.text
           : this.#inputTranscript + event.item.text;
@@ -585,7 +594,12 @@ export class LiveSession {
       case "turn.done":
         if (event.turn.role === "user") {
           const transcript = event.turn.transcript || this.#inputTranscript;
-          this.#handleConfirmationTranscript(transcript);
+          if (this.#suppressResolvedConfirmationTranscript &&
+            transcriptConfirmationDecision(transcript)) {
+            this.#suppressResolvedConfirmationTranscript = false;
+          } else {
+            this.#handleConfirmationTranscript(transcript);
+          }
           this.#inputTranscript = "";
           this.#callbacks.onUserTranscript(transcript.trim(), true, false);
         } else {
@@ -641,10 +655,21 @@ export class LiveSession {
       return;
     }
 
-    // Exact one-word confirmation answers are resolved from the finalized user
-    // transcript. Suppress any duplicate delegation generated for that utterance.
+    // Depending on server turn timing, an exact answer can arrive first as either
+    // a finalized transcript or a client delegation. Resolve whichever arrives
+    // first and suppress only its counterpart so it cannot approve the next item.
     if ((this.#confirmations.size > 0 || this.#suppressResolvedConfirmationDelegation) &&
-      transcriptConfirmationDecision(request)) return;
+      transcriptConfirmationDecision(request)) {
+      if (this.#suppressResolvedConfirmationDelegation) {
+        this.#suppressResolvedConfirmationDelegation = false;
+        return;
+      }
+      if (this.#handleConfirmationTranscript(request, false)) {
+        this.#suppressResolvedConfirmationTranscript = true;
+        this.#inputTranscript = "";
+      }
+      return;
+    }
 
     // Preserve exact control-message compatibility for live adapters that emit it.
     const confirmation = request.match(CONFIRMATION_CONTROL);

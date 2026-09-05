@@ -565,6 +565,51 @@ test("an exact finalized voice transcript resolves one confirmation", async () =
   await harness.session.stop();
 });
 
+test("an exact one-word delegation resolves when the server omits turn.done", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  await activateVoiceDelegation(harness);
+  const request = confirmationRequest("delegated-confirmation");
+  harness.session.handleConfirmationRequested(request);
+  await flush();
+
+  harness.transport().emit(delegation("delegated-approval", "Approve."));
+  await flush();
+
+  const resolution = harness.bus.emitted.find(({ name }) =>
+    name === `${CONFIRMATION_RESOLVED_PREFIX}${request.requestId}`
+  );
+  assert.equal((resolution!.value as { decision: string }).decision, "approved");
+  assert.equal(harness.sentToAgent.length, 0);
+  await harness.session.stop();
+});
+
+test("reverse-order transcript duplication cannot approve the next confirmation", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  await activateVoiceDelegation(harness);
+  const first = confirmationRequest("delegated-first");
+  const second = confirmationRequest("delegated-second", { operationId: "sha256:second" });
+  harness.session.handleConfirmationRequested(first);
+  harness.session.handleConfirmationRequested(second);
+  await flush();
+
+  harness.transport().emit(delegation("first-approval", "Approve."));
+  harness.transport().emit({ type: "turn.done", turn: { role: "user", transcript: "Approve." } });
+  await flush();
+  assert.equal(harness.bus.emitted.filter(({ name }) =>
+    name.startsWith(CONFIRMATION_RESOLVED_PREFIX)
+  ).length, 1);
+
+  harness.transport().emit({ type: "input_transcript.added", item: { text: "Approve." } });
+  harness.transport().emit(delegation("second-approval", "Approve."));
+  await flush();
+  assert.equal(harness.bus.emitted.filter(({ name }) =>
+    name.startsWith(CONFIRMATION_RESOLVED_PREFIX)
+  ).length, 2);
+  await harness.session.stop();
+});
+
 test("an exact deny transcript rejects one confirmation", async () => {
   const harness = createHarness();
   await harness.session.start();
