@@ -440,9 +440,9 @@ export default function workbenchExtension(pi: ExtensionAPI): void {
     name: "workbench",
     label: "Herdr Workbench",
     description: "Inspect and control plugin-owned Herdr panes: open Neovim files, show LazyGit, and start/read/cancel visible foreground jobs. Output is limited to 40,000 characters.",
-    promptSnippet: "Control visible Herdr workbench panes and foreground jobs",
+    promptSnippet: "Control Herdr panes, splits, tabs, workspaces, and foreground jobs",
     promptGuidelines: [
-      "Use workbench only when the user explicitly asks to show or arrange Herdr panes, open code or LazyGit visibly, or run a command visibly in a foreground pane.",
+      "Use workbench when the user explicitly requests a Herdr UI destination or interaction. Requests to run, open, show, watch, reveal, arrange, or focus something in a pane, split, tab, or workspace count as explicit workbench intent; do not require the word 'visibly'.",
       "Use workbench job.start with command as an argv array; use a shell argv only when the user explicitly requests shell syntax.",
       "Default workbench focus to false unless the user asks to show, watch, reveal, or switch to the target.",
       "Use workbench job status/read/cancel/close only with job IDs returned by this Pi session.",

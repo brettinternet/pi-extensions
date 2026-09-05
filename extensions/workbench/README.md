@@ -16,6 +16,8 @@ pi install npm:pi-herdr-workbench
 
 The extension registers one `workbench` tool. Read-only layout, status, list, and log operations are available without project trust. Mutations are restricted to resources created by or returned to the current Pi session; job lifecycle operations and closes cannot target another session's resources.
 
+Pi treats native Herdr placement language as an explicit request for this tool. Phrases such as "in a pane," "in a split," "in a tab," or "in a workspace," plus requests to show, watch, reveal, arrange, or focus something, do not need to include the word "visibly."
+
 `job.start` returns immediately after creating the visible pane. The extension monitors the job, shows a bounded completion notification, treats a nonzero exit code as failure, and emits provider-neutral lifecycle events:
 
 ```text
