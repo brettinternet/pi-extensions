@@ -23,10 +23,21 @@ export type LivePhase =
   | "muted"
   | "error";
 
+export const DEFAULT_TRANSCRIPT_LIMIT = 4;
+
+type TranscriptRole = "user" | "agent";
+
+interface TranscriptUtterance {
+  role: TranscriptRole;
+  text: string;
+  finalized: boolean;
+}
+
 export interface LiveVisualizerOptions {
   onStop(): void;
   onToggleMute(): void;
   onDrop(data: string): void;
+  transcriptLimit?: number;
 }
 
 export class LiveVisualizer extends CustomEditor {
@@ -38,8 +49,9 @@ export class LiveVisualizer extends CustomEditor {
   #inputLevel = 0;
   #displayLevel = 0;
   #frame = 0;
-  #userTranscript = "";
-  #agentTranscript = "";
+  readonly #transcriptLimit: number;
+  readonly #transcript: TranscriptUtterance[] = [];
+  #inProgressTranscript: TranscriptUtterance | undefined;
   #attachmentCount = 0;
   #workStatus: WorkStatus = { queued: 0, active: 0, failed: 0 };
 
@@ -52,6 +64,7 @@ export class LiveVisualizer extends CustomEditor {
   ) {
     super(tui, editorTheme, keybindings);
     this.#tui = tui;
+    this.#transcriptLimit = options.transcriptLimit ?? DEFAULT_TRANSCRIPT_LIMIT;
     this.#keybindings = keybindings;
     this.#colors = colors;
     this.#options = options;
@@ -70,22 +83,51 @@ export class LiveVisualizer extends CustomEditor {
     this.#displayLevel = Math.max(this.#displayLevel, next);
   }
 
-  setUserTranscript(text: string): void {
-    this.#setTranscript("user", text);
+  setUserTranscript(text: string, finalized = false): void {
+    this.#setTranscript("user", text, finalized);
   }
 
-  setAgentTranscript(text: string): void {
-    this.#setTranscript("agent", text);
+  setAgentTranscript(text: string, finalized = false): void {
+    this.#setTranscript("agent", text, finalized);
   }
 
-  #setTranscript(role: "user" | "agent", text: string): void {
+  #setTranscript(
+    role: TranscriptRole,
+    text: string,
+    finalized: boolean,
+  ): void {
     const normalized = text.replaceAll("\t", " ").replace(/\s+/g, " ").trim();
-    if (role === "user") {
-      if (this.#userTranscript === normalized) return;
-      this.#userTranscript = normalized;
-    } else {
-      if (this.#agentTranscript === normalized) return;
-      this.#agentTranscript = normalized;
+    const inProgress = this.#inProgressTranscript;
+    if (inProgress?.role === role) {
+      let changed = false;
+      if (normalized && inProgress.text !== normalized) {
+        inProgress.text = normalized;
+        changed = true;
+      }
+      if (finalized && !inProgress.finalized) {
+        inProgress.finalized = true;
+        this.#inProgressTranscript = undefined;
+        changed = true;
+      }
+      if (changed) this.#tui.requestRender();
+      return;
+    }
+
+    this.#inProgressTranscript = undefined;
+    if (!normalized) return;
+
+    const utterance: TranscriptUtterance = {
+      role,
+      text: normalized,
+      finalized,
+    };
+    this.#transcript.push(utterance);
+    this.#inProgressTranscript = finalized ? undefined : utterance;
+    while (this.#transcript.length > this.#transcriptLimit) {
+      const removed = this.#transcript.shift();
+      if (removed === this.#inProgressTranscript) {
+        this.#inProgressTranscript = undefined;
+      }
     }
     this.#tui.requestRender();
   }
@@ -166,26 +208,20 @@ export class LiveVisualizer extends CustomEditor {
           border,
         )]
       : [];
-    const userTranscriptRows = this.#renderTranscript(
-      "You",
-      this.#userTranscript,
-      innerWidth,
-      "accent",
-      border,
-    );
-    const agentTranscriptRows = this.#renderTranscript(
-      "Live",
-      this.#agentTranscript,
-      innerWidth,
-      "success",
-      border,
+    const transcriptRows = this.#transcript.flatMap(({ role, text }) =>
+      this.#renderTranscript(
+        role === "user" ? "You" : "Agent",
+        text,
+        innerWidth,
+        role === "user" ? "accent" : "success",
+        border,
+      )
     );
     return [
       top,
       ...spectrum,
       ...attachmentRows,
-      ...userTranscriptRows,
-      ...agentTranscriptRows,
+      ...transcriptRows,
       this.#renderFooter(width, innerWidth),
     ];
   }

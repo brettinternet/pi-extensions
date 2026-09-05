@@ -79,8 +79,8 @@ export type LiveStopMode = "handoff" | "shutdown";
 export interface LiveSessionCallbacks {
   onPhase(phase: LivePhase): void;
   onInputLevel(level: number): void;
-  onUserTranscript(text: string): void;
-  onAgentTranscript(text: string): void;
+  onUserTranscript(text: string, finalized: boolean): void;
+  onAgentTranscript(text: string, finalized: boolean): void;
   onAttachmentsChanged(count: number): void;
   onWorkStatus(status: WorkStatus): void;
   onTerminal(error?: Error): void;
@@ -565,7 +565,7 @@ export class LiveSession {
         this.#inputTranscript = event.item.text.startsWith(this.#inputTranscript)
           ? event.item.text
           : this.#inputTranscript + event.item.text;
-        this.#callbacks.onUserTranscript(this.#inputTranscript.trim());
+        this.#callbacks.onUserTranscript(this.#inputTranscript.trim(), false);
         break;
       case "output_transcript.added":
         if (this.#outputTurnComplete) {
@@ -575,17 +575,19 @@ export class LiveSession {
         this.#outputTranscript = event.item.text.startsWith(this.#outputTranscript)
           ? event.item.text
           : this.#outputTranscript + event.item.text;
-        this.#callbacks.onAgentTranscript(this.#outputTranscript.trim());
+        this.#callbacks.onAgentTranscript(this.#outputTranscript.trim(), false);
         break;
       case "turn.done":
         if (event.turn.role === "user") {
-          this.#handleConfirmationTranscript(event.turn.transcript);
+          const transcript = event.turn.transcript || this.#inputTranscript;
+          this.#handleConfirmationTranscript(transcript);
           this.#inputTranscript = "";
-          this.#callbacks.onUserTranscript("");
+          this.#callbacks.onUserTranscript(transcript.trim(), true);
         } else {
-          this.#outputTranscript = event.turn.transcript || this.#outputTranscript;
+          const transcript = event.turn.transcript || this.#outputTranscript;
+          this.#outputTranscript = "";
           this.#outputTurnComplete = true;
-          this.#callbacks.onAgentTranscript(this.#outputTranscript.trim());
+          this.#callbacks.onAgentTranscript(transcript.trim(), true);
         }
         break;
       case "delegation.created":
@@ -705,7 +707,6 @@ export class LiveSession {
     this.#persistActivity("queued", event.item.id, undefined, { request });
     this.#emitWorkStatus();
     this.#inputTranscript = "";
-    this.#callbacks.onUserTranscript("");
     this.#dispatchNext();
   }
 

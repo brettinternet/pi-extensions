@@ -80,13 +80,18 @@ class FakeTransport implements LiveTransport {
   }
 }
 
+interface TranscriptUpdate {
+  text: string;
+  finalized: boolean;
+}
+
 interface Harness {
   session: LiveSession;
   bus: EventBus;
   transport(): FakeTransport;
   phases: string[];
-  userTranscripts: string[];
-  agentTranscripts: string[];
+  userTranscripts: TranscriptUpdate[];
+  agentTranscripts: TranscriptUpdate[];
   terminal: Array<Error | undefined>;
   sentToAgent: unknown[];
   setIdle(value: boolean): void;
@@ -177,8 +182,8 @@ function delegation(id: string, text: string): LiveServerEvent {
 function createHarness(connectPromise?: Promise<void>): Harness {
   const bus = new EventBus();
   const phases: string[] = [];
-  const userTranscripts: string[] = [];
-  const agentTranscripts: string[] = [];
+  const userTranscripts: TranscriptUpdate[] = [];
+  const agentTranscripts: TranscriptUpdate[] = [];
   const terminal: Array<Error | undefined> = [];
   const sentToAgent: unknown[] = [];
   let idle = true;
@@ -200,8 +205,8 @@ function createHarness(connectPromise?: Promise<void>): Harness {
   const callbacks: LiveSessionCallbacks = {
     onPhase: (phase) => phases.push(phase),
     onInputLevel: () => {},
-    onUserTranscript: (text) => userTranscripts.push(text),
-    onAgentTranscript: (text) => agentTranscripts.push(text),
+    onUserTranscript: (text, finalized) => userTranscripts.push({ text, finalized }),
+    onAgentTranscript: (text, finalized) => agentTranscripts.push({ text, finalized }),
     onAttachmentsChanged: () => {},
     onWorkStatus: () => {},
     onTerminal: (error) => terminal.push(error),
@@ -306,11 +311,23 @@ test("agent transcript survives user interruption until the next agent response"
   });
   harness.transport().emit({
     type: "turn.done",
-    turn: { role: "user", transcript: "Wait" },
+    turn: { role: "user", transcript: "Wait, stop" },
   });
 
-  assert.deepEqual(harness.agentTranscripts, ["The checks are still running."]);
-  assert.deepEqual(harness.userTranscripts, ["Wait", ""]);
+  assert.deepEqual(harness.agentTranscripts, [
+    { text: "The checks are still running.", finalized: false },
+  ]);
+  assert.deepEqual(harness.userTranscripts, [
+    { text: "Wait", finalized: false },
+    { text: "Wait, stop", finalized: true },
+  ]);
+
+  harness.transport().emit(delegation("request-after-transcript", "Run the checks"));
+  await flush();
+  assert.deepEqual(harness.userTranscripts, [
+    { text: "Wait", finalized: false },
+    { text: "Wait, stop", finalized: true },
+  ]);
 
   harness.transport().emit({
     type: "output_transcript.added",
@@ -321,9 +338,9 @@ test("agent transcript survives user interruption until the next agent response"
     turn: { role: "assistant", transcript: "Okay, I paused." },
   });
   assert.deepEqual(harness.agentTranscripts, [
-    "The checks are still running.",
-    "Okay,",
-    "Okay, I paused.",
+    { text: "The checks are still running.", finalized: false },
+    { text: "Okay,", finalized: false },
+    { text: "Okay, I paused.", finalized: true },
   ]);
 
   await harness.session.stop();
@@ -498,7 +515,10 @@ test("voice confirmation resolves once without starting a coding turn", async ()
     type: "output_transcript.added",
     item: { text: "Please approve the git push." },
   });
-  assert.equal(harness.agentTranscripts.at(-1), "Please approve the git push.");
+  assert.deepEqual(harness.agentTranscripts.at(-1), {
+    text: "Please approve the git push.",
+    finalized: false,
+  });
 
   harness.transport().emit(delegation("confirmation-1", `[[live:confirmation ${request.requestId} approve]]`));
   harness.transport().emit(delegation("confirmation-2", `[[live:confirmation ${request.requestId} approve]]`));

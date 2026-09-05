@@ -27,7 +27,26 @@ import {
   type VoiceLockHandoffRequest,
   type VoiceLockHandoffResponse,
 } from "./voice-lock.ts";
-import { LiveVisualizer } from "./visualizer.ts";
+import {
+  DEFAULT_TRANSCRIPT_LIMIT,
+  LiveVisualizer,
+} from "./visualizer.ts";
+
+export const LIVE_TRANSCRIPT_LIMIT_FLAG = "live-transcript-limit";
+
+export function parseTranscriptLimit(
+  value: string | boolean | undefined,
+): number {
+  if (value === undefined) return DEFAULT_TRANSCRIPT_LIMIT;
+  if (typeof value !== "string" || !/^\d+$/.test(value.trim())) {
+    throw new Error("--live-transcript-limit must be a positive integer");
+  }
+  const limit = Number(value.trim());
+  if (!Number.isSafeInteger(limit) || limit <= 0) {
+    throw new Error("--live-transcript-limit must be a positive integer");
+  }
+  return limit;
+}
 
 type EditorFactory = (
   tui: TUI,
@@ -49,13 +68,28 @@ class LiveExtensionRuntime {
     this.#pi = pi;
   }
 
-  async toggle(context: ExtensionContext, voice: string): Promise<void> {
+  async toggle(
+    context: ExtensionContext,
+    voice: string,
+    transcriptLimit: string | boolean | undefined,
+  ): Promise<void> {
     if (this.#session) {
       await this.stop();
       return;
     }
     if (context.mode !== "tui") {
       context.ui.notify("/live requires Pi's interactive TUI", "error");
+      return;
+    }
+
+    let parsedTranscriptLimit: number;
+    try {
+      parsedTranscriptLimit = parseTranscriptLimit(transcriptLimit);
+    } catch (cause) {
+      context.ui.notify(
+        cause instanceof Error ? cause.message : String(cause),
+        "error",
+      );
       return;
     }
 
@@ -126,10 +160,10 @@ class LiveExtensionRuntime {
         callbacks: {
           onPhase: (phase) => this.#visualizer?.setPhase(phase),
           onInputLevel: (level) => this.#visualizer?.setInputLevel(level),
-          onUserTranscript: (text) =>
-            this.#visualizer?.setUserTranscript(text),
-          onAgentTranscript: (text) =>
-            this.#visualizer?.setAgentTranscript(text),
+          onUserTranscript: (text, finalized) =>
+            this.#visualizer?.setUserTranscript(text, finalized),
+          onAgentTranscript: (text, finalized) =>
+            this.#visualizer?.setAgentTranscript(text, finalized),
           onAttachmentsChanged: (count) =>
             this.#visualizer?.setAttachmentCount(count),
           onWorkStatus: (status) => this.#visualizer?.setWorkStatus(status),
@@ -150,6 +184,7 @@ class LiveExtensionRuntime {
           keybindings,
           context.ui.theme,
           {
+            transcriptLimit: parsedTranscriptLimit,
             onStop: () => void this.stop(),
             onToggleMute: () => activeSession.toggleMute(),
             onDrop: (data) =>
@@ -315,17 +350,31 @@ class LiveExtensionRuntime {
 export default function piLiveCodex(pi: ExtensionAPI): void {
   const runtime = new LiveExtensionRuntime(pi);
 
+  pi.registerFlag(LIVE_TRANSCRIPT_LIMIT_FLAG, {
+    type: "string",
+    description: "Number of live transcript utterances to retain",
+    default: String(DEFAULT_TRANSCRIPT_LIMIT),
+  });
+
   pi.registerCommand("live", {
     description: "Start or stop gpt-live-1-codex voice mode",
     handler: async (args, context) => {
-      await runtime.toggle(context, args.trim() || "sol");
+      await runtime.toggle(
+        context,
+        args.trim() || "sol",
+        pi.getFlag(LIVE_TRANSCRIPT_LIMIT_FLAG),
+      );
     },
   });
 
   pi.registerShortcut("ctrl+l", {
     description: "Toggle gpt-live-1-codex voice mode",
     handler: async (context) => {
-      await runtime.toggle(context, "sol");
+      await runtime.toggle(
+        context,
+        "sol",
+        pi.getFlag(LIVE_TRANSCRIPT_LIMIT_FLAG),
+      );
     },
   });
 

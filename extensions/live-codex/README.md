@@ -18,7 +18,7 @@ Start Pi in its interactive TUI, then run:
 /live
 ```
 
-Use `/live <voice>` to select a voice. `Ctrl+L` toggles voice mode, `Space` mutes, and `Esc` ends the voice session. Drop image files into the terminal while live to attach them to your next spoken request.
+Use `/live <voice>` to select a voice. The transcript keeps the latest four utterances; start Pi with `--live-transcript-limit <n>` to choose a different positive-integer limit. `Ctrl+L` toggles voice mode, `Space` mutes, and `Esc` ends the voice session. Drop image files into the terminal while live to attach them to your next spoken request.
 
 You can make additional requests while work is running. Independent requests are dispatched to Pi in order, while background activities continue concurrently. Their completion is correlated with the request that launched them and announced through the live session. A clear request to stop the current foreground operation aborts that Pi turn. A request to cancel an unambiguous background activity is routed only to its provider. Existing subagent lifecycle events and stop RPC remain supported.
 
