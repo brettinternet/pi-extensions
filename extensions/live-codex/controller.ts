@@ -165,7 +165,7 @@ export function isForegroundCancellation(transcript: string): boolean {
     .replace(/[^a-z0-9'\s]/g, " ")
     .replace(/\s+/g, " ")
     .trim();
-  return /^(?:(?:okay|ok) )?(?:please )?(?:stop|cancel|abort)(?: (?:what you(?:'re| are) doing|that|this|it|the current (?:task|operation|command)))?(?: (?:right now|now))?$/.test(
+  return /^(?:(?:okay|ok) )?(?:please )?(?:stop|cancel|abort)(?: (?:what you(?:'re| are) doing|that|this|it|the (?:current )?(?:task|operation|command)))?(?: (?:right now|now))?$/.test(
     normalized,
   );
 }

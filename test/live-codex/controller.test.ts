@@ -19,6 +19,7 @@ import {
   type ConfirmationRequest,
 } from "../../extensions/live-codex/confirmation.ts";
 import {
+  isForegroundCancellation,
   LiveSession,
   MAX_TYPED_NOTE_CHARS,
   type LiveSessionCallbacks,
@@ -286,6 +287,13 @@ test("a spoken foreground cancellation aborts immediately instead of queueing", 
     contextText(message).includes("I stopped the current operation")
   ));
   await harness.session.stop();
+});
+
+test("common foreground cancellation phrases are recognized", () => {
+  assert.equal(isForegroundCancellation("Okay, stop the command"), true);
+  assert.equal(isForegroundCancellation("Please cancel the current task now"), true);
+  assert.equal(isForegroundCancellation("Abort it"), true);
+  assert.equal(isForegroundCancellation("Stop the background test job"), false);
 });
 
 test("cancellation questions do not abort foreground work", async () => {
