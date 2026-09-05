@@ -491,6 +491,47 @@ test("voice confirmation resolves once without starting a coding turn", async ()
   await harness.session.stop();
 });
 
+test("an exact finalized voice transcript resolves one confirmation", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  await activateVoiceDelegation(harness);
+  const request = confirmationRequest("transcript-confirmation");
+  harness.session.handleConfirmationRequested(request);
+  await flush();
+
+  harness.transport().emit({ type: "turn.done", turn: { role: "user", transcript: "Yes, go ahead." } });
+  await flush();
+  assert.equal(harness.bus.emitted.some(({ name }) =>
+    name === `${CONFIRMATION_RESOLVED_PREFIX}${request.requestId}`
+  ), false);
+
+  harness.transport().emit({ type: "turn.done", turn: { role: "user", transcript: "Approve." } });
+  harness.transport().emit(delegation("duplicate-approval", "Approve"));
+  await flush();
+  const resolution = harness.bus.emitted.find(({ name }) =>
+    name === `${CONFIRMATION_RESOLVED_PREFIX}${request.requestId}`
+  );
+  assert.equal((resolution!.value as { decision: string }).decision, "approved");
+  assert.equal(harness.sentToAgent.length, 0);
+  await harness.session.stop();
+});
+
+test("an exact deny transcript rejects one confirmation", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  await activateVoiceDelegation(harness);
+  const request = confirmationRequest("transcript-denial");
+  harness.session.handleConfirmationRequested(request);
+  harness.transport().emit({ type: "turn.done", turn: { role: "user", transcript: "Deny!" } });
+  await flush();
+
+  const resolution = harness.bus.emitted.find(({ name }) =>
+    name === `${CONFIRMATION_RESOLVED_PREFIX}${request.requestId}`
+  );
+  assert.equal((resolution!.value as { decision: string }).decision, "denied");
+  await harness.session.stop();
+});
+
 test("ordinary and malformed delegations are suppressed while confirmation is pending", async () => {
   const harness = createHarness();
   await harness.session.start();
@@ -577,16 +618,21 @@ test("two confirmations use speakable context on the active voice delegation", a
   harness.session.handleConfirmationRequested(second);
   await flush();
 
-  const prompts = harness.transport().sent.filter(
+  const confirmationPrompts = () => harness.transport().sent.filter(
     (message): message is Extract<LiveClientMessage, { type: "delegation.context.append" }> =>
       message.type === "delegation.context.append" &&
       contextText(message).includes("Confirmation Request"),
   );
+  assert.equal(confirmationPrompts().length, 1);
+
+  harness.transport().emit({ type: "turn.done", turn: { role: "user", transcript: "Approve." } });
+  await flush();
+  const prompts = confirmationPrompts();
   assert.equal(prompts.length, 2);
   assert.ok(prompts.every((message) =>
     message.delegation_item_id === "voice-owner" && message.channel === "speakable"
   ));
-  assert.match(contextText(prompts[1]!), new RegExp(first.requestId));
+  assert.match(contextText(prompts[0]!), new RegExp(first.requestId));
   assert.match(contextText(prompts[1]!), new RegExp(second.requestId));
   await harness.session.stop();
 });
