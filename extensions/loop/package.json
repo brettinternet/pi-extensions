@@ -1,5 +1,5 @@
 {
-  "name": "pi-fresh-loop",
+  "name": "@brettinternet/pi-loop",
   "version": "0.1.0",
   "description": "Run a prompt repeatedly in fresh Pi sessions",
   "type": "module",

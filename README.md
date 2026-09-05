@@ -101,7 +101,7 @@ Or install an individual extension from npm:
 ```sh
 pi install npm:pi-live-codex
 pi install npm:pi-progress
-pi install npm:pi-fresh-loop
+pi install npm:@brettinternet/pi-loop
 pi install npm:pi-title
 pi install npm:pi-herdr-workbench
 ```

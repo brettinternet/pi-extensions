@@ -1,6 +1,6 @@
 # Pi Loop
 
-`pi-fresh-loop` runs one prompt for a bounded number of iterations. Every iteration gets a new Pi session, so files remain available while conversation history does not.
+`@brettinternet/pi-loop` runs one prompt for a bounded number of iterations. Every iteration gets a new Pi session, so files remain available while conversation history does not.
 
 ## Commands
 
@@ -22,5 +22,5 @@ The extension does not use dialogs and is safe to load in print, JSON, and RPC m
 Install it with:
 
 ```sh
-pi install npm:pi-fresh-loop
+pi install npm:@brettinternet/pi-loop
 ```
