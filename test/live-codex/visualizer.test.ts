@@ -46,7 +46,7 @@ describe("Live visualizer", () => {
     assert.deepEqual(drops, ["\x1b[200~/tmp/screenshot.png\x1b[201~"]);
   });
 
-  test("wraps the complete input transcript", () => {
+  test("wraps and labels the complete input transcript", () => {
     const visualizer = new LiveVisualizer(
       { requestRender() {} } as never,
       {} as never,
@@ -56,15 +56,33 @@ describe("Live visualizer", () => {
     );
     const transcript = "one two three four five six";
 
-    visualizer.setTranscript(transcript);
+    visualizer.setUserTranscript(transcript);
     const rows = visualizer.render(12);
     const transcriptRows = rows.slice(3, -1);
 
     assert.ok(transcriptRows.length > 1);
     assert.equal(
       transcriptRows.map((row) => row.slice(1, -1).trimEnd()).join(" "),
-      transcript,
+      `You  ${transcript}`,
     );
     assert.ok(transcriptRows.every((row) => visibleWidth(row) === 12));
+  });
+
+  test("keeps the agent transcript visible when interrupted by the user", () => {
+    const visualizer = new LiveVisualizer(
+      { requestRender() {} } as never,
+      {} as never,
+      {} as never,
+      { fg: (_color: string, text: string) => text } as never,
+      { onStop() {}, onToggleMute() {}, onDrop() {} },
+    );
+
+    visualizer.setAgentTranscript("I found the issue.");
+    visualizer.setUserTranscript("Wait");
+    visualizer.setUserTranscript("");
+
+    const text = visualizer.render(40).join("\n");
+    assert.match(text, /Live  I found the issue\./);
+    assert.doesNotMatch(text, /You/);
   });
 });

@@ -84,6 +84,8 @@ interface Harness {
   bus: EventBus;
   transport(): FakeTransport;
   phases: string[];
+  userTranscripts: string[];
+  agentTranscripts: string[];
   terminal: Array<Error | undefined>;
   sentToAgent: unknown[];
 }
@@ -173,6 +175,8 @@ function delegation(id: string, text: string): LiveServerEvent {
 function createHarness(connectPromise?: Promise<void>): Harness {
   const bus = new EventBus();
   const phases: string[] = [];
+  const userTranscripts: string[] = [];
+  const agentTranscripts: string[] = [];
   const terminal: Array<Error | undefined> = [];
   const sentToAgent: unknown[] = [];
   let transport: FakeTransport | undefined;
@@ -193,7 +197,8 @@ function createHarness(connectPromise?: Promise<void>): Harness {
   const callbacks: LiveSessionCallbacks = {
     onPhase: (phase) => phases.push(phase),
     onInputLevel: () => {},
-    onTranscript: () => {},
+    onUserTranscript: (text) => userTranscripts.push(text),
+    onAgentTranscript: (text) => agentTranscripts.push(text),
     onAttachmentsChanged: () => {},
     onWorkStatus: () => {},
     onTerminal: (error) => terminal.push(error),
@@ -213,6 +218,8 @@ function createHarness(connectPromise?: Promise<void>): Harness {
     bus,
     transport: () => transport!,
     phases,
+    userTranscripts,
+    agentTranscripts,
     terminal,
     sentToAgent,
   };
@@ -246,6 +253,43 @@ test("output activity stays active across brief level drops", (context) => {
   activity.update(false);
   context.mock.timers.tick(250);
   assert.deepEqual(changes, [true, false]);
+});
+
+test("agent transcript survives user interruption until the next agent response", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+
+  harness.transport().emit({
+    type: "output_transcript.added",
+    item: { text: "The checks are still running." },
+  });
+  harness.transport().emit({
+    type: "input_transcript.added",
+    item: { text: "Wait" },
+  });
+  harness.transport().emit({
+    type: "turn.done",
+    turn: { role: "user", transcript: "Wait" },
+  });
+
+  assert.deepEqual(harness.agentTranscripts, ["The checks are still running."]);
+  assert.deepEqual(harness.userTranscripts, ["Wait", ""]);
+
+  harness.transport().emit({
+    type: "output_transcript.added",
+    item: { text: "Okay," },
+  });
+  harness.transport().emit({
+    type: "turn.done",
+    turn: { role: "assistant", transcript: "Okay, I paused." },
+  });
+  assert.deepEqual(harness.agentTranscripts, [
+    "The checks are still running.",
+    "Okay,",
+    "Okay, I paused.",
+  ]);
+
+  await harness.session.stop();
 });
 
 test("background context is buffered until transport connection succeeds", async () => {

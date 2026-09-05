@@ -73,7 +73,8 @@ Treat delegation context as your own internal progress and results. Never mentio
 export interface LiveSessionCallbacks {
   onPhase(phase: LivePhase): void;
   onInputLevel(level: number): void;
-  onTranscript(text: string): void;
+  onUserTranscript(text: string): void;
+  onAgentTranscript(text: string): void;
   onAttachmentsChanged(count: number): void;
   onWorkStatus(status: WorkStatus): void;
   onTerminal(error?: Error): void;
@@ -193,6 +194,8 @@ export class LiveSession {
   #terminalError: Error | undefined;
   #terminalEmitted = false;
   #inputTranscript = "";
+  #outputTranscript = "";
+  #outputTurnComplete = true;
   #attachments: ImageAttachment[] = [];
   readonly #delegationAttachments = new Map<string, ImageAttachment[]>();
   readonly #confirmations = new Map<string, { request: ConfirmationRequest; timer: NodeJS.Timeout }>();
@@ -450,15 +453,30 @@ export class LiveSession {
         this.#refreshPhase();
         break;
       case "input_transcript.added":
+        this.#outputTurnComplete = true;
         this.#inputTranscript = event.item.text.startsWith(this.#inputTranscript)
           ? event.item.text
           : this.#inputTranscript + event.item.text;
-        this.#callbacks.onTranscript(this.#inputTranscript.trim());
+        this.#callbacks.onUserTranscript(this.#inputTranscript.trim());
+        break;
+      case "output_transcript.added":
+        if (this.#outputTurnComplete) {
+          this.#outputTranscript = "";
+          this.#outputTurnComplete = false;
+        }
+        this.#outputTranscript = event.item.text.startsWith(this.#outputTranscript)
+          ? event.item.text
+          : this.#outputTranscript + event.item.text;
+        this.#callbacks.onAgentTranscript(this.#outputTranscript.trim());
         break;
       case "turn.done":
         if (event.turn.role === "user") {
           this.#inputTranscript = "";
-          this.#callbacks.onTranscript("");
+          this.#callbacks.onUserTranscript("");
+        } else {
+          this.#outputTranscript = event.turn.transcript || this.#outputTranscript;
+          this.#outputTurnComplete = true;
+          this.#callbacks.onAgentTranscript(this.#outputTranscript.trim());
         }
         break;
       case "delegation.created":
@@ -469,7 +487,6 @@ export class LiveSession {
         break;
       case "session.updated":
       case "output_audio.delta":
-      case "output_transcript.added":
       case "unknown":
         break;
     }
@@ -532,7 +549,7 @@ export class LiveSession {
     this.#persistActivity("queued", event.item.id, undefined, { request });
     this.#emitWorkStatus();
     this.#inputTranscript = "";
-    this.#callbacks.onTranscript("");
+    this.#callbacks.onUserTranscript("");
     this.#dispatchNext();
   }
 

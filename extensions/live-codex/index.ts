@@ -93,7 +93,10 @@ class LiveExtensionRuntime {
         callbacks: {
           onPhase: (phase) => this.#visualizer?.setPhase(phase),
           onInputLevel: (level) => this.#visualizer?.setInputLevel(level),
-          onTranscript: (text) => this.#visualizer?.setTranscript(text),
+          onUserTranscript: (text) =>
+            this.#visualizer?.setUserTranscript(text),
+          onAgentTranscript: (text) =>
+            this.#visualizer?.setAgentTranscript(text),
           onAttachmentsChanged: (count) =>
             this.#visualizer?.setAttachmentCount(count),
           onWorkStatus: (status) => this.#visualizer?.setWorkStatus(status),

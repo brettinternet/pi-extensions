@@ -38,7 +38,8 @@ export class LiveVisualizer extends CustomEditor {
   #inputLevel = 0;
   #displayLevel = 0;
   #frame = 0;
-  #transcript = "";
+  #userTranscript = "";
+  #agentTranscript = "";
   #attachmentCount = 0;
   #workStatus: WorkStatus = { queued: 0, active: 0, failed: 0 };
 
@@ -69,10 +70,23 @@ export class LiveVisualizer extends CustomEditor {
     this.#displayLevel = Math.max(this.#displayLevel, next);
   }
 
-  setTranscript(text: string): void {
+  setUserTranscript(text: string): void {
+    this.#setTranscript("user", text);
+  }
+
+  setAgentTranscript(text: string): void {
+    this.#setTranscript("agent", text);
+  }
+
+  #setTranscript(role: "user" | "agent", text: string): void {
     const normalized = text.replaceAll("\t", " ").replace(/\s+/g, " ").trim();
-    if (this.#transcript === normalized) return;
-    this.#transcript = normalized;
+    if (role === "user") {
+      if (this.#userTranscript === normalized) return;
+      this.#userTranscript = normalized;
+    } else {
+      if (this.#agentTranscript === normalized) return;
+      this.#agentTranscript = normalized;
+    }
     this.#tui.requestRender();
   }
 
@@ -152,19 +166,44 @@ export class LiveVisualizer extends CustomEditor {
           border,
         )]
       : [];
-    const transcriptRows = wrapTextWithAnsi(this.#transcript, innerWidth).map((line) =>
-      border(
-        this.#colors.fg("accent", line) +
-          " ".repeat(Math.max(0, innerWidth - visibleWidth(line))),
-      ),
+    const userTranscriptRows = this.#renderTranscript(
+      "You",
+      this.#userTranscript,
+      innerWidth,
+      "accent",
+      border,
+    );
+    const agentTranscriptRows = this.#renderTranscript(
+      "Live",
+      this.#agentTranscript,
+      innerWidth,
+      "success",
+      border,
     );
     return [
       top,
       ...spectrum,
       ...attachmentRows,
-      ...transcriptRows,
+      ...userTranscriptRows,
+      ...agentTranscriptRows,
       this.#renderFooter(width, innerWidth),
     ];
+  }
+
+  #renderTranscript(
+    label: string,
+    transcript: string,
+    width: number,
+    color: ThemeColor,
+    border: (content: string) => string,
+  ): string[] {
+    if (!transcript) return [];
+    return wrapTextWithAnsi(`${label}  ${transcript}`, width).map((line) =>
+      border(
+        this.#colors.fg(color, line) +
+          " ".repeat(Math.max(0, width - visibleWidth(line))),
+      )
+    );
   }
 
   #paddedBorder(
