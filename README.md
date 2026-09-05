@@ -18,6 +18,12 @@ Use `/live <voice>` to select a voice. `Ctrl+L` toggles voice mode and `Esc` end
 
 Requires Node.js 22.19+, microphone access, and an OpenAI Codex login (`/login openai-codex`). Only one Pi session owns live voice at a time. Starting `/live` in another session offers an authenticated handoff: old foreground/background Pi work continues, while its voice surface stops and voice starts in the requesting session. Queued voice requests and pending voice-routed confirmations must be resolved in the old session first; running work alone does not block handoff. See [`extensions/live-codex/global-voice-broker.md`](extensions/live-codex/global-voice-broker.md) for the future broker design.
 
+### Loop
+
+Runs a prompt a bounded number of times, creating a fresh Pi session for every iteration. Filesystem changes carry forward, but conversational messages do not. Use `/loop <count> <prompt>` to start, `/loop <count>` to retune future iterations, `/loop status` to inspect, and `/loop` or `/loop stop` to request a graceful stop. Aborted or error output pauses the run; `/loop resume` retries that iteration in another fresh session. State and session ownership are persisted in custom entries, and a compact widget appears while active or paused.
+
+See [`extensions/loop/README.md`](extensions/loop/README.md) for command details.
+
 ### Herdr Workbench
 
 Registers a typed `workbench` tool for visible Neovim, LazyGit, and foreground job panes managed by the `brettinternet.workbench` Herdr plugin. Jobs run asynchronously, remain cancellable, and emit session- and workspace-scoped background activity events for voice surfaces and other consumers.
@@ -95,6 +101,7 @@ Or install an individual extension from npm:
 ```sh
 pi install npm:pi-live-codex
 pi install npm:pi-progress
+pi install npm:pi-fresh-loop
 pi install npm:pi-title
 pi install npm:pi-herdr-workbench
 ```

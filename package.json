@@ -40,6 +40,7 @@
   "pi": {
     "extensions": [
       "./extensions/live-codex/index.ts",
+      "./extensions/loop/index.ts",
       "./extensions/progress/index.ts",
       "./extensions/title/index.ts",
       "./extensions/workbench/index.ts"
