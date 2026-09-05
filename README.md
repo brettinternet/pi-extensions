@@ -34,16 +34,19 @@ See [`extensions/progress/README.md`](extensions/progress/README.md) for exact s
 
 Generates a concise session title once. Generation starts in the background as soon as the first assistant message containing text is finalized (`message_end`); it does not wait for later tool results, additional assistant turns, or the full agent run to settle. The title appears when that background request finishes, is persisted as the Pi session name, and is used verbatim as the terminal title. Existing and manually named sessions are left unchanged.
 
-Global configuration lives at `~/.pi/agent/pi-title.json` (or under `PI_CODING_AGENT_DIR`):
+Global configuration lives at `~/.pi/agent/pi-title.jsonc` (or under `PI_CODING_AGENT_DIR`):
 
-```json
+```jsonc
 {
+  // Generate titles automatically.
   "enabled": true,
   "model": null,
   "maxTokens": 30,
   "maxLength": 60
 }
 ```
+
+Comments and trailing commas are supported. The legacy `pi-title.json` path is still read when no `.jsonc` file exists; `.jsonc` takes precedence when both exist. Configuration changed through `/title` preserves existing comments.
 
 By default, an omitted or `null` model uses the active session model. Set `"model": "auto"` to use an available lightweight model, or set an explicit `provider/model[:effort]` reference.
 

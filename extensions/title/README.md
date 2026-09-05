@@ -14,16 +14,19 @@ pi install npm:pi-title
 
 ## Configure
 
-Global configuration lives at `~/.pi/agent/pi-title.json` (or under `PI_CODING_AGENT_DIR`):
+Global configuration lives at `~/.pi/agent/pi-title.jsonc` (or under `PI_CODING_AGENT_DIR`):
 
-```json
+```jsonc
 {
+  // Generate titles automatically.
   "enabled": true,
   "model": null,
   "maxTokens": 30,
   "maxLength": 60
 }
 ```
+
+Comments and trailing commas are supported. The legacy `pi-title.json` path is still read when no `.jsonc` file exists; `.jsonc` takes precedence when both exist. Configuration changed through `/title` preserves existing comments.
 
 By default, an omitted or `null` model uses the active session model. Set `"model": "auto"` to use an available lightweight model, or set an explicit `provider/model[:effort]` reference.
 
