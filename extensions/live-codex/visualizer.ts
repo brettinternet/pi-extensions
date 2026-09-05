@@ -51,7 +51,7 @@ export class LiveVisualizer extends CustomEditor {
   #frame = 0;
   readonly #transcriptLimit: number;
   readonly #transcript: TranscriptUtterance[] = [];
-  #inProgressTranscript: TranscriptUtterance | undefined;
+  readonly #inProgressTranscripts: Partial<Record<TranscriptRole, TranscriptUtterance>> = {};
   #attachmentCount = 0;
   #workStatus: WorkStatus = { queued: 0, active: 0, failed: 0 };
 
@@ -83,22 +83,31 @@ export class LiveVisualizer extends CustomEditor {
     this.#displayLevel = Math.max(this.#displayLevel, next);
   }
 
-  setUserTranscript(text: string, finalized = false): void {
-    this.#setTranscript("user", text, finalized);
+  setUserTranscript(
+    text: string,
+    finalized = false,
+    startsNew = false,
+  ): void {
+    this.#setTranscript("user", text, finalized, startsNew);
   }
 
-  setAgentTranscript(text: string, finalized = false): void {
-    this.#setTranscript("agent", text, finalized);
+  setAgentTranscript(
+    text: string,
+    finalized = false,
+    startsNew = false,
+  ): void {
+    this.#setTranscript("agent", text, finalized, startsNew);
   }
 
   #setTranscript(
     role: TranscriptRole,
     text: string,
     finalized: boolean,
+    startsNew: boolean,
   ): void {
     const normalized = text.replaceAll("\t", " ").replace(/\s+/g, " ").trim();
-    const inProgress = this.#inProgressTranscript;
-    if (inProgress?.role === role) {
+    const inProgress = startsNew ? undefined : this.#inProgressTranscripts[role];
+    if (inProgress) {
       let changed = false;
       if (normalized && inProgress.text !== normalized) {
         inProgress.text = normalized;
@@ -106,14 +115,13 @@ export class LiveVisualizer extends CustomEditor {
       }
       if (finalized && !inProgress.finalized) {
         inProgress.finalized = true;
-        this.#inProgressTranscript = undefined;
+        delete this.#inProgressTranscripts[role];
         changed = true;
       }
       if (changed) this.#tui.requestRender();
       return;
     }
 
-    this.#inProgressTranscript = undefined;
     if (!normalized) return;
 
     const utterance: TranscriptUtterance = {
@@ -122,11 +130,15 @@ export class LiveVisualizer extends CustomEditor {
       finalized,
     };
     this.#transcript.push(utterance);
-    this.#inProgressTranscript = finalized ? undefined : utterance;
+    if (finalized) {
+      delete this.#inProgressTranscripts[role];
+    } else {
+      this.#inProgressTranscripts[role] = utterance;
+    }
     while (this.#transcript.length > this.#transcriptLimit) {
       const removed = this.#transcript.shift();
-      if (removed === this.#inProgressTranscript) {
-        this.#inProgressTranscript = undefined;
+      if (removed && this.#inProgressTranscripts[removed.role] === removed) {
+        delete this.#inProgressTranscripts[removed.role];
       }
     }
     this.#tui.requestRender();

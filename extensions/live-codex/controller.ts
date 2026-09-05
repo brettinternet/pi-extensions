@@ -79,8 +79,8 @@ export type LiveStopMode = "handoff" | "shutdown";
 export interface LiveSessionCallbacks {
   onPhase(phase: LivePhase): void;
   onInputLevel(level: number): void;
-  onUserTranscript(text: string, finalized: boolean): void;
-  onAgentTranscript(text: string, finalized: boolean): void;
+  onUserTranscript(text: string, finalized: boolean, startsNew: boolean): void;
+  onAgentTranscript(text: string, finalized: boolean, startsNew: boolean): void;
   onAttachmentsChanged(count: number): void;
   onWorkStatus(status: WorkStatus): void;
   onTerminal(error?: Error): void;
@@ -559,35 +559,40 @@ export class LiveSession {
       case "session.started":
         this.#refreshPhase();
         break;
-      case "input_transcript.added":
+      case "input_transcript.added": {
         this.#outputTurnComplete = true;
-        if (!this.#inputTranscript) this.#suppressResolvedConfirmationDelegation = false;
+        const startsNew = !this.#inputTranscript;
+        if (startsNew) this.#suppressResolvedConfirmationDelegation = false;
         this.#inputTranscript = event.item.text.startsWith(this.#inputTranscript)
           ? event.item.text
           : this.#inputTranscript + event.item.text;
-        this.#callbacks.onUserTranscript(this.#inputTranscript.trim(), false);
+        this.#callbacks.onUserTranscript(this.#inputTranscript.trim(), false, startsNew);
         break;
-      case "output_transcript.added":
-        if (this.#outputTurnComplete) {
+      }
+      case "output_transcript.added": {
+        const startsNew = this.#outputTurnComplete;
+        if (startsNew) {
           this.#outputTranscript = "";
           this.#outputTurnComplete = false;
         }
         this.#outputTranscript = event.item.text.startsWith(this.#outputTranscript)
           ? event.item.text
           : this.#outputTranscript + event.item.text;
-        this.#callbacks.onAgentTranscript(this.#outputTranscript.trim(), false);
+        this.#callbacks.onAgentTranscript(this.#outputTranscript.trim(), false, startsNew);
+        break;
+      }
         break;
       case "turn.done":
         if (event.turn.role === "user") {
           const transcript = event.turn.transcript || this.#inputTranscript;
           this.#handleConfirmationTranscript(transcript);
           this.#inputTranscript = "";
-          this.#callbacks.onUserTranscript(transcript.trim(), true);
+          this.#callbacks.onUserTranscript(transcript.trim(), true, false);
         } else {
           const transcript = event.turn.transcript || this.#outputTranscript;
           this.#outputTranscript = "";
           this.#outputTurnComplete = true;
-          this.#callbacks.onAgentTranscript(transcript.trim(), true);
+          this.#callbacks.onAgentTranscript(transcript.trim(), true, false);
         }
         break;
       case "delegation.created":

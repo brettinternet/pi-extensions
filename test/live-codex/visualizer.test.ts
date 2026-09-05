@@ -131,10 +131,10 @@ describe("Live visualizer", () => {
   test("keeps interruptions in spoken order", () => {
     const visualizer = createVisualizer();
 
-    visualizer.setAgentTranscript("I found the issue.");
-    visualizer.setUserTranscript("Wait");
+    visualizer.setAgentTranscript("I found the issue.", false, true);
+    visualizer.setUserTranscript("Wait", false, true);
     visualizer.setUserTranscript("Wait", true);
-    visualizer.setAgentTranscript("Okay, I paused.", true);
+    visualizer.setAgentTranscript("Okay, I paused.", true, true);
 
     assert.deepEqual(transcriptRows(visualizer), [
       "Agent  I found the issue.",
@@ -142,6 +142,20 @@ describe("Live visualizer", () => {
       "Agent  Okay, I paused.",
     ]);
     assert.doesNotMatch(visualizer.render(80).join("\n"), / Live /);
+  });
+
+  test("consolidates interleaved partial and finalized role streams", () => {
+    const visualizer = createVisualizer();
+
+    visualizer.setUserTranscript("How should I have it installed", false, true);
+    visualizer.setAgentTranscript("Let me check that", false, true);
+    visualizer.setUserTranscript("How should I have it installed", true);
+    visualizer.setAgentTranscript("Let me check that quickly.", true);
+
+    assert.deepEqual(transcriptRows(visualizer), [
+      "You  How should I have it installed",
+      "Agent  Let me check that quickly.",
+    ]);
   });
 
   test("trims by utterance count rather than wrapped terminal rows", () => {
