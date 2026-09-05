@@ -1,6 +1,7 @@
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { join } from "node:path";
+import { parse, printParseErrorCode, type ParseError } from "jsonc-parser";
 
 export interface ProgressConfig {
   model: string | null;
@@ -19,6 +20,11 @@ export const DEFAULT_CONFIG: ProgressConfig = {
 const CONFIG_KEYS = new Set(["model", "maxInputChars", "maxTokens", "timeoutMs"]);
 
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
+  const agentDir = env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".pi", "agent");
+  return join(agentDir, "pi-progress.jsonc");
+}
+
+function legacyConfigPath(env: NodeJS.ProcessEnv = process.env): string {
   const agentDir = env.PI_CODING_AGENT_DIR?.trim() || join(homedir(), ".pi", "agent");
   return join(agentDir, "pi-progress.json");
 }
@@ -58,11 +64,44 @@ export function parseConfig(value: unknown): ProgressConfig {
   };
 }
 
-export async function loadConfig(path = configPath()): Promise<ProgressConfig> {
+function parseConfigText(text: string): ProgressConfig {
+  const errors: ParseError[] = [];
+  const value = parse(text, errors, { allowTrailingComma: true });
+  if (errors.length > 0) {
+    const first = errors[0]!;
+    throw new Error(`${printParseErrorCode(first.error)} at offset ${first.offset}`);
+  }
+  return parseConfig(value);
+}
+
+async function loadConfigFile(path: string): Promise<ProgressConfig> {
   try {
-    return parseConfig(JSON.parse(await readFile(path, "utf8")));
+    return parseConfigText(await readFile(path, "utf8"));
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") return { ...DEFAULT_CONFIG };
-    throw new Error(`failed to load ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    throw new Error(`failed to load ${path}: ${error instanceof Error ? error.message : String(error)}`, {
+      cause: error,
+    });
+  }
+}
+
+export async function loadConfig(
+  path?: string,
+  env: NodeJS.ProcessEnv = process.env,
+): Promise<ProgressConfig> {
+  if (path) return loadConfigFile(path);
+
+  try {
+    return await loadConfigFile(configPath(env));
+  } catch (error) {
+    if ((error as { cause?: NodeJS.ErrnoException }).cause?.code !== "ENOENT") throw error;
+  }
+
+  try {
+    return await loadConfigFile(legacyConfigPath(env));
+  } catch (error) {
+    if ((error as { cause?: NodeJS.ErrnoException }).cause?.code === "ENOENT") {
+      return { ...DEFAULT_CONFIG };
+    }
+    throw error;
   }
 }
