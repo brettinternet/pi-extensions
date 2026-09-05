@@ -171,6 +171,18 @@ describe("loop parser and state", () => {
     expect(() => parseLoopCommand("status now")).toThrow("does not accept");
   });
 
+  test("completes public controls and common iteration counts", () => {
+    const { command } = createHarness();
+    expect(command.getArgumentCompletions?.("st")).toEqual([
+      { value: "status", label: "status", description: "Show the current loop state" },
+      { value: "stop", label: "stop", description: "Stop gracefully" },
+    ]);
+    expect(command.getArgumentCompletions?.("3")).toEqual([
+      { value: "3 ", label: "3 <prompt>", description: "Run a prompt three times" },
+    ]);
+    expect(command.getArgumentCompletions?.("__")).toBeNull();
+  });
+
   test("formats persisted status without exposing the prompt", () => {
     const state: LoopState = {
       version: 1,

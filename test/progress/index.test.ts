@@ -50,6 +50,7 @@ function setup() {
       notify: (message: string) => notifications.push(message),
     },
     sessionManager: { getBranch: () => [] },
+    modelRegistry: { getAvailable: () => [] },
   } as unknown as ExtensionContext;
   progressExtension(pi);
   return { handlers, widgets, command: command!, notifications, ctx };
@@ -166,6 +167,16 @@ describe("progress extension", () => {
     handlers.get("before_agent_start")!({}, ctx);
     await flushRender();
     expect(latestLines(widgets)).toEqual(["progress · ● thinking"]);
+  });
+
+  test("completes status, model, and disabling inference", () => {
+    const { command } = setup();
+    expect(command.getArgumentCompletions?.("st")).toEqual([
+      { value: "status", label: "status", description: "Show inference status and configuration" },
+    ]);
+    expect(command.getArgumentCompletions?.("model of")).toEqual([
+      { value: "model off", label: "off", description: "Disable progress inference" },
+    ]);
   });
 
   test("sets, shows, and disables the inference model", async () => {

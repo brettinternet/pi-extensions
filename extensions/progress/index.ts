@@ -2,6 +2,7 @@ import type {
   ExtensionAPI,
   ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
+import { completeArguments, completeModelArgument } from "./completions.ts";
 import { configPath, loadConfig, saveConfig, type ProgressConfig } from "./config.ts";
 import { ActivityDigest } from "./digest.ts";
 import {
@@ -264,7 +265,18 @@ export default function progressExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("progress", {
-    description: "Show deterministic progress and inference status",
+    description: "[status | model [provider/model[:thinking]|off]] — Show or configure progress inference",
+    getArgumentCompletions: (prefix) => {
+      if (/^model\s/i.test(prefix)) {
+        return completeModelArgument(prefix, currentContext, [
+          { value: "model off", label: "off", description: "Disable progress inference" },
+        ]);
+      }
+      return completeArguments(prefix, [
+        { value: "status", label: "status", description: "Show inference status and configuration" },
+        { value: "model ", label: "model", description: "Show or select the inference model" },
+      ]);
+    },
     handler: async (args, ctx) => {
       const input = args.trim();
       const [action, ...rest] = input.split(/\s+/).filter(Boolean);

@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { completeArguments, completeModelArgument } from "./completions.ts";
 import { configPath, loadConfig, saveConfig, type Config } from "./config.js";
 import { cleanTitle, firstCompletedExchange, TITLE_SYSTEM_PROMPT } from "./title.js";
 
@@ -191,6 +192,7 @@ export default function titleExtension(pi: ExtensionAPI) {
   let generationController: AbortController | undefined;
   let backgroundGeneration: Promise<string | undefined> | undefined;
   let lifecycle = 0;
+  let completionContext: ExtensionContext | undefined;
 
   function applyTerminalTitle(ctx: ExtensionContext, title = pi.getSessionName()): void {
     if (ctx.hasUI && title) ctx.ui.setTitle(title);
@@ -304,11 +306,13 @@ export default function titleExtension(pi: ExtensionAPI) {
   }
 
   pi.on("session_start", (_event, ctx) => {
+    completionContext = ctx;
     resetGeneration();
     deferTerminalTitle(ctx);
   });
 
   pi.on("session_shutdown", () => {
+    completionContext = undefined;
     resetGeneration();
   });
 
@@ -331,7 +335,23 @@ export default function titleExtension(pi: ExtensionAPI) {
   });
 
   pi.registerCommand("title", {
-    description: "Set a session title or configure automatic titles",
+    description: "[status | on | off | model [provider/model[:thinking]|auto|active] | regenerate | set <title>] — Set or configure titles",
+    getArgumentCompletions: (prefix) => {
+      if (/^model\s/i.test(prefix)) {
+        return completeModelArgument(prefix, completionContext, [
+          { value: "model active", label: "active", description: "Use the active session model" },
+          { value: "model auto", label: "auto", description: "Use the lightweight-model fallback" },
+        ]);
+      }
+      return completeArguments(prefix, [
+        { value: "status", label: "status", description: "Show title status and configuration" },
+        { value: "on", label: "on", description: "Enable automatic titles" },
+        { value: "off", label: "off", description: "Disable automatic titles" },
+        { value: "model ", label: "model", description: "Show or select the title model" },
+        { value: "regenerate", label: "regenerate", description: "Generate a replacement title" },
+        { value: "set ", label: "set <title>", description: "Set a title matching a subcommand name" },
+      ]);
+    },
     handler: async (args, ctx) => {
       const input = args.trim();
       const [action, ...rest] = input.split(/\s+/).filter(Boolean);

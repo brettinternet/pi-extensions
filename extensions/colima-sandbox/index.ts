@@ -261,7 +261,7 @@ export default function colimaSandbox(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("sandbox", {
-    description: "Show Colima sandbox status",
+    description: "No arguments — Show Colima sandbox status",
     handler: async (_args, ctx) => {
       try {
         await ensureBroker(ctx);

@@ -39,6 +39,17 @@ const ACTIVE_STATUSES = new Set<LoopStatus>(["active", "stopping"]);
 const VISIBLE_STATUSES = new Set<LoopStatus>(["active", "stopping", "paused"]);
 const TERMINAL_STATUSES = new Set<LoopStatus>(["completed", "stopped", "inactive"]);
 
+type ArgumentCompletion = { value: string; label: string; description?: string };
+
+function completeArguments(
+  prefix: string,
+  candidates: readonly ArgumentCompletion[],
+): ArgumentCompletion[] | null {
+  const query = prefix.trimStart().toLowerCase();
+  const matches = candidates.filter(({ value }) => value.toLowerCase().includes(query));
+  return matches.length > 0 ? matches : null;
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -659,7 +670,15 @@ export default function loopExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("loop", {
-    description: "Run a prompt in fresh sessions for a bounded number of iterations",
+    description: "<count> <prompt> | <count> | status | resume | stop — Run a bounded fresh-session loop",
+    getArgumentCompletions: (prefix) => completeArguments(prefix, [
+      { value: "status", label: "status", description: "Show the current loop state" },
+      { value: "resume", label: "resume", description: "Retry a paused iteration" },
+      { value: "stop", label: "stop", description: "Stop gracefully" },
+      { value: "1 ", label: "1 <prompt>", description: "Run a prompt once" },
+      { value: "3 ", label: "3 <prompt>", description: "Run a prompt three times" },
+      { value: "5 ", label: "5 <prompt>", description: "Run a prompt five times" },
+    ]),
     handler: async (args, ctx) => {
       try {
         await handleCommand(args, ctx);

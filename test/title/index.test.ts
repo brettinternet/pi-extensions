@@ -196,6 +196,12 @@ describe("title command", () => {
     } as unknown as ExtensionCommandContext;
 
     titleExtension(pi);
+    expect(command!.getArgumentCompletions?.("reg")).toEqual([
+      { value: "regenerate", label: "regenerate", description: "Generate a replacement title" },
+    ]);
+    expect(command!.getArgumentCompletions?.("model act")).toEqual([
+      { value: "model active", label: "active", description: "Use the active session model" },
+    ]);
     await command!.handler("My custom title", ctx);
     await command!.handler("set status", ctx);
 

@@ -5,6 +5,7 @@ import type {
   KeybindingsManager,
 } from "@earendil-works/pi-coding-agent";
 import type {
+  AutocompleteItem,
   EditorComponent,
   EditorTheme,
   TUI,
@@ -33,6 +34,32 @@ import {
 } from "./visualizer.ts";
 
 export const LIVE_TRANSCRIPT_LIMIT_FLAG = "live-transcript-limit";
+
+const LIVE_VOICES = [
+  "sol",
+  "alloy",
+  "ash",
+  "ballad",
+  "cedar",
+  "coral",
+  "echo",
+  "marin",
+  "sage",
+  "shimmer",
+  "verse",
+] as const;
+
+function completeVoices(prefix: string): AutocompleteItem[] | null {
+  const query = prefix.trimStart().toLowerCase();
+  const matches = LIVE_VOICES
+    .filter((voice) => voice.includes(query))
+    .map((voice) => ({
+      value: voice,
+      label: voice,
+      description: voice === "sol" ? "Default voice" : "Realtime voice",
+    }));
+  return matches.length > 0 ? matches : null;
+}
 
 export function combineRestoredDrafts(
   previousText: string,
@@ -375,7 +402,8 @@ export default function piLiveCodex(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("live", {
-    description: "Start or stop gpt-live-1-codex voice mode",
+    description: "[voice] — Start or stop gpt-live-1-codex voice mode (default: sol)",
+    getArgumentCompletions: completeVoices,
     handler: async (args, context) => {
       await runtime.toggle(
         context,

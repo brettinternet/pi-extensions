@@ -63,6 +63,12 @@ test("registers the string limit flag and rejects invalid values before voice st
     description: "Number of live transcript utterances to retain",
     default: "4",
   });
+  assert.deepEqual(command!.getArgumentCompletions?.("mar"), [
+    { value: "marin", label: "marin", description: "Realtime voice" },
+  ]);
+  assert.deepEqual(command!.getArgumentCompletions?.("sol"), [
+    { value: "sol", label: "sol", description: "Default voice" },
+  ]);
 
   const context = {
     mode: "tui",
