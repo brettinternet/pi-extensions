@@ -89,6 +89,7 @@ interface Harness {
   agentTranscripts: string[];
   terminal: Array<Error | undefined>;
   sentToAgent: unknown[];
+  setIdle(value: boolean): void;
 }
 
 function deferred(): {
@@ -180,6 +181,7 @@ function createHarness(connectPromise?: Promise<void>): Harness {
   const agentTranscripts: string[] = [];
   const terminal: Array<Error | undefined> = [];
   const sentToAgent: unknown[] = [];
+  let idle = true;
   let transport: FakeTransport | undefined;
   const pi = {
     events: bus,
@@ -192,7 +194,7 @@ function createHarness(connectPromise?: Promise<void>): Harness {
       getSessionFile: () => "/session.jsonl",
     },
     modelRegistry: { getProviderAuth: async () => undefined },
-    isIdle: () => true,
+    isIdle: () => idle,
     abort: () => {},
   } as unknown as ExtensionContext;
   const callbacks: LiveSessionCallbacks = {
@@ -223,6 +225,9 @@ function createHarness(connectPromise?: Promise<void>): Harness {
     agentTranscripts,
     terminal,
     sentToAgent,
+    setIdle: (value) => {
+      idle = value;
+    },
   };
 }
 
@@ -245,6 +250,28 @@ function contextText(message: LiveClientMessage): string {
     ? message.content.map(({ text }) => text).join("\n")
     : "";
 }
+
+test("handoff blocks queued delegations and pending confirmations, not active work", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  await activateVoiceDelegation(harness, "active");
+
+  assert.deepEqual(harness.session.handoffBlockers(), []);
+
+  harness.setIdle(false);
+  harness.transport().emit(delegation("queued", "Run another visible command"));
+  await flush();
+  assert.match(harness.session.handoffBlockers().join(" "), /queued voice requests/);
+
+  harness.setIdle(true);
+  harness.session.handleAgentSettled();
+  await flush();
+  assert.deepEqual(harness.session.handoffBlockers(), []);
+
+  harness.session.handleConfirmationRequested(confirmationRequest("handoff-confirmation"));
+  assert.match(harness.session.handoffBlockers().join(" "), /pending voice-routed confirmations/);
+  await harness.session.stop();
+});
 
 test("output activity stays active across brief level drops", (context) => {
   context.mock.timers.enable({ apis: ["setTimeout"] });

@@ -17,7 +17,8 @@
     "*.ts",
     "*.cts",
     "*.cjs",
-    "README.md"
+    "README.md",
+    "global-voice-broker.md"
   ],
   "publishConfig": {
     "access": "public"

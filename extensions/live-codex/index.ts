@@ -19,7 +19,14 @@ import {
 } from "./confirmation.ts";
 import { LiveSession, type LiveStopMode } from "./controller.ts";
 import { loadDroppedImages } from "./image-attachments.ts";
-import { acquireVoiceLock, type VoiceLock } from "./voice-lock.ts";
+import {
+  acquireVoiceLock,
+  requestVoiceLockHandoff,
+  VoiceLockHeldError,
+  type VoiceLock,
+  type VoiceLockHandoffRequest,
+  type VoiceLockHandoffResponse,
+} from "./voice-lock.ts";
 import { LiveVisualizer } from "./visualizer.ts";
 
 type EditorFactory = (
@@ -67,10 +74,36 @@ class LiveExtensionRuntime {
 
     const previousEditor = context.ui.getEditorComponent();
     const previousText = context.ui.getEditorText();
+    const sessionId = context.sessionManager.getSessionId();
     try {
-      this.#voiceLock = acquireVoiceLock(
-        context.sessionManager.getSessionId(),
-      );
+      let voiceLock: VoiceLock;
+      try {
+        voiceLock = await acquireVoiceLock(sessionId);
+      } catch (error) {
+        if (!(error instanceof VoiceLockHeldError) || !error.owner) throw error;
+        const owner = error.owner;
+        const moveVoice = await context.ui.confirm(
+          "Move voice mode here?",
+          `Another Pi session currently owns live voice (PID ${owner.pid}, session ${owner.sessionId}). Move voice controls here? Work already running in that session will continue there; only voice controls move to this session.`,
+        );
+        if (!moveVoice) {
+          context.ui.notify(
+            "Voice mode remains active in the other Pi session.",
+            "info",
+          );
+          return;
+        }
+        const handoff = await requestVoiceLockHandoff(owner, sessionId);
+        if (!handoff.accepted) {
+          context.ui.notify(
+            handoff.reason ?? "The other Pi session declined the voice handoff.",
+            "warning",
+          );
+          return;
+        }
+        voiceLock = await acquireVoiceLock(sessionId);
+      }
+      this.#voiceLock = voiceLock;
     } catch (error) {
       context.ui.notify(
         error instanceof Error ? error.message : String(error),
@@ -105,6 +138,9 @@ class LiveExtensionRuntime {
         },
       });
       this.#session = session;
+      this.#voiceLock?.setHandoffHandler((request) =>
+        this.#handleHandoff(request),
+      );
       const activeSession = session;
 
       context.ui.setEditorComponent((tui, editorTheme, keybindings) => {
@@ -217,6 +253,28 @@ class LiveExtensionRuntime {
       await session.stop(mode);
     } finally {
       this.#finish(session);
+    }
+  }
+
+  async #handleHandoff(
+    _request: VoiceLockHandoffRequest,
+  ): Promise<VoiceLockHandoffResponse> {
+    const session = this.#session;
+    if (!session) return { accepted: true };
+    const blockers = session.handoffBlockers();
+    if (blockers.length > 0) {
+      return { accepted: false, reason: blockers.join(" ") };
+    }
+    try {
+      await this.stop("handoff");
+      return { accepted: true };
+    } catch (cause) {
+      return {
+        accepted: false,
+        reason: cause instanceof Error
+          ? `Voice handoff could not stop the old voice session: ${cause.message}`
+          : "Voice handoff could not stop the old voice session.",
+      };
     }
   }
 

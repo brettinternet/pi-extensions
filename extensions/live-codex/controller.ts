@@ -218,6 +218,7 @@ export class LiveSession {
   #terminalEmitted = false;
   #inputTranscript = "";
   #outputTranscript = "";
+  #pendingDelegationEvents = 0;
   #outputTurnComplete = true;
   #attachments: ImageAttachment[] = [];
   readonly #delegationAttachments = new Map<string, ImageAttachment[]>();
@@ -380,6 +381,21 @@ export class LiveSession {
     );
     if (!finished) return;
     this.#queueAction(() => this.#finishActivity(finished));
+  }
+
+  handoffBlockers(): string[] {
+    const blockers: string[] = [];
+    if (this.#pendingDelegationEvents > 0 || this.#activities.status().queued > 0) {
+      blockers.push(
+        "The old voice session has queued voice requests that have not been dispatched. Resolve or wait for them in the old session first, then retry.",
+      );
+    }
+    if (this.#confirmations.size > 0) {
+      blockers.push(
+        "The old voice session has pending voice-routed confirmations. Approve or deny them in the old session first, then retry.",
+      );
+    }
+    return blockers;
   }
 
   handleConfirmationRequested(value: unknown): void {
@@ -573,7 +589,14 @@ export class LiveSession {
         }
         break;
       case "delegation.created":
-        this.#queueAction(() => this.#handleDelegation(event));
+        this.#pendingDelegationEvents += 1;
+        this.#queueAction(async () => {
+          try {
+            await this.#handleDelegation(event);
+          } finally {
+            this.#pendingDelegationEvents -= 1;
+          }
+        });
         break;
       case "error":
         this.#fail(new Error(event.message));

@@ -22,6 +22,8 @@ Use `/live <voice>` to select a voice. `Ctrl+L` toggles voice mode, `Space` mute
 
 You can make additional requests while work is running. Independent requests are dispatched to Pi in order, while background activities continue concurrently. Their completion is correlated with the request that launched them and announced through the live session. A clear request to stop the current foreground operation aborts that Pi turn. A request to cancel an unambiguous background activity is routed only to its provider. Existing subagent lifecycle events and stop RPC remain supported.
 
+Only one Pi session owns live voice at a time. If another session owns it, `/live` asks whether to move voice here. Confirming sends an authenticated local request; the old session stops only its voice surface, releases ownership, and leaves its foreground/background Pi work running. Voice then starts here automatically. Handoff is refused while the old voice session has undispatched voice requests or pending voice-routed confirmations; resolve those in the old session first. Running work by itself does not block handoff. See [`global-voice-broker.md`](global-voice-broker.md) for the future broker design.
+
 ## Background activity wire contract
 
 Separately installed extensions integrate through `pi.events`; no package imports are required. Live Codex keeps its own structural validation and types in `background-activity.ts`.
