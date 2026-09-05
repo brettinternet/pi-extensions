@@ -6,7 +6,6 @@ import {
   buildLiveSessionPayload,
   buildResponseCreate,
   buildSessionContextAppend,
-  buildSessionUpdate,
   chunkLiveContext,
   parseLiveServerEvent,
 } from "../../extensions/live-codex/protocol.ts";
@@ -97,10 +96,6 @@ describe("Frameless Bidi protocol", () => {
     assert.deepEqual(buildResponseCreate(), {
       type: "response.create",
       response: { output_modalities: ["audio"] },
-    });
-    assert.deepEqual(buildSessionUpdate("system instructions"), {
-      type: "session.update",
-      session: { instructions: "system instructions" },
     });
   });
 });

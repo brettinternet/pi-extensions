@@ -441,19 +441,18 @@ test("voice confirmation resolves once without starting a coding turn", async ()
     name === `${CONFIRMATION_ACKNOWLEDGED_PREFIX}${request.requestId}` &&
     (value as { operationId?: string }).operationId === request.operationId
   ));
-  const confirmationMessages = harness.transport().sent.slice(-3);
-  assert.equal(confirmationMessages.length, 3);
-  assert.equal(confirmationMessages[0]!.type, "session.update");
-  const activeInstructions = (confirmationMessages[0] as { session: { instructions: string } }).session.instructions;
-  assert.match(activeInstructions, new RegExp(request.requestId));
-  assert.equal(activeInstructions.includes(request.title), false);
-  assert.equal(activeInstructions.includes(request.summary), false);
-  assert.match(contextText(confirmationMessages[1]!), /Approve git push/);
-  assert.match(contextText(confirmationMessages[1]!), /git.*push/);
-  assert.deepEqual(confirmationMessages[2], {
+  const confirmationMessages = harness.transport().sent.slice(-2);
+  assert.equal(confirmationMessages.length, 2);
+  const confirmationContext = contextText(confirmationMessages[0]!);
+  assert.match(confirmationContext, /ACTIVE CONFIRMATION MODE/);
+  assert.match(confirmationContext, new RegExp(request.requestId));
+  assert.match(confirmationContext, /Approve git push/);
+  assert.match(confirmationContext, /git.*push/);
+  assert.deepEqual(confirmationMessages[1], {
     type: "response.create",
     response: { output_modalities: ["audio"] },
   });
+  assert.equal(harness.terminal.length, 0);
 
   harness.transport().emit({
     type: "output_transcript.added",
@@ -476,10 +475,8 @@ test("voice confirmation resolves once without starting a coding turn", async ()
   assert.equal(harness.sentToAgent.length, 0);
   await flush();
   const restored = harness.transport().sent.at(-1);
-  assert.deepEqual(restored, {
-    type: "session.update",
-    session: { instructions: activeInstructions.split("\n\nSYSTEM CONFIRMATION MODE:")[0] },
-  });
+  assert.equal(restored?.type, "session.context.append");
+  assert.match(contextText(restored!), /Confirmation mode ended/);
   await harness.session.stop();
 });
 
@@ -702,10 +699,10 @@ test("confirmation prompt buffers its active response until transport connection
   connection.resolve();
   await startPromise;
   await flush();
-  const messages = harness.transport().sent.slice(0, 3);
-  assert.equal(messages[0]!.type, "session.update");
-  assert.match(contextText(messages[1]!), /Confirmation Request/);
-  assert.deepEqual(messages[2], {
+  const messages = harness.transport().sent.slice(0, 2);
+  assert.match(contextText(messages[0]!), /ACTIVE CONFIRMATION MODE/);
+  assert.match(contextText(messages[0]!), /Confirmation Request/);
+  assert.deepEqual(messages[1], {
     type: "response.create",
     response: { output_modalities: ["audio"] },
   });

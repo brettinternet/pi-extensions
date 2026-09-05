@@ -26,10 +26,6 @@ export type LiveClientMessage =
       content: LiveInputTextContent[];
     }
   | {
-      type: "session.update";
-      session: { instructions: string };
-    }
-  | {
       type: "response.create";
       response: { output_modalities: ["audio"] };
     }
@@ -240,13 +236,6 @@ export function buildSessionContextAppend(
     type: "session.context.append",
     ...(channel ? { channel } : {}),
     content: [{ type: "input_text", text }],
-  };
-}
-
-export function buildSessionUpdate(instructions: string): LiveClientMessage {
-  return {
-    type: "session.update",
-    session: { instructions },
   };
 }
 
