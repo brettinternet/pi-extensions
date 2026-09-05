@@ -2,10 +2,10 @@
 
 Compact, passive activity progress for the [Pi coding agent](https://pi.dev).
 
-The extension observes Pi's existing lifecycle events and renders at most two truncated lines below the editor. Settled progress remains visible until the next user-initiated run begins. It does not register an LLM tool, alter prompts, call a model, or claim semantic task completion.
+The extension observes Pi's lifecycle events and renders at most two truncated lines below the editor. Settled progress remains visible until the next user-initiated run begins.
 
 ```text
-progress · ● edit src/index.ts · ✓ bun test
+progress · Verification inferred · ● edit src/index.ts · ✓ bun test
  touched src/index.ts · test/index.test.ts
 ```
 
@@ -18,7 +18,26 @@ progress · ● edit src/index.ts · ✓ bun test
 
 Touched paths mean only that Pi reported a successful `edit` or `write` call. They are not an exhaustive Git diff and do not prove that file bytes changed. Check marks report tool success, not semantic correctness.
 
-Delegated work is intentionally left to [`pi-subagents`](https://github.com/nicobailon/pi-subagents) FleetView rather than duplicated here.
+Delegated work remains available through [`pi-subagents`](https://github.com/nicobailon/pi-subagents) FleetView rather than being duplicated here.
+
+## Optional inference
+
+Semantic phase labels are disabled unless an explicit model is configured in `~/.pi/agent/pi-progress.json` (or `$PI_CODING_AGENT_DIR/pi-progress.json`):
+
+```json
+{
+  "model": "openai/gpt-5-nano",
+  "maxInputChars": 12000,
+  "maxTokens": 180,
+  "timeoutMs": 15000
+}
+```
+
+The model reference must resolve exactly and have configured authentication. `:off` and `:minimal` thinking suffixes are supported; reasoning defaults to off. There is no automatic model selection or fallback to the active session model.
+
+Inference receives only a bounded, redacted activity digest: a truncated user request and final response excerpt, previous inference, compact tool names/arguments/outcomes/durations, edit/write paths, and recognized check commands. It does not receive system prompts, reasoning, tool output, file contents, diffs, environment variables, credentials, or the full transcript. Paths, commands, and request/response excerpts are disclosed to the configured model provider. Requests use fresh IDs with prompt-cache retention disabled.
+
+Inference is advisory UI metadata. It does not alter model context, register an LLM-callable tool, control execution, or provide verification evidence. Invalid, low-confidence, failed, timed-out, cancelled, and stale responses are discarded. Use `/progress status` to inspect configuration and the last inference error.
 
 ## Install
 

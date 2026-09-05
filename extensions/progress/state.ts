@@ -22,12 +22,21 @@ export interface CheckActivity {
   outcome: Exclude<CheckOutcome, "running">;
 }
 
+export interface SemanticSnapshot {
+  phase: string;
+  current: string;
+  completed: string[];
+  blocked: string[];
+  confidence: number;
+}
+
 export interface ProgressSnapshot {
   runStarted: boolean;
   agentActive: boolean;
   tools: ToolActivity[];
   checks: CheckActivity[];
   touchedPaths: string[];
+  semantic?: SemanticSnapshot;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -114,6 +123,8 @@ export class ProgressState {
   readonly #tools = new Map<string, ToolActivity>();
   readonly #checks: CheckActivity[] = [];
   readonly #touchedPaths = new Map<string, true>();
+  #semantic: SemanticSnapshot | undefined;
+  #generation = 0;
 
   reset(): void {
     this.#runStarted = false;
@@ -121,6 +132,8 @@ export class ProgressState {
     this.#tools.clear();
     this.#checks.length = 0;
     this.#touchedPaths.clear();
+    this.#semantic = undefined;
+    this.#generation += 1;
   }
 
   beginRun(): void {
@@ -129,6 +142,28 @@ export class ProgressState {
     this.#tools.clear();
     this.#checks.length = 0;
     this.#touchedPaths.clear();
+    this.#semantic = undefined;
+    this.#generation += 1;
+  }
+
+  generation(): number {
+    return this.#generation;
+  }
+
+  invalidateInference(): void {
+    this.#generation += 1;
+  }
+
+  setSemantic(semantic: SemanticSnapshot | undefined): void {
+    this.#semantic = semantic
+      ? { ...semantic, completed: [...semantic.completed], blocked: [...semantic.blocked] }
+      : undefined;
+  }
+
+  semantic(): SemanticSnapshot | undefined {
+    return this.#semantic
+      ? { ...this.#semantic, completed: [...this.#semantic.completed], blocked: [...this.#semantic.blocked] }
+      : undefined;
   }
 
   settleRun(): void {
@@ -187,6 +222,7 @@ export class ProgressState {
       tools: [...this.#tools.values()],
       checks: [...this.#checks],
       touchedPaths: [...this.#touchedPaths.keys()],
+      ...(this.#semantic ? { semantic: this.semantic() } : {}),
     };
   }
 }

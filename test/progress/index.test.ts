@@ -26,6 +26,8 @@ function setup() {
   }> = [];
   const pi = {
     on: (name: string, handler: Handler) => handlers.set(name, handler),
+    registerCommand: () => {},
+    appendEntry: () => {},
   } as unknown as ExtensionAPI;
   const ctx = {
     cwd: "/repo",
@@ -36,7 +38,9 @@ function setup() {
         content: WidgetFactory | undefined,
         options?: { placement?: string },
       ) => widgets.push({ key, content, options }),
+      notify: () => {},
     },
+    sessionManager: { getBranch: () => [] },
   } as unknown as ExtensionContext;
   progressExtension(pi);
   return { handlers, widgets, ctx };
