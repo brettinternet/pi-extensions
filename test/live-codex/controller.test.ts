@@ -96,6 +96,7 @@ interface Harness {
   userTranscriptStarts: boolean[];
   terminal: Array<Error | undefined>;
   sentToAgent: unknown[];
+  aborts(): number;
   setIdle(value: boolean): void;
 }
 
@@ -192,6 +193,7 @@ function createHarness(
   const userTranscriptStarts: boolean[] = [];
   const terminal: Array<Error | undefined> = [];
   const sentToAgent: unknown[] = [];
+  let abortCount = 0;
   let idle = true;
   let transport: FakeTransport | undefined;
   const pi = {
@@ -206,7 +208,9 @@ function createHarness(
     },
     modelRegistry: { getProviderAuth: async () => undefined },
     isIdle: () => idle,
-    abort: () => {},
+    abort: () => {
+      abortCount += 1;
+    },
   } as unknown as ExtensionContext;
   const callbacks: LiveSessionCallbacks = {
     onPhase: (phase) => phases.push(phase),
@@ -241,6 +245,7 @@ function createHarness(
     userTranscriptStarts,
     terminal,
     sentToAgent,
+    aborts: () => abortCount,
     setIdle: (value) => {
       idle = value;
     },
@@ -260,6 +265,44 @@ async function activateVoiceDelegation(
   await flush();
   harness.sentToAgent.length = 0;
 }
+
+test("a spoken foreground cancellation aborts immediately instead of queueing", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  harness.setIdle(false);
+
+  harness.transport().emit({
+    type: "turn.done",
+    turn: { role: "user", transcript: "Okay, stop what you're doing." },
+  });
+  assert.equal(harness.aborts(), 1);
+
+  harness.transport().emit(delegation("stop", "Stop the sleep command"));
+  await flush();
+  assert.equal(harness.sentToAgent.length, 0);
+  assert.ok(harness.transport().sent.some((message) =>
+    message.type === "delegation.context.append" &&
+    message.delegation_item_id === "stop" &&
+    contextText(message).includes("I stopped the current operation")
+  ));
+  await harness.session.stop();
+});
+
+test("cancellation questions do not abort foreground work", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  harness.setIdle(false);
+
+  harness.transport().emit({
+    type: "turn.done",
+    turn: {
+      role: "user",
+      transcript: "It looks like the sleep is still running. Did you stop it?",
+    },
+  });
+  assert.equal(harness.aborts(), 0);
+  await harness.session.stop();
+});
 
 test("typed note is attached and mirrored exactly once", async () => {
   const harness = createHarness();

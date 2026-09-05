@@ -158,6 +158,18 @@ function transcriptConfirmationDecision(
   return undefined;
 }
 
+export function isForegroundCancellation(transcript: string): boolean {
+  const normalized = transcript
+    .toLowerCase()
+    .replaceAll("’", "'")
+    .replace(/[^a-z0-9'\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+  return /^(?:(?:okay|ok) )?(?:please )?(?:stop|cancel|abort)(?: (?:what you(?:'re| are) doing|that|this|it|the current (?:task|operation|command)))?(?: (?:right now|now))?$/.test(
+    normalized,
+  );
+}
+
 export class OutputActivityLatch {
   readonly #onChange: (active: boolean) => void;
   readonly #releaseDelayMs: number;
@@ -224,6 +236,7 @@ export class LiveSession {
   #inputTranscript = "";
   #inputContinuationDeadline: number | undefined;
   #outputTranscript = "";
+  #foregroundCancellationPending = false;
   #pendingDelegationEvents = 0;
   #outputTurnComplete = true;
   #attachments: ImageAttachment[] = [];
@@ -646,6 +659,13 @@ export class LiveSession {
           } else {
             this.#handleConfirmationTranscript(transcript);
           }
+          if (
+            !this.#context.isIdle() &&
+            isForegroundCancellation(transcript)
+          ) {
+            this.#foregroundCancellationPending = true;
+            this.#context.abort();
+          }
           this.#inputTranscript = "";
           this.#inputContinuationDeadline = undefined;
           this.#callbacks.onUserTranscript(transcript.trim(), true, false);
@@ -653,6 +673,7 @@ export class LiveSession {
           const transcript = event.turn.transcript || this.#outputTranscript;
           this.#outputTranscript = "";
           this.#outputTurnComplete = true;
+          this.#foregroundCancellationPending = false;
           this.#callbacks.onAgentTranscript(transcript.trim(), true, false);
         }
         break;
@@ -755,6 +776,14 @@ export class LiveSession {
       if (this.#confirmations.size > 0) {
         this.#correctConfirmationDelegation(event.item.id);
       }
+      return;
+    }
+    if (this.#foregroundCancellationPending) {
+      this.#foregroundCancellationPending = false;
+      this.#appendDelegationContext(
+        event.item.id,
+        `"Agent Final Message":\n\nI stopped the current operation.`,
+      );
       return;
     }
     if (request === CANCEL_CURRENT_REQUEST) {
