@@ -93,10 +93,7 @@ describe("Frameless Bidi protocol", () => {
       delegation_item_id: "delegate_1",
       content: [{ type: "input_text", text: "done" }],
     });
-    assert.deepEqual(buildResponseCreate(), {
-      type: "response.create",
-      response: { output_modalities: ["audio"] },
-    });
+    assert.deepEqual(buildResponseCreate(), { type: "response.create" });
   });
 });
 

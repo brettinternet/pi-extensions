@@ -25,10 +25,7 @@ export type LiveClientMessage =
       channel?: LiveContextChannel;
       content: LiveInputTextContent[];
     }
-  | {
-      type: "response.create";
-      response: { output_modalities: ["audio"] };
-    }
+  | { type: "response.create" }
   | { type: "session.close" };
 
 export interface LiveResponseLifecycle {
@@ -253,10 +250,7 @@ export function buildDelegationContextAppend(
 }
 
 export function buildResponseCreate(): LiveClientMessage {
-  return {
-    type: "response.create",
-    response: { output_modalities: ["audio"] },
-  };
+  return { type: "response.create" };
 }
 
 export function buildSessionClose(): LiveClientMessage {

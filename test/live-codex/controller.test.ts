@@ -448,10 +448,7 @@ test("voice confirmation resolves once without starting a coding turn", async ()
   assert.match(confirmationContext, new RegExp(request.requestId));
   assert.match(confirmationContext, /Approve git push/);
   assert.match(confirmationContext, /git.*push/);
-  assert.deepEqual(confirmationMessages[1], {
-    type: "response.create",
-    response: { output_modalities: ["audio"] },
-  });
+  assert.deepEqual(confirmationMessages[1], { type: "response.create" });
   assert.equal(harness.terminal.length, 0);
 
   harness.transport().emit({
@@ -702,10 +699,7 @@ test("confirmation prompt buffers its active response until transport connection
   const messages = harness.transport().sent.slice(0, 2);
   assert.match(contextText(messages[0]!), /ACTIVE CONFIRMATION MODE/);
   assert.match(contextText(messages[0]!), /Confirmation Request/);
-  assert.deepEqual(messages[1], {
-    type: "response.create",
-    response: { output_modalities: ["audio"] },
-  });
+  assert.deepEqual(messages[1], { type: "response.create" });
   await harness.session.stop();
 });
 
