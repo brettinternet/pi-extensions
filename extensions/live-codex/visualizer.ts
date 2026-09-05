@@ -198,10 +198,14 @@ export class LiveVisualizer extends CustomEditor {
     border: (content: string) => string,
   ): string[] {
     if (!transcript) return [];
-    return wrapTextWithAnsi(`${label}  ${transcript}`, width).map((line) =>
+    const badge = this.#colors.fg(
+      color,
+      this.#colors.inverse(` ${label} `),
+    );
+    const content = `${badge} ${this.#colors.fg(color, transcript)}`;
+    return wrapTextWithAnsi(content, width).map((line) =>
       border(
-        this.#colors.fg(color, line) +
-          " ".repeat(Math.max(0, width - visibleWidth(line))),
+        line + " ".repeat(Math.max(0, width - visibleWidth(line))),
       )
     );
   }

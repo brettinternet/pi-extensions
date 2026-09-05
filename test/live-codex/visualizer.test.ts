@@ -14,7 +14,10 @@ describe("Live visualizer", () => {
           return data === "ctrl+e" && action === "app.tools.expand";
         },
       } as never,
-      { fg: (_color: string, text: string) => text } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        inverse: (text: string) => text,
+      } as never,
       { onStop() {}, onToggleMute() {}, onDrop() {} },
     );
     visualizer.onAction("app.tools.expand", () => expanded++);
@@ -33,7 +36,10 @@ describe("Live visualizer", () => {
       { requestRender() {} } as never,
       {} as never,
       {} as never,
-      { fg: (_color: string, text: string) => text } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        inverse: (text: string) => text,
+      } as never,
       {
         onStop() {},
         onToggleMute() {},
@@ -51,7 +57,10 @@ describe("Live visualizer", () => {
       { requestRender() {} } as never,
       {} as never,
       {} as never,
-      { fg: (_color: string, text: string) => text } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        inverse: (text: string) => text,
+      } as never,
       { onStop() {}, onToggleMute() {}, onDrop() {} },
     );
     const transcript = "one two three four five six";
@@ -63,7 +72,7 @@ describe("Live visualizer", () => {
     assert.ok(transcriptRows.length > 1);
     assert.equal(
       transcriptRows.map((row) => row.slice(1, -1).trimEnd()).join(" "),
-      `You  ${transcript}`,
+      ` You  ${transcript}`,
     );
     assert.ok(transcriptRows.every((row) => visibleWidth(row) === 12));
   });
@@ -73,7 +82,10 @@ describe("Live visualizer", () => {
       { requestRender() {} } as never,
       {} as never,
       {} as never,
-      { fg: (_color: string, text: string) => text } as never,
+      {
+        fg: (_color: string, text: string) => text,
+        inverse: (text: string) => `\x1b[7m${text}\x1b[27m`,
+      } as never,
       { onStop() {}, onToggleMute() {}, onDrop() {} },
     );
 
@@ -82,7 +94,7 @@ describe("Live visualizer", () => {
     visualizer.setUserTranscript("");
 
     const text = visualizer.render(40).join("\n");
-    assert.match(text, /Live  I found the issue\./);
+    assert.match(text, /\x1b\[7m Live \x1b\[27m I found the issue\./);
     assert.doesNotMatch(text, /You/);
   });
 });
