@@ -92,6 +92,7 @@ interface Harness {
   phases: string[];
   userTranscripts: TranscriptUpdate[];
   agentTranscripts: TranscriptUpdate[];
+  userTranscriptStarts: boolean[];
   terminal: Array<Error | undefined>;
   sentToAgent: unknown[];
   setIdle(value: boolean): void;
@@ -179,11 +180,15 @@ function delegation(id: string, text: string): LiveServerEvent {
   };
 }
 
-function createHarness(connectPromise?: Promise<void>): Harness {
+function createHarness(
+  connectPromise?: Promise<void>,
+  now: () => number = Date.now,
+): Harness {
   const bus = new EventBus();
   const phases: string[] = [];
   const userTranscripts: TranscriptUpdate[] = [];
   const agentTranscripts: TranscriptUpdate[] = [];
+  const userTranscriptStarts: boolean[] = [];
   const terminal: Array<Error | undefined> = [];
   const sentToAgent: unknown[] = [];
   let idle = true;
@@ -205,7 +210,10 @@ function createHarness(connectPromise?: Promise<void>): Harness {
   const callbacks: LiveSessionCallbacks = {
     onPhase: (phase) => phases.push(phase),
     onInputLevel: () => {},
-    onUserTranscript: (text, finalized) => userTranscripts.push({ text, finalized }),
+    onUserTranscript: (text, finalized, startsNew) => {
+      userTranscripts.push({ text, finalized });
+      userTranscriptStarts.push(startsNew);
+    },
     onAgentTranscript: (text, finalized) => agentTranscripts.push({ text, finalized }),
     onAttachmentsChanged: () => {},
     onWorkStatus: () => {},
@@ -220,6 +228,7 @@ function createHarness(connectPromise?: Promise<void>): Harness {
       return transport;
     },
     createAudioCapture: () => ({ stop: () => {} }),
+    now,
   });
   return {
     session,
@@ -228,6 +237,7 @@ function createHarness(connectPromise?: Promise<void>): Harness {
     phases,
     userTranscripts,
     agentTranscripts,
+    userTranscriptStarts,
     terminal,
     sentToAgent,
     setIdle: (value) => {
@@ -342,6 +352,72 @@ test("agent transcript survives user interruption until the next agent response"
     { text: "Okay,", finalized: false },
     { text: "Okay, I paused.", finalized: true },
   ]);
+
+  await harness.session.stop();
+});
+
+test("coalesces trailing user speech shortly after delegation", async () => {
+  let now = 100;
+  const harness = createHarness(undefined, () => now);
+  await harness.session.start();
+
+  harness.transport().emit({
+    type: "input_transcript.added",
+    item: { text: "Report to me the result" },
+  });
+  harness.transport().emit(delegation("overlap", "Report to me the result"));
+  await flush();
+  harness.transport().emit({
+    type: "output_transcript.added",
+    item: { text: "Let me check that for you." },
+  });
+
+  now = 500;
+  harness.transport().emit({
+    type: "input_transcript.added",
+    item: { text: " results when they get back" },
+  });
+  harness.transport().emit({
+    type: "turn.done",
+    turn: {
+      role: "user",
+      transcript: "Report to me the results when they get back",
+    },
+  });
+
+  assert.deepEqual(harness.userTranscripts, [
+    { text: "Report to me the result", finalized: false },
+    { text: "Report to me the result results when they get back", finalized: false },
+    { text: "Report to me the results when they get back", finalized: true },
+  ]);
+  assert.deepEqual(harness.userTranscriptStarts, [true, false, false]);
+
+  await harness.session.stop();
+});
+
+test("starts a new user row when speech resumes after the delegation grace period", async () => {
+  let now = 100;
+  const harness = createHarness(undefined, () => now);
+  await harness.session.start();
+
+  harness.transport().emit({
+    type: "input_transcript.added",
+    item: { text: "first request" },
+  });
+  harness.transport().emit(delegation("first", "first request"));
+  await flush();
+
+  now = 2_000;
+  harness.transport().emit({
+    type: "input_transcript.added",
+    item: { text: "second request" },
+  });
+
+  assert.deepEqual(harness.userTranscripts, [
+    { text: "first request", finalized: false },
+    { text: "second request", finalized: false },
+  ]);
+  assert.deepEqual(harness.userTranscriptStarts, [true, true]);
 
   await harness.session.stop();
 });

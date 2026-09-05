@@ -73,6 +73,7 @@ Treat delegation context as your own internal progress and results. Never mentio
 
 const CONFIRMATION_CORRECTIVE_COMMENTARY =
   "A confirmation is still pending. The user's last answer was not accepted or executed. Ask the exact question again and tell the user to say only the single word approve or deny. Never resend their answer as ordinary work.";
+const INPUT_CONTINUATION_GRACE_MS = 1_500;
 
 export type LiveStopMode = "handoff" | "shutdown";
 
@@ -107,6 +108,7 @@ export interface LiveSessionOptions {
   createAudioCapture?: (
     onAudio: (error: Error | null, samples: Float32Array) => void,
   ) => LiveAudioCapture;
+  now?: () => number;
 }
 
 function assistantText(message: AssistantMessage): string {
@@ -199,6 +201,7 @@ export class LiveSession {
   readonly #voice: string;
   readonly #createTransport: (options: LiveTransportOptions) => LiveTransport;
   readonly #createAudioCapture: NonNullable<LiveSessionOptions["createAudioCapture"]>;
+  readonly #now: () => number;
   #transport: LiveTransport | undefined;
   #transportConnected = false;
   #pendingSends: LiveClientMessage[] = [];
@@ -217,6 +220,7 @@ export class LiveSession {
   #terminalError: Error | undefined;
   #terminalEmitted = false;
   #inputTranscript = "";
+  #inputContinuationDeadline: number | undefined;
   #outputTranscript = "";
   #pendingDelegationEvents = 0;
   #outputTurnComplete = true;
@@ -243,6 +247,7 @@ export class LiveSession {
       ((transportOptions) => new CodexLiveTransport(transportOptions));
     this.#createAudioCapture = options.createAudioCapture ??
       ((onAudio) => new AudioCapture(16_000, onAudio));
+    this.#now = options.now ?? Date.now;
     this.#outputActivity = new OutputActivityLatch((active) => {
       this.#outputActive = active;
       this.#refreshPhase();
@@ -567,6 +572,12 @@ export class LiveSession {
         break;
       case "input_transcript.added": {
         this.#outputTurnComplete = true;
+        if (this.#inputContinuationDeadline !== undefined) {
+          if (this.#now() > this.#inputContinuationDeadline) {
+            this.#inputTranscript = "";
+          }
+          this.#inputContinuationDeadline = undefined;
+        }
         const startsNew = !this.#inputTranscript;
         if (startsNew) {
           this.#suppressResolvedConfirmationDelegation = false;
@@ -590,7 +601,6 @@ export class LiveSession {
         this.#callbacks.onAgentTranscript(this.#outputTranscript.trim(), false, startsNew);
         break;
       }
-        break;
       case "turn.done":
         if (event.turn.role === "user") {
           const transcript = event.turn.transcript || this.#inputTranscript;
@@ -601,6 +611,7 @@ export class LiveSession {
             this.#handleConfirmationTranscript(transcript);
           }
           this.#inputTranscript = "";
+          this.#inputContinuationDeadline = undefined;
           this.#callbacks.onUserTranscript(transcript.trim(), true, false);
         } else {
           const transcript = event.turn.transcript || this.#outputTranscript;
@@ -736,7 +747,9 @@ export class LiveSession {
     this.#callbacks.onAttachmentsChanged(0);
     this.#persistActivity("queued", event.item.id, undefined, { request });
     this.#emitWorkStatus();
-    this.#inputTranscript = "";
+    this.#inputContinuationDeadline = this.#inputTranscript
+      ? this.#now() + INPUT_CONTINUATION_GRACE_MS
+      : undefined;
     this.#dispatchNext();
   }
 

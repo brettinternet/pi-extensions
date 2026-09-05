@@ -147,13 +147,19 @@ describe("Live visualizer", () => {
   test("consolidates interleaved partial and finalized role streams", () => {
     const visualizer = createVisualizer();
 
-    visualizer.setUserTranscript("How should I have it installed", false, true);
+    visualizer.setUserTranscript("Report to me the result", false, true);
     visualizer.setAgentTranscript("Let me check that", false, true);
-    visualizer.setUserTranscript("How should I have it installed", true);
+    visualizer.setUserTranscript(
+      "Report to me the result results when they get back",
+    );
+    visualizer.setUserTranscript(
+      "Report to me the results when they get back",
+      true,
+    );
     visualizer.setAgentTranscript("Let me check that quickly.", true);
 
     assert.deepEqual(transcriptRows(visualizer), [
-      "You  How should I have it installed",
+      "You  Report to me the results when they get back",
       "Agent  Let me check that quickly.",
     ]);
   });
