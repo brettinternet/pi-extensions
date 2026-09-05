@@ -25,15 +25,7 @@ export type LiveClientMessage =
       channel?: LiveContextChannel;
       content: LiveInputTextContent[];
     }
-  | { type: "response.create" }
   | { type: "session.close" };
-
-export interface LiveResponseLifecycle {
-  id?: string;
-  conversation_id?: string | null;
-  conversation?: string;
-  status?: string;
-}
 
 export type LiveServerEvent =
   | {
@@ -48,10 +40,6 @@ export type LiveServerEvent =
   | {
       type: "turn.done";
       turn: { role: "user" | "assistant"; transcript: string };
-    }
-  | {
-      type: "response.created" | "response.done";
-      response: LiveResponseLifecycle;
     }
   | {
       type: "delegation.created";
@@ -116,22 +104,6 @@ function parseTurnDone(payload: UnknownRecord): LiveServerEvent | null {
     type: "turn.done",
     turn: { role: turn.role, transcript: turn.transcript },
   };
-}
-
-function parseResponseLifecycle(
-  type: "response.created" | "response.done",
-  payload: UnknownRecord,
-): LiveServerEvent | null {
-  const response = payload.response;
-  if (!isObject(response)) return null;
-  const parsed: LiveResponseLifecycle = {};
-  if (typeof response.id === "string") parsed.id = response.id;
-  if (response.conversation_id === null || typeof response.conversation_id === "string") {
-    parsed.conversation_id = response.conversation_id;
-  }
-  if (typeof response.conversation === "string") parsed.conversation = response.conversation;
-  if (typeof response.status === "string") parsed.status = response.status;
-  return { type, response: parsed };
 }
 
 function parseDelegation(payload: UnknownRecord): LiveServerEvent | null {
@@ -201,9 +173,6 @@ export function parseLiveServerEvent(payload: unknown): LiveServerEvent | null {
       return parseTranscriptEvent(parsed.type, parsed);
     case "turn.done":
       return parseTurnDone(parsed);
-    case "response.created":
-    case "response.done":
-      return parseResponseLifecycle(parsed.type, parsed);
     case "delegation.created":
       return parseDelegation(parsed);
     case "error":
@@ -247,10 +216,6 @@ export function buildDelegationContextAppend(
     ...(channel ? { channel } : {}),
     content: [{ type: "input_text", text }],
   };
-}
-
-export function buildResponseCreate(): LiveClientMessage {
-  return { type: "response.create" };
 }
 
 export function buildSessionClose(): LiveClientMessage {

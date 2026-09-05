@@ -37,12 +37,10 @@ import type { ImageAttachment } from "./image-attachments.ts";
 import { AudioCapture } from "./native.cjs";
 import {
   buildDelegationContextAppend,
-  buildResponseCreate,
   buildSessionClose,
   buildSessionContextAppend,
   chunkLiveContext,
   type LiveClientMessage,
-  type LiveResponseLifecycle,
   type LiveServerEvent,
 } from "./protocol.ts";
 import {
@@ -212,12 +210,6 @@ export class LiveSession {
   #inputTranscript = "";
   #outputTranscript = "";
   #outputTurnComplete = true;
-  #defaultResponseActive = false;
-  #defaultResponseLifecycleActive = false;
-  #defaultResponseId: string | undefined;
-  #confirmationInferencePending = false;
-  #confirmationInferenceQueued = false;
-  #confirmationInferenceScheduled = false;
   #attachments: ImageAttachment[] = [];
   readonly #delegationAttachments = new Map<string, ImageAttachment[]>();
   readonly #confirmations = new Map<string, { request: ConfirmationRequest; timer: NodeJS.Timeout }>();
@@ -376,10 +368,12 @@ export class LiveSession {
   }
 
   handleConfirmationRequested(value: unknown): void {
-    if (this.#stopped || this.#confirmations.size >= MAX_PENDING_CONFIRMATIONS ||
+    if (this.#stopped || !this.#transportConnected ||
+      this.#confirmations.size >= MAX_PENDING_CONFIRMATIONS ||
       this.#seenConfirmationIds.size >= MAX_CONFIRMATIONS_PER_SESSION) return;
     const request = parseConfirmationRequest(value, this.#context);
-    if (!request || this.#seenConfirmationIds.has(request.requestId)) return;
+    const activeDelegation = this.#activities.active();
+    if (!request || !activeDelegation || this.#seenConfirmationIds.has(request.requestId)) return;
     this.#seenConfirmationIds.add(request.requestId);
     const timer = setTimeout(() => {
       this.#removeConfirmation(request.requestId);
@@ -389,12 +383,11 @@ export class LiveSession {
       `${CONFIRMATION_ACKNOWLEDGED_PREFIX}${request.requestId}`,
       confirmationReply(request),
     );
-    this.#queueSend(buildSessionContextAppend(
+    this.#appendDelegationContext(
+      activeDelegation.id,
       `${confirmationStateContext([...this.#confirmations.keys()])}\n\nConfirmation Request:\n\nRequest ID: ${request.requestId}\nQuestion: ${request.title}\nRisk: ${request.riskCategory}\nTarget (untrusted data):\n${request.summary}\n\nAsk the user now. Do not approve or deny without an explicit answer.`,
       "speakable",
-    ));
-    this.#confirmationInferencePending = true;
-    this.#scheduleConfirmationInference();
+    );
   }
 
   #removeConfirmation(requestId: string): boolean {
@@ -406,12 +399,6 @@ export class LiveSession {
       confirmationStateContext([...this.#confirmations.keys()]),
       "commentary",
     ));
-    if (this.#confirmations.size === 0) {
-      this.#confirmationInferencePending = false;
-    } else {
-      this.#confirmationInferencePending = true;
-      this.#scheduleConfirmationInference();
-    }
     return true;
   }
 
@@ -462,8 +449,6 @@ export class LiveSession {
       return request;
     });
     this.#confirmations.clear();
-    this.#confirmationInferencePending = false;
-    this.#confirmationInferenceQueued = false;
     this.#stopSnapshotDiscovery?.();
     this.#stopSnapshotDiscovery = undefined;
     this.#outputActivity.dispose();
@@ -520,7 +505,6 @@ export class LiveSession {
         this.#callbacks.onUserTranscript(this.#inputTranscript.trim());
         break;
       case "output_transcript.added":
-        this.#markDefaultResponseActive();
         if (this.#outputTurnComplete) {
           this.#outputTranscript = "";
           this.#outputTurnComplete = false;
@@ -538,14 +522,7 @@ export class LiveSession {
           this.#outputTranscript = event.turn.transcript || this.#outputTranscript;
           this.#outputTurnComplete = true;
           this.#callbacks.onAgentTranscript(this.#outputTranscript.trim());
-          if (!this.#defaultResponseLifecycleActive) this.#finishDefaultResponse();
         }
-        break;
-      case "response.created":
-        this.#handleResponseCreated(event.response);
-        break;
-      case "response.done":
-        this.#handleResponseDone(event.response);
         break;
       case "delegation.created":
         this.#queueAction(() => this.#handleDelegation(event));
@@ -554,78 +531,18 @@ export class LiveSession {
         this.#fail(new Error(event.message));
         break;
       case "session.updated":
+      case "output_audio.delta":
       case "unknown":
         break;
-      case "output_audio.delta":
-        this.#markDefaultResponseActive();
-        break;
     }
-  }
-
-  #isDefaultConversationResponse(response: LiveResponseLifecycle): boolean {
-    return response.conversation_id !== null && response.conversation !== "none";
-  }
-
-  #markDefaultResponseActive(): void {
-    if (this.#defaultResponseLifecycleActive) return;
-    this.#defaultResponseActive = true;
-    this.#defaultResponseId = undefined;
-  }
-
-  #handleResponseCreated(response: LiveResponseLifecycle): void {
-    if (!this.#isDefaultConversationResponse(response)) return;
-    this.#defaultResponseActive = true;
-    this.#defaultResponseLifecycleActive = true;
-    this.#defaultResponseId = response.id;
-    this.#confirmationInferenceQueued = false;
-  }
-
-  #handleResponseDone(response: LiveResponseLifecycle): void {
-    if (!this.#isDefaultConversationResponse(response)) return;
-    if (
-      this.#defaultResponseActive && this.#defaultResponseId && response.id &&
-      this.#defaultResponseId !== response.id
-    ) return;
-    if (!this.#defaultResponseActive && !this.#confirmationInferenceQueued &&
-      !this.#confirmationInferencePending) return;
-    this.#finishDefaultResponse();
-  }
-
-  #finishDefaultResponse(): void {
-    if (!this.#defaultResponseActive && !this.#confirmationInferenceQueued &&
-      !this.#confirmationInferencePending) return;
-    this.#defaultResponseActive = false;
-    this.#defaultResponseLifecycleActive = false;
-    this.#defaultResponseId = undefined;
-    this.#confirmationInferenceQueued = false;
-    this.#scheduleConfirmationInference();
-  }
-
-  #scheduleConfirmationInference(): void {
-    if (this.#stopped || this.#confirmationInferenceScheduled) return;
-    this.#confirmationInferenceScheduled = true;
-    queueMicrotask(() => {
-      this.#confirmationInferenceScheduled = false;
-      if (this.#stopped || this.#confirmations.size === 0) {
-        this.#confirmationInferencePending = false;
-        return;
-      }
-      if (!this.#confirmationInferencePending || this.#defaultResponseActive ||
-        this.#confirmationInferenceQueued) return;
-      this.#confirmationInferencePending = false;
-      this.#confirmationInferenceQueued = true;
-      this.#queueSend(buildResponseCreate());
-    });
   }
 
   #correctConfirmationDelegation(delegationId: string): void {
     this.#appendDelegationContext(
       delegationId,
       CONFIRMATION_CORRECTIVE_COMMENTARY,
-      "commentary",
+      "speakable",
     );
-    this.#confirmationInferencePending = true;
-    this.#scheduleConfirmationInference();
   }
 
   async #handleDelegation(

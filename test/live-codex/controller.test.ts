@@ -231,6 +231,15 @@ async function flush(): Promise<void> {
   await new Promise<void>((resolve) => setImmediate(resolve));
 }
 
+async function activateVoiceDelegation(
+  harness: Harness,
+  id = "active-voice-request",
+): Promise<void> {
+  harness.transport().emit(delegation(id, "Run a visible command"));
+  await flush();
+  harness.sentToAgent.length = 0;
+}
+
 function contextText(message: LiveClientMessage): string {
   return "content" in message
     ? message.content.map(({ text }) => text).join("\n")
@@ -433,6 +442,7 @@ test("controller routes cancellation to the activity provider", async () => {
 test("voice confirmation resolves once without starting a coding turn", async () => {
   const harness = createHarness();
   await harness.session.start();
+  await activateVoiceDelegation(harness, "voice-owner");
   const request = confirmationRequest();
   harness.session.handleConfirmationRequested(request);
   await flush();
@@ -441,14 +451,18 @@ test("voice confirmation resolves once without starting a coding turn", async ()
     name === `${CONFIRMATION_ACKNOWLEDGED_PREFIX}${request.requestId}` &&
     (value as { operationId?: string }).operationId === request.operationId
   ));
-  const confirmationMessages = harness.transport().sent.slice(-2);
-  assert.equal(confirmationMessages.length, 2);
-  const confirmationContext = contextText(confirmationMessages[0]!);
+  const confirmationMessages = harness.transport().sent.filter(
+    (message): message is Extract<LiveClientMessage, { type: "delegation.context.append" }> =>
+      message.type === "delegation.context.append" &&
+      message.delegation_item_id === "voice-owner",
+  );
+  assert.ok(confirmationMessages.length > 0);
+  assert.ok(confirmationMessages.every(({ channel }) => channel === "speakable"));
+  const confirmationContext = confirmationMessages.map(contextText).join("");
   assert.match(confirmationContext, /ACTIVE CONFIRMATION MODE/);
   assert.match(confirmationContext, new RegExp(request.requestId));
   assert.match(confirmationContext, /Approve git push/);
   assert.match(confirmationContext, /git.*push/);
-  assert.deepEqual(confirmationMessages[1], { type: "response.create" });
   assert.equal(harness.terminal.length, 0);
 
   harness.transport().emit({
@@ -480,6 +494,7 @@ test("voice confirmation resolves once without starting a coding turn", async ()
 test("ordinary and malformed delegations are suppressed while confirmation is pending", async () => {
   const harness = createHarness();
   await harness.session.start();
+  await activateVoiceDelegation(harness);
   const request = confirmationRequest("suppressed-confirmation");
   harness.session.handleConfirmationRequested(request);
   await flush();
@@ -490,17 +505,18 @@ test("ordinary and malformed delegations are suppressed while confirmation is pe
 
   assert.equal(harness.sentToAgent.length, 0);
   const corrective = harness.transport().sent
-    .filter((message) => message.type === "delegation.context.append")
-    .map(contextText)
-    .join("\n");
-  assert.match(corrective, /confirmation is still pending/i);
-  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 1);
+    .filter((message): message is Extract<LiveClientMessage, { type: "delegation.context.append" }> =>
+      message.type === "delegation.context.append" &&
+      contextText(message).includes("last answer was not accepted"));
+  assert.equal(corrective.length, 2);
+  assert.ok(corrective.every((message) => message.channel === "speakable"));
   await harness.session.stop();
 });
 
 test("manual stop releases pending confirmations only after terminal cleanup", async () => {
   const harness = createHarness();
   await harness.session.start();
+  await activateVoiceDelegation(harness);
   const request = confirmationRequest("released-confirmation");
   harness.session.handleConfirmationRequested(request);
   await flush();
@@ -520,6 +536,7 @@ test("manual stop releases pending confirmations only after terminal cleanup", a
 test("session shutdown does not release confirmations for interactive handoff", async () => {
   const harness = createHarness();
   await harness.session.start();
+  await activateVoiceDelegation(harness);
   const request = confirmationRequest("shutdown-confirmation");
   harness.session.handleConfirmationRequested(request);
   await flush();
@@ -533,179 +550,51 @@ test("session shutdown does not release confirmations for interactive handoff", 
   ), false);
 });
 
-test("confirmation inference waits for an already-active default response", async () => {
+test("confirmation falls through when no active voice delegation can speak it", async () => {
   const harness = createHarness();
   await harness.session.start();
-  harness.transport().emit({
-    type: "response.created",
-    response: {
-      id: "response-active",
-      conversation_id: "conversation-default",
-      status: "in_progress",
-    },
-  });
-  const request = confirmationRequest("active-response-confirmation");
+  const request = confirmationRequest("no-voice-owner");
   harness.session.handleConfirmationRequested(request);
   await flush();
 
-  assert.equal(harness.transport().sent.some(({ type }) => type === "response.create"), false);
-  assert.equal(harness.transport().sent.some((message) =>
-    contextText(message).includes(request.title)
-  ), true);
-
-  harness.transport().emit({
-    type: "response.done",
-    response: {
-      id: "response-active",
-      conversation_id: "conversation-default",
-      status: "completed",
-    },
-  });
-  await flush();
-  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 1);
-  assert.equal(harness.terminal.length, 0);
-  await harness.session.stop();
-});
-
-test("two buffered confirmation prompts coalesce into one response", async () => {
-  const connection = deferred();
-  const harness = createHarness(connection.promise);
-  const startPromise = harness.session.start();
-  const first = confirmationRequest("buffered-confirmation-1");
-  const second = confirmationRequest("buffered-confirmation-2", {
-    title: "Approve the second command?",
-    summary: 'Operation: {"command":["git","pull"],"cwd":"/repo"}',
-  });
-  harness.session.handleConfirmationRequested(first);
-  harness.session.handleConfirmationRequested(second);
-  await flush();
+  assert.equal(harness.bus.emitted.some(({ name }) =>
+    name === `${CONFIRMATION_ACKNOWLEDGED_PREFIX}${request.requestId}`
+  ), false);
   assert.deepEqual(harness.transport().sent, []);
-
-  connection.resolve();
-  await startPromise;
-  await flush();
-  const sent = harness.transport().sent;
-  assert.equal(sent.filter(({ type }) => type === "response.create").length, 1);
-  const promptText = sent.filter((message) => message.type === "session.context.append")
-    .map(contextText).join("\n");
-  assert.ok(promptText.indexOf(first.requestId) >= 0);
-  assert.ok(promptText.indexOf(second.requestId) > promptText.indexOf(first.requestId));
-  assert.equal(harness.terminal.length, 0);
   await harness.session.stop();
 });
 
-test("resolving one confirmation prompts the remaining request after response.done", async () => {
+test("two confirmations use speakable context on the active voice delegation", async () => {
   const harness = createHarness();
   await harness.session.start();
-  harness.transport().emit({
-    type: "response.created",
-    response: { id: "response-before-prompts", conversation_id: "conversation-default", status: "in_progress" },
+  await activateVoiceDelegation(harness, "voice-owner");
+  const first = confirmationRequest("confirmation-1");
+  const second = confirmationRequest("confirmation-2", {
+    operationId: "sha256:def456",
+    title: "Approve second command?",
   });
-  const first = confirmationRequest("resolved-confirmation-1");
-  const second = confirmationRequest("resolved-confirmation-2");
   harness.session.handleConfirmationRequested(first);
   harness.session.handleConfirmationRequested(second);
   await flush();
-  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 0);
 
-  harness.transport().emit({
-    type: "response.done",
-    response: { id: "response-before-prompts", conversation_id: "conversation-default", status: "completed" },
-  });
-  await flush();
-  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 1);
-  harness.transport().emit({
-    type: "response.created",
-    response: { id: "response-first-prompt", conversation_id: "conversation-default", status: "in_progress" },
-  });
-
-  harness.transport().emit(delegation("resolve-first", `[[live:confirmation ${first.requestId} approve]]`));
-  await flush();
-  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 1);
-
-  harness.transport().emit({
-    type: "response.done",
-    response: { id: "response-first-prompt", conversation_id: "conversation-default", status: "completed" },
-  });
-  await flush();
-  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 2);
-  assert.equal(harness.terminal.length, 0);
-  await harness.session.stop();
-});
-
-test("cancelling one confirmation keeps the remaining prompt queued", async () => {
-  const harness = createHarness();
-  await harness.session.start();
-  harness.transport().emit({
-    type: "response.created",
-    response: { id: "response-cancel-before", conversation_id: "conversation-default", status: "in_progress" },
-  });
-  const first = confirmationRequest("cancelled-confirmation-1");
-  const second = confirmationRequest("cancelled-confirmation-2");
-  harness.session.handleConfirmationRequested(first);
-  harness.session.handleConfirmationRequested(second);
-  await flush();
-  harness.session.handleConfirmationCancelled(first);
-  await flush();
-  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 0);
-
-  harness.transport().emit({
-    type: "response.done",
-    response: { id: "response-cancel-before", conversation_id: "conversation-default", status: "completed" },
-  });
-  await flush();
-  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 1);
-  assert.equal(harness.terminal.length, 0);
-  await harness.session.stop();
-});
-
-test("expiring one confirmation keeps the remaining prompt queued", async () => {
-  const harness = createHarness();
-  await harness.session.start();
-  harness.transport().emit({
-    type: "response.created",
-    response: { id: "response-expiry-before", conversation_id: "conversation-default", status: "in_progress" },
-  });
-  const first = confirmationRequest("expired-confirmation-1", { expiresAt: Date.now() + 15 });
-  const second = confirmationRequest("expired-confirmation-2", { expiresAt: Date.now() + 60_000 });
-  harness.session.handleConfirmationRequested(first);
-  harness.session.handleConfirmationRequested(second);
-  await flush();
-  await new Promise((resolve) => setTimeout(resolve, 30));
-  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 0);
-
-  harness.transport().emit({
-    type: "response.done",
-    response: { id: "response-expiry-before", conversation_id: "conversation-default", status: "completed" },
-  });
-  await flush();
-  assert.equal(harness.transport().sent.filter(({ type }) => type === "response.create").length, 1);
-  assert.equal(harness.terminal.length, 0);
-  await harness.session.stop();
-});
-
-test("confirmation prompt buffers its active response until transport connection succeeds", async () => {
-  const connection = deferred();
-  const harness = createHarness(connection.promise);
-  const startPromise = harness.session.start();
-  const request = confirmationRequest("buffered-confirmation");
-  harness.session.handleConfirmationRequested(request);
-  await flush();
-  assert.deepEqual(harness.transport().sent, []);
-
-  connection.resolve();
-  await startPromise;
-  await flush();
-  const messages = harness.transport().sent.slice(0, 2);
-  assert.match(contextText(messages[0]!), /ACTIVE CONFIRMATION MODE/);
-  assert.match(contextText(messages[0]!), /Confirmation Request/);
-  assert.deepEqual(messages[1], { type: "response.create" });
+  const prompts = harness.transport().sent.filter(
+    (message): message is Extract<LiveClientMessage, { type: "delegation.context.append" }> =>
+      message.type === "delegation.context.append" &&
+      contextText(message).includes("Confirmation Request"),
+  );
+  assert.equal(prompts.length, 2);
+  assert.ok(prompts.every((message) =>
+    message.delegation_item_id === "voice-owner" && message.channel === "speakable"
+  ));
+  assert.match(contextText(prompts[1]!), new RegExp(first.requestId));
+  assert.match(contextText(prompts[1]!), new RegExp(second.requestId));
   await harness.session.stop();
 });
 
 test("voice denial and ambiguous confirmation controls never approve", async () => {
   const harness = createHarness();
   await harness.session.start();
+  await activateVoiceDelegation(harness);
   const denied = confirmationRequest("request-denied");
   const ambiguous = confirmationRequest("request-ambiguous");
   harness.session.handleConfirmationRequested(denied);
@@ -728,6 +617,7 @@ test("voice denial and ambiguous confirmation controls never approve", async () 
 test("confirmation requests reject wrong session, expiry, and duplicates", async () => {
   const harness = createHarness();
   await harness.session.start();
+  await activateVoiceDelegation(harness);
   const valid = confirmationRequest("request-valid");
   harness.session.handleConfirmationRequested(confirmationRequest("wrong-session", { sessionId: "other" }));
   harness.session.handleConfirmationRequested(confirmationRequest("expired", { expiresAt: Date.now() - 1 }));

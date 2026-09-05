@@ -4,7 +4,6 @@ import {
   CONTEXT_CHUNK_BYTES,
   buildDelegationContextAppend,
   buildLiveSessionPayload,
-  buildResponseCreate,
   buildSessionContextAppend,
   chunkLiveContext,
   parseLiveServerEvent,
@@ -53,29 +52,6 @@ describe("Frameless Bidi protocol", () => {
     }
   });
 
-  test("tracks default-conversation response lifecycle events", () => {
-    assert.deepEqual(
-      parseLiveServerEvent({
-        type: "response.created",
-        response: { id: "response-1", conversation_id: "conversation-1", status: "in_progress" },
-      }),
-      {
-        type: "response.created",
-        response: { id: "response-1", conversation_id: "conversation-1", status: "in_progress" },
-      },
-    );
-    assert.deepEqual(
-      parseLiveServerEvent({
-        type: "response.done",
-        response: { id: "response-1", conversation_id: "conversation-1", status: "completed" },
-      }),
-      {
-        type: "response.done",
-        response: { id: "response-1", conversation_id: "conversation-1", status: "completed" },
-      },
-    );
-  });
-
   test("builds the pinned live session and context append", () => {
     assert.deepEqual(buildLiveSessionPayload("instructions", "sol"), {
       model: "gpt-live-1-codex",
@@ -93,7 +69,6 @@ describe("Frameless Bidi protocol", () => {
       delegation_item_id: "delegate_1",
       content: [{ type: "input_text", text: "done" }],
     });
-    assert.deepEqual(buildResponseCreate(), { type: "response.create" });
   });
 });
 
