@@ -230,6 +230,10 @@ describe("loop parser and state", () => {
     const narrow = formatLoopWidget(state, 32);
     expect(stripTerminalSequences(narrow)).toBe("loop active 4/4 · inspect the r…");
     expect(visibleWidth(narrow)).toBe(32);
+
+    expect(formatLoopWidget({ ...state, status: "stopping" }, 80)).toBe(
+      "loop stopping · inspect the repository and fix the failing tests",
+    );
   });
 });
 
@@ -306,6 +310,7 @@ describe("loop lifecycle", () => {
     await harness.command.handler("2 work", harness.context);
     await harness.command.handler("stop", commandContext(harness));
     expect(harness.state()?.status).toBe("stopping");
+    expect(latestWidgetLines(harness)).toEqual(["loop stopping · work"]);
     await harness.settle();
     expect(harness.state()?.status).toBe("stopped");
 
@@ -315,6 +320,26 @@ describe("loop lifecycle", () => {
     expect(paused.state()?.status).toBe("paused");
     await paused.command.handler("stop", commandContext(paused));
     expect(paused.state()?.status).toBe("stopped");
+  });
+
+  test("can resume or retune while a graceful stop is pending", async () => {
+    const resumed = createHarness();
+    await resumed.command.handler("2 work", resumed.context);
+    await resumed.command.handler("stop", commandContext(resumed));
+    await resumed.command.handler("resume", commandContext(resumed));
+    expect(resumed.state()).toMatchObject({ status: "active", pendingRetune: null });
+    expect(resumed.prompts).toHaveLength(1);
+    await resumed.settle();
+    expect(resumed.state()).toMatchObject({ status: "active", currentIteration: 2 });
+
+    const retuned = createHarness();
+    await retuned.command.handler("2 work", retuned.context);
+    await retuned.command.handler("stop", commandContext(retuned));
+    await retuned.command.handler("3", commandContext(retuned));
+    expect(retuned.state()).toMatchObject({ status: "active", pendingRetune: 3 });
+    expect(latestWidgetLines(retuned)).toEqual(["loop active 4/4 · work"]);
+    await retuned.settle();
+    expect(retuned.state()).toMatchObject({ status: "active", currentIteration: 2, remainingBudget: 2 });
   });
 
   test("pauses on terminal errors and resume retries in a fresh session", async () => {

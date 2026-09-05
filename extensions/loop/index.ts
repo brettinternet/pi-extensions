@@ -263,10 +263,13 @@ function isTerminal(state: LoopState | undefined): boolean {
 }
 
 export function formatLoopWidget(state: LoopState, width: number): string {
+  const prompt = state.prompt.replace(/\s+/g, " ").trim();
+  if (state.status === "stopping") {
+    return truncateToWidth(`loop stopping · ${prompt}`, width, "…");
+  }
   const futureIterations = state.pendingRetune ?? state.remainingBudget;
   const remainingIterations = futureIterations + 1;
   const totalIterations = state.currentIteration + futureIterations;
-  const prompt = state.prompt.replace(/\s+/g, " ").trim();
   return truncateToWidth(
     `loop ${state.status} ${remainingIterations}/${totalIterations} · ${prompt}`,
     width,
@@ -561,6 +564,13 @@ export default function loopExtension(pi: ExtensionAPI): void {
     }
 
     if (parsed.kind === "resume") {
+      if (state?.status === "stopping") {
+        const resumed = { ...state, status: "active" as const };
+        persist(pi, resumed);
+        renderWidget(ctx, resumed);
+        notify(ctx, "loop resumed", "info");
+        return;
+      }
       if (!state || state.status !== "paused") {
         notify(ctx, state && statusIsActive(state) ? "loop is already active" : "loop is not paused", "error");
         return;
@@ -570,7 +580,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     }
 
     if (parsed.kind === "retune" || parsed.kind === "adjust") {
-      if (!state || state.status !== "active") {
+      if (!state || (state.status !== "active" && state.status !== "stopping")) {
         notify(ctx, "a loop must be active to retune its remaining budget", "error");
         return;
       }
@@ -580,7 +590,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
         notify(ctx, `cannot subtract more than the ${currentBudget} future iteration${currentBudget === 1 ? "" : "s"}`, "error");
         return;
       }
-      const retuned = { ...state, pendingRetune: nextBudget };
+      const retuned = { ...state, pendingRetune: nextBudget, status: "active" as const };
       persist(pi, retuned);
       renderWidget(ctx, retuned);
       notify(ctx, `loop will run ${nextBudget} future iteration${nextBudget === 1 ? "" : "s"}`, "info");
