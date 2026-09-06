@@ -4,6 +4,15 @@ import type { CheckActivity, ProgressSnapshot } from "./state.ts";
 
 const MAX_VISIBLE_PATHS = 3;
 
+export function formatRuntime(elapsedMs: number): string {
+  const minutes = Math.floor(Math.max(0, elapsedMs) / 60_000);
+  if (minutes < 1) return "<1m";
+  if (minutes < 60) return `${minutes}m`;
+
+  const hours = Math.floor(minutes / 60);
+  return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
+}
+
 function formatCheck(check: CheckActivity, theme: Theme): string {
   return check.outcome === "passed"
     ? theme.fg("success", `✓ ${check.label}`)
@@ -42,6 +51,7 @@ export function renderProgress(
   snapshot: ProgressSnapshot,
   theme: Theme,
   width: number,
+  runtime?: string,
 ): string[] {
   const hasObservedFacts =
     snapshot.runStarted ||
@@ -49,20 +59,24 @@ export function renderProgress(
     snapshot.tools.length > 0 ||
     snapshot.checks.length > 0 ||
     snapshot.touchedPaths.length > 0;
-  if ((!hasObservedFacts && !snapshot.semantic) || width < 8) return [];
+  if ((!hasObservedFacts && !snapshot.semantic && !runtime) || width < 8) return [];
 
   const separator = theme.fg("dim", " · ");
+  const heading = theme.fg("dim", runtime ? `progress ${runtime}` : "progress");
+  if (!hasObservedFacts && !snapshot.semantic) {
+    return [truncateToWidth(heading, width)];
+  }
   if (!hasObservedFacts && snapshot.semantic) {
     const inferred = inferredSummary(snapshot, theme);
     return inferred
       ? [truncateToWidth([
-        theme.fg("dim", "progress"),
+        heading,
         inferred,
       ].join(separator), width)]
       : [];
   }
   const observedParts = [
-    theme.fg("dim", "progress"),
+    heading,
     toolSummary(snapshot, theme),
     ...snapshot.checks.map((check) => formatCheck(check, theme)),
   ];

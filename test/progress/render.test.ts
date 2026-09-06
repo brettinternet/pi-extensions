@@ -1,13 +1,30 @@
 import { describe, expect, test } from "bun:test";
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { visibleWidth } from "@earendil-works/pi-tui";
-import { renderProgress } from "../../extensions/progress/render.ts";
+import { formatRuntime, renderProgress } from "../../extensions/progress/render.ts";
 
 const theme = {
   fg: (_color: string, text: string) => text,
 } as Theme;
 
 describe("progress rendering", () => {
+  test("formats runtime as one compact unit", () => {
+    expect(formatRuntime(0)).toBe("<1m");
+    expect(formatRuntime(25 * 60_000)).toBe("25m");
+    expect(formatRuntime(90 * 60_000)).toBe("1h");
+    expect(formatRuntime(49 * 3_600_000)).toBe("2d");
+  });
+
+  test("shows runtime while the session is otherwise idle", () => {
+    expect(renderProgress({
+      runStarted: false,
+      agentActive: false,
+      tools: [],
+      checks: [],
+      touchedPaths: [],
+    }, theme, 80, "25m")).toEqual(["progress 25m"]);
+  });
+
   test("renders active work and touched paths in at most two compact lines", () => {
     const lines = renderProgress(
       {

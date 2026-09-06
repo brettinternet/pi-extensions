@@ -2,10 +2,10 @@
 
 Compact, passive activity progress for the [Pi coding agent](https://pi.dev).
 
-The extension observes Pi's lifecycle events and renders at most two truncated lines below the editor. Settled progress remains visible until the next user-initiated run begins.
+The extension observes Pi's lifecycle events and renders at most two truncated lines below the editor. The first line includes the current live session runtime as one compact unit (`<1m`, `25m`, `1h`, or `2d`). Settled progress remains visible until the next user-initiated run begins.
 
 ```text
-progress · current: Updating the implementation inferred · ● edit src/index.ts · ✓ bun test
+progress 25m · current: Updating the implementation inferred · ● edit src/index.ts · ✓ bun test
  touched src/index.ts · test/index.test.ts
 ```
 

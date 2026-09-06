@@ -13,7 +13,7 @@ import {
   parseInference,
   resolveInferenceModel,
 } from "./inference.ts";
-import { renderProgress } from "./render.ts";
+import { formatRuntime, renderProgress } from "./render.ts";
 import { ProgressState } from "./state.ts";
 
 const WIDGET_KEY = "pi-progress";
@@ -50,6 +50,13 @@ export default function progressExtension(pi: ExtensionAPI): void {
   let warned = false;
   let configuredModel: string | null = null;
   let activeInferenceCount = 0;
+  let runtimeStartedAt = Date.now();
+  let runtimeTimer: ReturnType<typeof setInterval> | undefined;
+
+  function stopRuntimeTimer(): void {
+    if (runtimeTimer !== undefined) clearInterval(runtimeTimer);
+    runtimeTimer = undefined;
+  }
 
   function render(ctx: ExtensionContext): void {
     if (!ctx.hasUI || ctx !== currentContext) return;
@@ -61,7 +68,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
       snapshot.checks.length > 0 ||
       snapshot.touchedPaths.length > 0 ||
       Boolean(snapshot.semantic);
-    if (!hasFacts) {
+    if (!hasFacts && runtimeTimer === undefined) {
       ctx.ui.setWidget(WIDGET_KEY, undefined);
       return;
     }
@@ -69,7 +76,12 @@ export default function progressExtension(pi: ExtensionAPI): void {
     ctx.ui.setWidget(
       WIDGET_KEY,
       (_tui, theme) => ({
-        render: (width) => renderProgress(snapshot, theme, width),
+        render: (width) => renderProgress(
+          snapshot,
+          theme,
+          width,
+          formatRuntime(Date.now() - runtimeStartedAt),
+        ),
         invalidate: () => {},
       }),
       { placement: "belowEditor" },
@@ -243,6 +255,10 @@ export default function progressExtension(pi: ExtensionAPI): void {
     currentContext = ctx;
     warned = false;
     resetSession(ctx);
+    stopRuntimeTimer();
+    runtimeStartedAt = Date.now();
+    runtimeTimer = setInterval(() => scheduleRender(ctx), 60_000);
+    runtimeTimer.unref?.();
     render(ctx);
   });
 
@@ -337,6 +353,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", (_event, ctx) => {
     cancelInference();
+    stopRuntimeTimer();
     if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
     if (ctx === currentContext) currentContext = undefined;
     state.reset();

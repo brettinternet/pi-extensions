@@ -75,9 +75,11 @@ describe("progress extension", () => {
     expect(handlers.has("context")).toBeFalse();
 
     handlers.get("session_start")!({}, ctx);
+    expect(latestLines(widgets)).toEqual(["progress <1m"]);
+
     handlers.get("before_agent_start")!({}, ctx);
     await flushRender();
-    expect(latestLines(widgets)).toEqual(["progress · ● thinking"]);
+    expect(latestLines(widgets)).toEqual(["progress <1m · ● thinking"]);
 
     handlers.get("tool_execution_start")!(
       {
@@ -88,7 +90,7 @@ describe("progress extension", () => {
       ctx,
     );
     await flushRender();
-    expect(latestLines(widgets)).toEqual(["progress · ● edit src/a.ts"]);
+    expect(latestLines(widgets)).toEqual(["progress <1m · ● edit src/a.ts"]);
     expect(widgets.at(-1)?.options).toEqual({ placement: "belowEditor" });
 
     handlers.get("tool_result")!(
@@ -103,7 +105,7 @@ describe("progress extension", () => {
     handlers.get("agent_settled")!({}, ctx);
     await flushRender();
     expect(latestLines(widgets)).toEqual([
-      "progress · ✓ settled",
+      "progress <1m · ✓ settled",
       "touched src/a.ts",
     ]);
   });
@@ -131,11 +133,11 @@ describe("progress extension", () => {
     );
     handlers.get("agent_settled")!({}, ctx);
     await flushRender();
-    expect(latestLines(widgets)).toEqual(["progress · ✓ settled"]);
+    expect(latestLines(widgets)).toEqual(["progress <1m · ✓ settled"]);
 
     handlers.get("before_agent_start")!({}, ctx);
     await flushRender();
-    expect(latestLines(widgets)).toEqual(["progress · ● thinking"]);
+    expect(latestLines(widgets)).toEqual(["progress <1m · ● thinking"]);
   });
 
   test("shows check outcomes and clears state for the next request", async () => {
@@ -161,12 +163,12 @@ describe("progress extension", () => {
     );
     await flushRender();
     expect(latestLines(widgets)).toEqual([
-      "progress · ● thinking · ✗ bun test",
+      "progress <1m · ● thinking · ✗ bun test",
     ]);
 
     handlers.get("before_agent_start")!({}, ctx);
     await flushRender();
-    expect(latestLines(widgets)).toEqual(["progress · ● thinking"]);
+    expect(latestLines(widgets)).toEqual(["progress <1m · ● thinking"]);
   });
 
   test("completes status, model, and disabling inference", () => {
