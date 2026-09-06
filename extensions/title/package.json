@@ -1,6 +1,6 @@
 {
   "name": "pi-title",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Automatic session titles for the Pi coding agent",
   "type": "module",
   "license": "MIT",
