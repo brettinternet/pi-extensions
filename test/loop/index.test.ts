@@ -53,6 +53,7 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
     { type: "custom", customType: "unrelated", data: { keep: true } },
   ]);
   let replacementNumber = 0;
+  let idle = true;
   let activeContext: ExtensionCommandContext;
 
   const ui = {
@@ -70,7 +71,7 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
     modelRegistry: {},
     model: undefined,
     scopedModels: [],
-    isIdle: () => true,
+    isIdle: () => idle,
     isProjectTrusted: () => true,
     signal: undefined,
     abort: () => {},
@@ -145,6 +146,9 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
       await new Promise((resolve) => setTimeout(resolve, 0));
     },
     agentStart: () => handlers.get("before_agent_start")?.({ prompt: prompts.at(-1) ?? "" }, activeContext),
+    setIdle: (value: boolean) => { idle = value; },
+    messageEnd: (stopReason: "stop" | "error" | "aborted") =>
+      handlers.get("message_end")?.({ message: { role: "assistant", stopReason } }, activeContext),
     agentEnd: (stopReason: "stop" | "error" | "aborted") =>
       handlers.get("agent_end")?.({ messages: [{ role: "assistant", stopReason }] }, activeContext),
     commandContext: () => activeContext,
@@ -181,6 +185,7 @@ describe("loop parser and state", () => {
       prompt: "fix the failing tests",
     });
     expect(parseLoopCommand("delay 1m")).toEqual({ kind: "delay", delay: 60_000 });
+    expect(parseLoopCommand("delay off")).toEqual({ kind: "delay", delay: 0 });
     expect(parseLoopDuration("1000ms")).toBe(1_000);
     expect(parseLoopDuration("1.5s")).toBe(1_500);
     expect(parseLoopCommand("4")).toEqual({ kind: "retune", count: 4 });
@@ -226,8 +231,8 @@ describe("loop parser and state", () => {
       { value: "append ", label: "append <text>", description: "Append to the future loop prompt" },
     ]);
     expect(command.getArgumentCompletions?.("delay ")).toContainEqual({
-      value: "delay 1s",
-      label: "delay 1s",
+      value: "delay off",
+      label: "delay off",
       description: "Set the delay between settled iterations",
     });
     expect(command.getArgumentCompletions?.("3 --delay ")).toContainEqual({
@@ -267,14 +272,17 @@ describe("loop parser and state", () => {
       status: "active",
     };
     expect(formatLoopWidget(state, 80)).toBe(
-      "loop active 4/4 · delay 0ms · inspect the repository and fix the failing tests",
+      "loop active 4/4 · inspect the repository and fix the failing tests",
     );
     const narrow = formatLoopWidget(state, 32);
-    expect(stripTerminalSequences(narrow)).toBe("loop active 4/4 · delay 0ms · i…");
+    expect(stripTerminalSequences(narrow)).toBe("loop active 4/4 · inspect the r…");
     expect(visibleWidth(narrow)).toBe(32);
 
     expect(formatLoopWidget({ ...state, status: "stopping" }, 80)).toBe(
-      "loop stopping · delay 0ms · inspect the repository and fix the failing tests",
+      "loop stopping · inspect the repository and fix the failing tests",
+    );
+    expect(formatLoopWidget({ ...state, delay: 2_000 }, 80)).toBe(
+      "loop active 4/4 · delay 2s · inspect the repository and fix the failing tests",
     );
   });
 
@@ -304,7 +312,7 @@ describe("loop lifecycle", () => {
     expect(harness.prompts).toEqual(["inspect the repository"]);
     expect(harness.current.entries.every((entry) => entry.customType === LOOP_STATE_ENTRY)).toBeTrue();
     expect(stateOf(harness.current)).toMatchObject({ currentIteration: 1, remainingBudget: 1, status: "active" });
-    expect(latestWidgetLines(harness)).toEqual(["loop active 2/2 · delay 0ms · inspect the repository"]);
+    expect(latestWidgetLines(harness)).toEqual(["loop active 2/2 · inspect the repository"]);
   });
 
   test("continues exactly once at the settled boundary", async () => {
@@ -332,7 +340,8 @@ describe("loop lifecycle", () => {
     expect(harness.state()).toMatchObject({ delay: 1_000, currentIteration: 1, status: "active" });
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(harness.prompts).toHaveLength(1);
-    await new Promise((resolve) => setTimeout(resolve, 1_050));
+
+    await harness.command.handler("delay off", commandContext(harness));
     await new Promise((resolve) => setTimeout(resolve, 0));
     expect(harness.prompts).toEqual(["original prompt", "updated prompt"]);
   });
@@ -374,10 +383,10 @@ describe("loop lifecycle", () => {
     await harness.command.handler("2 repeat the check", harness.context);
     await harness.command.handler("4", commandContext(harness));
     expect(harness.state()).toMatchObject({ remainingBudget: 1, pendingRetune: 4 });
-    expect(latestWidgetLines(harness)).toEqual(["loop active 5/5 · delay 0ms · repeat the check"]);
+    expect(latestWidgetLines(harness)).toEqual(["loop active 5/5 · repeat the check"]);
     await harness.settle();
     expect(harness.state()).toMatchObject({ currentIteration: 2, remainingBudget: 3, pendingRetune: null });
-    expect(latestWidgetLines(harness)).toEqual(["loop active 4/5 · delay 0ms · repeat the check"]);
+    expect(latestWidgetLines(harness)).toEqual(["loop active 4/5 · repeat the check"]);
   });
 
   test("replaces and cumulatively appends to future iteration prompts", async () => {
@@ -418,8 +427,49 @@ describe("loop lifecycle", () => {
     });
     expect(harness.notifications.at(-1)).toBe("loop prompt replaced; resume will use it");
 
+    const pausedSession = harness.current.getSessionId();
     await harness.command.handler("resume", commandContext(harness));
-    expect(harness.prompts).toEqual(["retry this", "use the new approach"]);
+    expect(harness.current.getSessionId()).toBe(pausedSession);
+    expect(harness.prompts).toEqual([
+      "retry this",
+      "Continue the current loop iteration from where you left off without repeating completed work.\n\nCurrent loop instructions:\nuse the new approach",
+    ]);
+  });
+
+  test("continues an iteration in the same session when a mid-run edit interrupts it", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 inspect the repository", harness.context);
+    const activeSession = harness.current.getSessionId();
+
+    harness.setIdle(false);
+    await harness.command.handler("append preserve completed work", commandContext(harness));
+    harness.messageEnd("aborted");
+    harness.agentEnd("aborted");
+    harness.setIdle(true);
+    await harness.settle();
+
+    expect(harness.current.getSessionId()).toBe(activeSession);
+    expect(harness.state()).toMatchObject({ status: "active", currentIteration: 1, remainingBudget: 1 });
+    expect(harness.prompts.at(-1)).toBe(
+      "Continue the current loop iteration from where you left off without repeating completed work.\n\nCurrent loop instructions:\ninspect the repository\n\npreserve completed work",
+    );
+
+    await harness.settle();
+    expect(harness.current.getSessionId()).not.toBe(activeSession);
+    expect(harness.prompts.at(-1)).toBe("inspect the repository\n\npreserve completed work");
+    expect(harness.state()).toMatchObject({ status: "active", currentIteration: 2, remainingBudget: 0 });
+  });
+
+  test("still pauses a genuine abort after an uninterrupted mid-run command", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 work", harness.context);
+    harness.setIdle(false);
+    await harness.command.handler("status", commandContext(harness));
+    harness.setIdle(true);
+    await harness.settle();
+
+    harness.agentEnd("aborted");
+    expect(harness.state()).toMatchObject({ status: "paused", currentIteration: 2, remainingBudget: 0 });
   });
 
   test("prompt updates preserve stopping state and reject terminal runs", async () => {
@@ -447,7 +497,7 @@ describe("loop lifecycle", () => {
     await harness.command.handler("3 repeat the check", harness.context);
     await harness.command.handler("+2", commandContext(harness));
     expect(harness.state()?.pendingRetune).toBe(4);
-    expect(latestWidgetLines(harness)).toEqual(["loop active 5/5 · delay 0ms · repeat the check"]);
+    expect(latestWidgetLines(harness)).toEqual(["loop active 5/5 · repeat the check"]);
 
     await harness.command.handler("-4", commandContext(harness));
     expect(harness.state()?.pendingRetune).toBe(0);
@@ -464,7 +514,7 @@ describe("loop lifecycle", () => {
     await harness.command.handler("2 work", harness.context);
     await harness.command.handler("stop", commandContext(harness));
     expect(harness.state()?.status).toBe("stopping");
-    expect(latestWidgetLines(harness)).toEqual(["loop stopping · delay 0ms · work"]);
+    expect(latestWidgetLines(harness)).toEqual(["loop stopping · work"]);
     await harness.settle();
     expect(harness.state()?.status).toBe("stopped");
 
@@ -491,12 +541,12 @@ describe("loop lifecycle", () => {
     await retuned.command.handler("stop", commandContext(retuned));
     await retuned.command.handler("3", commandContext(retuned));
     expect(retuned.state()).toMatchObject({ status: "active", pendingRetune: 3 });
-    expect(latestWidgetLines(retuned)).toEqual(["loop active 4/4 · delay 0ms · work"]);
+    expect(latestWidgetLines(retuned)).toEqual(["loop active 4/4 · work"]);
     await retuned.settle();
     expect(retuned.state()).toMatchObject({ status: "active", currentIteration: 2, remainingBudget: 2 });
   });
 
-  test("pauses on terminal errors and resume retries in a fresh session", async () => {
+  test("pauses on terminal errors and resume continues in the current session", async () => {
     const harness = createHarness();
     await harness.command.handler("2 retry this", harness.context);
     harness.agentEnd("aborted");
@@ -505,7 +555,7 @@ describe("loop lifecycle", () => {
     expect(harness.prompts).toHaveLength(1);
     await harness.command.handler("resume", commandContext(harness));
     expect(harness.prompts).toHaveLength(2);
-    expect(harness.current.getSessionId()).toBe("session-2");
+    expect(harness.current.getSessionId()).toBe("session-1");
     expect(harness.state()).toMatchObject({ status: "active", currentIteration: 1, remainingBudget: 1 });
   });
 

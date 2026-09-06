@@ -16,6 +16,9 @@ export const LOOP_USAGE =
 export const MIN_LOOP_DELAY_MS = 1_000;
 export const MAX_LOOP_DELAY_MS = 24 * 60 * 60 * 1_000;
 
+const LOOP_CONTINUATION_PROMPT =
+  "Continue the current loop iteration from where you left off without repeating completed work.";
+
 export type LoopStatus = "active" | "stopping" | "paused" | "completed" | "stopped" | "inactive";
 
 export interface LoopState {
@@ -59,7 +62,7 @@ function completeArguments(
   return matches.length > 0 ? matches : null;
 }
 
-const COMMON_LOOP_DELAYS = ["1000ms", "1s", "5s", "10s", "30s", "1m", "5m", "1h", "24h"] as const;
+const COMMON_LOOP_DELAYS = ["off", "1s", "5s", "10s", "30s", "1m", "5m", "1h", "24h"] as const;
 
 function delayCompletions(prefix: string, command: string): ArgumentCompletion[] | null {
   return completeArguments(prefix, COMMON_LOOP_DELAYS.map((value) => ({
@@ -137,6 +140,7 @@ const LOOP_DURATION_MULTIPLIERS: Record<string, number> = {
 
 export function parseLoopDuration(value: string): number {
   const input = value.trim();
+  if (input === "off") return 0;
   const match = LOOP_DURATION_PATTERN.exec(input);
   if (!match) {
     throw new Error("delay must be a duration such as 1s, 5000ms, 1m, or 1h");
@@ -152,7 +156,7 @@ export function parseLoopDuration(value: string): number {
 }
 
 export function formatLoopDelay(delay: number): string {
-  if (delay === 0) return "0ms";
+  if (delay === 0) return "off";
   if (delay % 3_600_000 === 0) return `${delay / 3_600_000}h`;
   if (delay % 60_000 === 0) return `${delay / 60_000}m`;
   if (delay % 1_000 === 0) return `${delay / 1_000}s`;
@@ -386,15 +390,15 @@ function isTerminal(state: LoopState | undefined): boolean {
 
 export function formatLoopWidget(state: LoopState, width: number): string {
   const prompt = state.prompt.replace(/\s+/g, " ").trim();
-  const delay = formatLoopDelay(state.delay ?? 0);
+  const delay = state.delay > 0 ? ` · delay ${formatLoopDelay(state.delay)}` : "";
   if (state.status === "stopping") {
-    return truncateToWidth(`loop stopping · delay ${delay} · ${prompt}`, width, "…");
+    return truncateToWidth(`loop stopping${delay} · ${prompt}`, width, "…");
   }
   const futureIterations = state.pendingRetune ?? state.remainingBudget;
   const remainingIterations = futureIterations + 1;
   const totalIterations = state.currentIteration + futureIterations;
   return truncateToWidth(
-    `loop ${state.status} ${remainingIterations}/${totalIterations} · delay ${delay} · ${prompt}`,
+    `loop ${state.status} ${remainingIterations}/${totalIterations}${delay} · ${prompt}`,
     width,
     "…",
   );
@@ -411,6 +415,8 @@ export default function loopExtension(pi: ExtensionAPI): void {
   let transitionInFlight = false;
   let handledSettlementKey: string | undefined;
   let continuationWait: ContinuationWait | undefined;
+  let activeCommandKey: string | undefined;
+  let commandInterruptedKey: string | undefined;
   let currentSessionManagerRef: unknown;
 
   function stateFrom(ctx: ContextWithSession): LoopState | undefined {
@@ -512,7 +518,6 @@ export default function loopExtension(pi: ExtensionAPI): void {
       dispatchContinuation(ctx, latest);
     }, waitMs);
     continuationWait = { key, settledAt, timer };
-    (timer as unknown as { unref?: () => void }).unref?.();
   }
 
   function rescheduleContinuation(ctx: ExtensionContext, state: LoopState): void {
@@ -524,6 +529,41 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   function isWaitingForContinuation(ctx: ContextWithSession, state: LoopState): boolean {
     return continuationWait?.key === stateKey(ctx, state);
+  }
+
+  function clearCommandInterruption(): void {
+    activeCommandKey = undefined;
+    commandInterruptedKey = undefined;
+  }
+
+  function continueCurrentIteration(ctx: ExtensionContext, state: LoopState): void {
+    const content = `${LOOP_CONTINUATION_PROMPT}\n\nCurrent loop instructions:\n${state.prompt}`;
+    try {
+      pi.sendUserMessage(content);
+      notify(ctx, "loop continuing the current iteration", "info");
+    } catch (error) {
+      const paused = { ...state, status: "paused" as const };
+      persist(pi, paused);
+      renderWidget(ctx, paused);
+      notify(ctx, `loop paused: ${error instanceof Error ? error.message : String(error)}`, "error");
+    }
+  }
+
+  function handleFailedAssistant(ctx: ExtensionContext, stopReason: string | undefined): void {
+    if (stopReason !== "aborted" && stopReason !== "error") return;
+    const loaded = currentState(ctx);
+    if (!loaded || !statusIsActive(loaded) || transitionInFlight) return;
+    const key = stateKey(ctx, loaded);
+    if (stopReason === "aborted" && activeCommandKey === key) {
+      clearContinuationWait();
+      commandInterruptedKey = key;
+      return;
+    }
+    clearContinuationWait();
+    clearCommandInterruption();
+    const paused = { ...loaded, status: "paused" as const };
+    persist(pi, paused);
+    renderWidget(ctx, paused);
   }
 
   function transferState(state: LoopState, manager: SessionManager): LoopState {
@@ -716,6 +756,9 @@ export default function loopExtension(pi: ExtensionAPI): void {
     }
 
     const state = currentState(ctx);
+    if (state && statusIsActive(state) && !ctx.isIdle()) {
+      activeCommandKey = stateKey(ctx, state);
+    }
 
     if (parsed.kind === "status") {
       notify(ctx, formatLoopStatus(state), "info");
@@ -787,7 +830,11 @@ export default function loopExtension(pi: ExtensionAPI): void {
         notify(ctx, state && statusIsActive(state) ? "loop is already active" : "loop is not paused", "error");
         return;
       }
-      await replaceForIteration(ctx, { ...state, status: "active" });
+      const resumed = { ...state, status: "active" as const };
+      persist(pi, resumed);
+      renderWidget(ctx, resumed);
+      handledSettlementKey = undefined;
+      continueCurrentIteration(ctx, resumed);
       return;
     }
 
@@ -860,6 +907,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", (event, ctx) => {
     clearContinuationWait();
+    clearCommandInterruption();
     currentSessionManagerRef = ctx.sessionManager;
     transitionInFlight = false;
     handledSettlementKey = undefined;
@@ -888,33 +936,27 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   pi.on("message_end", (event, ctx) => {
     if (event.message.role !== "assistant") return;
-    const stopReason = (event.message as { stopReason?: string }).stopReason;
-    if (stopReason !== "aborted" && stopReason !== "error") return;
-    const loaded = currentState(ctx);
-    if (!loaded || !statusIsActive(loaded) || transitionInFlight) return;
-    clearContinuationWait();
-    const paused = { ...loaded, status: "paused" as const };
-    persist(pi, paused);
-    renderWidget(ctx, paused);
+    handleFailedAssistant(ctx, (event.message as { stopReason?: string }).stopReason);
   });
 
   pi.on("agent_end", (event, ctx) => {
     const assistant = [...event.messages]
       .reverse()
       .find((message) => message.role === "assistant") as { stopReason?: string } | undefined;
-    if (!assistant || (assistant.stopReason !== "aborted" && assistant.stopReason !== "error")) return;
-    const loaded = currentState(ctx);
-    if (!loaded || !statusIsActive(loaded) || transitionInFlight) return;
-    clearContinuationWait();
-    const paused = { ...loaded, status: "paused" as const };
-    persist(pi, paused);
-    renderWidget(ctx, paused);
+    handleFailedAssistant(ctx, assistant?.stopReason);
   });
 
   pi.on("agent_settled", (_event, ctx) => {
     const loaded = currentState(ctx);
     if (!loaded || !statusIsActive(loaded) || transitionInFlight) return;
     const key = stateKey(ctx, loaded);
+    if (commandInterruptedKey === key && loaded.status === "active") {
+      clearCommandInterruption();
+      handledSettlementKey = undefined;
+      continueCurrentIteration(ctx, loaded);
+      return;
+    }
+    clearCommandInterruption();
     if (handledSettlementKey === key) return;
     handledSettlementKey = key;
     scheduleContinuation(ctx, loaded);
@@ -922,6 +964,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   pi.on("session_tree", (_event, ctx) => {
     clearContinuationWait();
+    clearCommandInterruption();
     currentSessionManagerRef = ctx.sessionManager;
     handledSettlementKey = undefined;
     const loaded = latestStateFromContext(ctx);
@@ -933,6 +976,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   pi.on("session_shutdown", (_event, ctx) => {
     clearContinuationWait();
+    clearCommandInterruption();
     const loaded = currentState(ctx);
     if (loaded && statusIsActive(loaded) && !transitionInFlight) {
       try {
