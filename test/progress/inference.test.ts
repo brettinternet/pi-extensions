@@ -5,6 +5,7 @@ import {
   inferenceFromCompletion,
   inferenceOptions,
   inferenceRequest,
+  INFERENCE_SYSTEM_PROMPT,
   parseInference,
   resolveInferenceModel,
 } from "../../extensions/progress/inference.ts";
@@ -71,6 +72,12 @@ describe("progress inference model resolution", () => {
 });
 
 describe("progress inference contract", () => {
+  test("tells the model every enforced output bound", () => {
+    expect(INFERENCE_SYSTEM_PROMPT).toContain("phase is a 1-48 character");
+    expect(INFERENCE_SYSTEM_PROMPT).toContain("current is a 1-96 character");
+    expect(INFERENCE_SYSTEM_PROMPT).toContain("arrays of at most three 1-96 character labels");
+  });
+
   test("normalizes a valid bounded object", () => {
     expect(parseInference({ ...valid, phase: " Verification\n" })).toEqual(valid);
     expect(inferenceFromCompletion({ content: [{ type: "text", text: `\`\`\`json\n${JSON.stringify(valid)}\n\`\`\`` }], stopReason: "stop" })).toEqual(valid);
