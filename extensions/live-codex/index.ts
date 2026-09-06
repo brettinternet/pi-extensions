@@ -10,6 +10,7 @@ import type {
   EditorTheme,
   TUI,
 } from "@earendil-works/pi-tui";
+import { withApprovalStatus } from "../approval-status/index.ts";
 import {
   BACKGROUND_ACTIVITY_FINISHED_EVENT,
   BACKGROUND_ACTIVITY_STARTED_EVENT,
@@ -153,9 +154,13 @@ class LiveExtensionRuntime {
       } catch (error) {
         if (!(error instanceof VoiceLockHeldError) || !error.owner) throw error;
         const owner = error.owner;
-        const moveVoice = await context.ui.confirm(
-          "Move voice mode here?",
-          `Another Pi session currently owns live voice (PID ${owner.pid}, session ${owner.sessionId}). Move voice controls here? Work already running in that session will continue there; only voice controls move to this session.`,
+        const moveVoice = await withApprovalStatus(
+          this.#pi,
+          "Voice handoff approval required",
+          () => context.ui.confirm(
+            "Move voice mode here?",
+            `Another Pi session currently owns live voice (PID ${owner.pid}, session ${owner.sessionId}). Move voice controls here? Work already running in that session will continue there; only voice controls move to this session.`,
+          ),
         );
         if (!moveVoice) {
           context.ui.notify(

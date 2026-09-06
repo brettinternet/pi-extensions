@@ -1,5 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { withApprovalStatus } from "../approval-status/index.ts";
 import type { WorkbenchInput } from "./client.ts";
 import type { CommandRisk } from "./command-policy.ts";
 
@@ -400,25 +401,27 @@ export class ConfirmationBroker {
     this.#pending.set(request.requestId, controller);
     this.#pendingOperationIds.add(request.operationId);
     try {
-      const outcome = waitForConfirmation(this.#pi, request, combined);
-      this.#pi.events.emit(CONFIRMATION_REQUESTED_EVENT, request);
-      const result = await outcome;
-      if (result.kind === "resolution") {
-        if (result.resolution.decision !== "approved") {
-          throw new Error("Command was denied by the user");
+      await withApprovalStatus(this.#pi, request.title, async () => {
+        const outcome = waitForConfirmation(this.#pi, request, combined);
+        this.#pi.events.emit(CONFIRMATION_REQUESTED_EVENT, request);
+        const result = await outcome;
+        if (result.kind === "resolution") {
+          if (result.resolution.decision !== "approved") {
+            throw new Error("Command was denied by the user");
+          }
+          return;
         }
-        return;
-      }
-      if (result.kind === "expired") {
-        throw new Error("Confirmation request expired without a decision");
-      }
+        if (result.kind === "expired") {
+          throw new Error("Confirmation request expired without a decision");
+        }
 
-      // A missing voice adapter and a released voice session both use the same
-      // serialized TUI path. The release event is deliberately not an approval.
-      try {
-        this.#pi.events.emit(CONFIRMATION_CANCELLED_EVENT, request);
-      } catch {}
-      await this.#confirmInTui(request, reason, ctx, combined);
+        // A missing voice adapter and a released voice session both use the same
+        // serialized TUI path. The release event is deliberately not an approval.
+        try {
+          this.#pi.events.emit(CONFIRMATION_CANCELLED_EVENT, request);
+        } catch {}
+        await this.#confirmInTui(request, reason, ctx, combined);
+      }, request.requestId);
     } catch (cause) {
       if (generation === this.#runGeneration) {
         this.#blockedOperationIds.add(request.operationId);
