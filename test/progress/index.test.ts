@@ -1,4 +1,4 @@
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -75,7 +75,7 @@ describe("progress extension", () => {
     expect(handlers.has("context")).toBeFalse();
 
     handlers.get("session_start")!({}, ctx);
-    expect(latestLines(widgets)).toEqual(["progress <1m"]);
+    expect(latestLines(widgets)).toEqual([]);
 
     handlers.get("before_agent_start")!({}, ctx);
     await flushRender();
@@ -108,6 +108,23 @@ describe("progress extension", () => {
       "progress <1m · ✓ settled",
       "touched src/a.ts",
     ]);
+  });
+
+  test("starts counting runtime at the first prompt", async () => {
+    const now = spyOn(Date, "now").mockReturnValue(1_000);
+    const { handlers, widgets, ctx } = setup();
+    try {
+      handlers.get("session_start")!({}, ctx);
+      now.mockReturnValue(3_601_000);
+      expect(latestLines(widgets)).toEqual([]);
+
+      handlers.get("before_agent_start")!({ prompt: "Start" }, ctx);
+      await flushRender();
+      expect(latestLines(widgets)).toEqual(["progress <1m · ● thinking"]);
+    } finally {
+      handlers.get("session_shutdown")!({}, ctx);
+      now.mockRestore();
+    }
   });
 
   test("keeps a read-only result until the next request starts", async () => {
