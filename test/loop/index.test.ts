@@ -6,6 +6,7 @@ import loopExtension, {
   formatLoopStatus,
   formatLoopWidget,
   parseLoopCommand,
+  parseLoopDuration,
   readLoopState,
   type LoopState,
 } from "../../extensions/loop/index.ts";
@@ -170,8 +171,18 @@ describe("loop parser and state", () => {
     expect(parseLoopCommand("3 fix the failing tests")).toEqual({
       kind: "start",
       count: 3,
+      delay: 0,
       prompt: "fix the failing tests",
     });
+    expect(parseLoopCommand("3 --delay 2s fix the failing tests")).toEqual({
+      kind: "start",
+      count: 3,
+      delay: 2_000,
+      prompt: "fix the failing tests",
+    });
+    expect(parseLoopCommand("delay 1m")).toEqual({ kind: "delay", delay: 60_000 });
+    expect(parseLoopDuration("1000ms")).toBe(1_000);
+    expect(parseLoopDuration("1.5s")).toBe(1_500);
     expect(parseLoopCommand("4")).toEqual({ kind: "retune", count: 4 });
     expect(parseLoopCommand("+2")).toEqual({ kind: "adjust", delta: 2 });
     expect(parseLoopCommand("-1")).toEqual({ kind: "adjust", delta: -1 });
@@ -192,6 +203,11 @@ describe("loop parser and state", () => {
     expect(() => parseLoopCommand("status now")).toThrow("does not accept");
     expect(() => parseLoopCommand("prompt")).toThrow("requires text");
     expect(() => parseLoopCommand("append")).toThrow("requires text");
+    expect(() => parseLoopCommand("delay")).toThrow("requires one duration");
+    expect(() => parseLoopCommand("delay 999ms")).toThrow("at least 1s");
+    expect(() => parseLoopCommand("delay 25h")).toThrow("24h");
+    expect(() => parseLoopCommand("3 --delay nope fix")).toThrow("duration");
+    expect(() => parseLoopCommand("3 --delay 1s")).toThrow("prompt");
   });
 
   test("completes public controls and common iteration counts", () => {
@@ -209,6 +225,16 @@ describe("loop parser and state", () => {
     expect(command.getArgumentCompletions?.("ap")).toEqual([
       { value: "append ", label: "append <text>", description: "Append to the future loop prompt" },
     ]);
+    expect(command.getArgumentCompletions?.("delay ")).toContainEqual({
+      value: "delay 1s",
+      label: "delay 1s",
+      description: "Set the delay between settled iterations",
+    });
+    expect(command.getArgumentCompletions?.("3 --delay ")).toContainEqual({
+      value: "3 --delay 1s",
+      label: "3 --delay 1s",
+      description: "Set the delay between settled iterations",
+    });
     expect(command.getArgumentCompletions?.("__")).toBeNull();
   });
 
@@ -220,10 +246,12 @@ describe("loop parser and state", () => {
       currentIteration: 2,
       remainingBudget: 3,
       pendingRetune: 5,
+      delay: 2_000,
       status: "paused",
     };
     expect(formatLoopStatus(state)).toContain("loop: paused");
     expect(formatLoopStatus(state)).toContain("pending retune: 5");
+    expect(formatLoopStatus(state)).toContain("delay: 2s");
     expect(formatLoopStatus(state)).not.toContain("secret prompt");
   });
 
@@ -235,18 +263,35 @@ describe("loop parser and state", () => {
       currentIteration: 1,
       remainingBudget: 3,
       pendingRetune: null,
+      delay: 0,
       status: "active",
     };
     expect(formatLoopWidget(state, 80)).toBe(
-      "loop active 4/4 · inspect the repository and fix the failing tests",
+      "loop active 4/4 · delay 0ms · inspect the repository and fix the failing tests",
     );
     const narrow = formatLoopWidget(state, 32);
-    expect(stripTerminalSequences(narrow)).toBe("loop active 4/4 · inspect the r…");
+    expect(stripTerminalSequences(narrow)).toBe("loop active 4/4 · delay 0ms · i…");
     expect(visibleWidth(narrow)).toBe(32);
 
     expect(formatLoopWidget({ ...state, status: "stopping" }, 80)).toBe(
-      "loop stopping · inspect the repository and fix the failing tests",
+      "loop stopping · delay 0ms · inspect the repository and fix the failing tests",
     );
+  });
+
+  test("defaults delay to zero when loading an older persisted state", () => {
+    expect(readLoopState([{
+      type: "custom",
+      customType: LOOP_STATE_ENTRY,
+      data: {
+        version: 1,
+        runId: "run-older",
+        prompt: "old prompt",
+        currentIteration: 1,
+        remainingBudget: 0,
+        pendingRetune: null,
+        status: "completed",
+      },
+    }])).toMatchObject({ delay: 0 });
   });
 });
 
@@ -259,7 +304,7 @@ describe("loop lifecycle", () => {
     expect(harness.prompts).toEqual(["inspect the repository"]);
     expect(harness.current.entries.every((entry) => entry.customType === LOOP_STATE_ENTRY)).toBeTrue();
     expect(stateOf(harness.current)).toMatchObject({ currentIteration: 1, remainingBudget: 1, status: "active" });
-    expect(latestWidgetLines(harness)).toEqual(["loop active 2/2 · inspect the repository"]);
+    expect(latestWidgetLines(harness)).toEqual(["loop active 2/2 · delay 0ms · inspect the repository"]);
   });
 
   test("continues exactly once at the settled boundary", async () => {
@@ -274,6 +319,40 @@ describe("loop lifecycle", () => {
     await harness.settle();
     expect(harness.prompts).toHaveLength(2);
     expect(harness.state()).toMatchObject({ status: "completed", currentIteration: 2 });
+  });
+
+  test("waits after settlement, then applies updates made during the wait", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 --delay 2s original prompt", harness.context);
+    await harness.settle();
+    expect(harness.prompts).toEqual(["original prompt"]);
+
+    await harness.command.handler("prompt updated prompt", commandContext(harness));
+    await harness.command.handler("delay 1s", commandContext(harness));
+    expect(harness.state()).toMatchObject({ delay: 1_000, currentIteration: 1, status: "active" });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(harness.prompts).toHaveLength(1);
+    await new Promise((resolve) => setTimeout(resolve, 1_050));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.prompts).toEqual(["original prompt", "updated prompt"]);
+  });
+
+  test("stops immediately during a delay and does not wait after a pending stop", async () => {
+    const waiting = createHarness();
+    await waiting.command.handler("2 --delay 1s work", waiting.context);
+    await waiting.settle();
+    await waiting.command.handler("stop", commandContext(waiting));
+    expect(waiting.state()?.status).toBe("stopped");
+    await new Promise((resolve) => setTimeout(resolve, 1_050));
+    expect(waiting.prompts).toHaveLength(1);
+
+    const stopping = createHarness();
+    await stopping.command.handler("2 --delay 1s work", stopping.context);
+    await stopping.command.handler("stop", commandContext(stopping));
+    await stopping.command.handler("delay 2s", commandContext(stopping));
+    expect(stopping.state()).toMatchObject({ status: "stopping", delay: 2_000 });
+    await stopping.settle();
+    expect(stopping.state()?.status).toBe("stopped");
   });
 
   test("ignores duplicate and stale settlement callbacks", async () => {
@@ -295,10 +374,10 @@ describe("loop lifecycle", () => {
     await harness.command.handler("2 repeat the check", harness.context);
     await harness.command.handler("4", commandContext(harness));
     expect(harness.state()).toMatchObject({ remainingBudget: 1, pendingRetune: 4 });
-    expect(latestWidgetLines(harness)).toEqual(["loop active 5/5 · repeat the check"]);
+    expect(latestWidgetLines(harness)).toEqual(["loop active 5/5 · delay 0ms · repeat the check"]);
     await harness.settle();
     expect(harness.state()).toMatchObject({ currentIteration: 2, remainingBudget: 3, pendingRetune: null });
-    expect(latestWidgetLines(harness)).toEqual(["loop active 4/5 · repeat the check"]);
+    expect(latestWidgetLines(harness)).toEqual(["loop active 4/5 · delay 0ms · repeat the check"]);
   });
 
   test("replaces and cumulatively appends to future iteration prompts", async () => {
@@ -368,7 +447,7 @@ describe("loop lifecycle", () => {
     await harness.command.handler("3 repeat the check", harness.context);
     await harness.command.handler("+2", commandContext(harness));
     expect(harness.state()?.pendingRetune).toBe(4);
-    expect(latestWidgetLines(harness)).toEqual(["loop active 5/5 · repeat the check"]);
+    expect(latestWidgetLines(harness)).toEqual(["loop active 5/5 · delay 0ms · repeat the check"]);
 
     await harness.command.handler("-4", commandContext(harness));
     expect(harness.state()?.pendingRetune).toBe(0);
@@ -385,7 +464,7 @@ describe("loop lifecycle", () => {
     await harness.command.handler("2 work", harness.context);
     await harness.command.handler("stop", commandContext(harness));
     expect(harness.state()?.status).toBe("stopping");
-    expect(latestWidgetLines(harness)).toEqual(["loop stopping · work"]);
+    expect(latestWidgetLines(harness)).toEqual(["loop stopping · delay 0ms · work"]);
     await harness.settle();
     expect(harness.state()?.status).toBe("stopped");
 
@@ -412,7 +491,7 @@ describe("loop lifecycle", () => {
     await retuned.command.handler("stop", commandContext(retuned));
     await retuned.command.handler("3", commandContext(retuned));
     expect(retuned.state()).toMatchObject({ status: "active", pendingRetune: 3 });
-    expect(latestWidgetLines(retuned)).toEqual(["loop active 4/4 · work"]);
+    expect(latestWidgetLines(retuned)).toEqual(["loop active 4/4 · delay 0ms · work"]);
     await retuned.settle();
     expect(retuned.state()).toMatchObject({ status: "active", currentIteration: 2, remainingBudget: 2 });
   });

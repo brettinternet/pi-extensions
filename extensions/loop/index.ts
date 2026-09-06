@@ -11,7 +11,10 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 export const LOOP_STATE_ENTRY = "pi-loop-state-v1";
 export const LOOP_WIDGET_KEY = "pi-loop";
 export const LOOP_USAGE =
-  "usage: /loop <positive-count> <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop prompt <text> | /loop append <text> | /loop status | /loop resume | /loop stop";
+  "usage: /loop <positive-count> [--delay <duration>] <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop delay <duration> | /loop prompt <text> | /loop append <text> | /loop status | /loop resume | /loop stop";
+
+export const MIN_LOOP_DELAY_MS = 1_000;
+export const MAX_LOOP_DELAY_MS = 24 * 60 * 60 * 1_000;
 
 export type LoopStatus = "active" | "stopping" | "paused" | "completed" | "stopped" | "inactive";
 
@@ -22,15 +25,17 @@ export interface LoopState {
   currentIteration: number;
   remainingBudget: number;
   pendingRetune: number | null;
+  delay: number;
   status: LoopStatus;
   ownerSessionId?: string;
   ownerSessionFile?: string;
 }
 
 export type ParsedLoopCommand =
-  | { kind: "start"; count: number; prompt: string }
+  | { kind: "start"; count: number; delay: number; prompt: string }
   | { kind: "retune"; count: number }
   | { kind: "adjust"; delta: number }
+  | { kind: "delay"; delay: number }
   | { kind: "replacePrompt"; prompt: string }
   | { kind: "appendPrompt"; prompt: string }
   | { kind: "status" }
@@ -54,6 +59,57 @@ function completeArguments(
   return matches.length > 0 ? matches : null;
 }
 
+const COMMON_LOOP_DELAYS = ["1000ms", "1s", "5s", "10s", "30s", "1m", "5m", "1h", "24h"] as const;
+
+function delayCompletions(prefix: string, command: string): ArgumentCompletion[] | null {
+  return completeArguments(prefix, COMMON_LOOP_DELAYS.map((value) => ({
+    value: `${command} ${value}`,
+    label: `${command} ${value}`,
+    description: "Set the delay between settled iterations",
+  })));
+}
+
+function completeLoopArguments(prefix: string): ArgumentCompletion[] | null {
+  const input = prefix.trimStart();
+  const delayCommand = /^(delay|--delay)(?:\s+(.*))?$/.exec(input);
+  if (delayCommand?.[2] !== undefined) return delayCompletions(prefix, delayCommand[1]);
+
+  const countDelay = /^(\d+)\s+--delay(?:\s+(.*))?$/.exec(input);
+  if (countDelay) {
+    if (countDelay[2] !== undefined) {
+      return delayCompletions(prefix, `${countDelay[1]} --delay`);
+    }
+    return completeArguments(prefix, [{
+      value: `${countDelay[1]} --delay `,
+      label: `${countDelay[1]} --delay <duration>`,
+      description: "Set the delay between settled iterations for this loop",
+    }]);
+  }
+
+  const countPrefix = /^(\d+)\s+$/.exec(input);
+  if (countPrefix) {
+    return completeArguments(prefix, [
+      { value: `${countPrefix[1]} `, label: `${countPrefix[1]} <prompt>`, description: `Run a prompt ${countPrefix[1]} time${countPrefix[1] === "1" ? "" : "s"}` },
+      { value: `${countPrefix[1]} --delay `, label: `${countPrefix[1]} --delay <duration>`, description: "Set the delay between settled iterations for this loop" },
+    ]);
+  }
+
+  return completeArguments(prefix, [
+    { value: "status", label: "status", description: "Show the current loop state" },
+    { value: "resume", label: "resume", description: "Retry a paused iteration" },
+    { value: "stop", label: "stop", description: "Stop gracefully" },
+    { value: "delay ", label: "delay <duration>", description: "Set the delay between settled iterations" },
+    { value: "--delay ", label: "--delay <duration>", description: "Set the delay when starting a loop" },
+    { value: "prompt ", label: "prompt <text>", description: "Replace the future loop prompt" },
+    { value: "append ", label: "append <text>", description: "Append to the future loop prompt" },
+    { value: "+1", label: "+1", description: "Add one future iteration" },
+    { value: "-1", label: "-1", description: "Remove one future iteration" },
+    { value: "1 ", label: "1 <prompt>", description: "Run a prompt once" },
+    { value: "3 ", label: "3 <prompt>", description: "Run a prompt three times" },
+    { value: "5 ", label: "5 <prompt>", description: "Run a prompt five times" },
+  ]);
+}
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -64,6 +120,43 @@ function isPositiveInteger(value: unknown): value is number {
 
 function isNonNegativeInteger(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isValidLoopDelay(value: unknown): value is number {
+  return isNonNegativeInteger(value) &&
+    (value === 0 || (value >= MIN_LOOP_DELAY_MS && value <= MAX_LOOP_DELAY_MS));
+}
+
+const LOOP_DURATION_PATTERN = /^(\d+(?:\.\d+)?|\.\d+)(ms|s|m|h)$/;
+const LOOP_DURATION_MULTIPLIERS: Record<string, number> = {
+  ms: 1,
+  s: 1_000,
+  m: 60_000,
+  h: 3_600_000,
+};
+
+export function parseLoopDuration(value: string): number {
+  const input = value.trim();
+  const match = LOOP_DURATION_PATTERN.exec(input);
+  if (!match) {
+    throw new Error("delay must be a duration such as 1s, 5000ms, 1m, or 1h");
+  }
+  const milliseconds = Number(match[1]) * LOOP_DURATION_MULTIPLIERS[match[2]];
+  if (!Number.isFinite(milliseconds) || milliseconds < MIN_LOOP_DELAY_MS) {
+    throw new Error("delay must be at least 1s");
+  }
+  if (milliseconds > MAX_LOOP_DELAY_MS) {
+    throw new Error("delay must not exceed 24h");
+  }
+  return Math.round(milliseconds);
+}
+
+export function formatLoopDelay(delay: number): string {
+  if (delay === 0) return "0ms";
+  if (delay % 3_600_000 === 0) return `${delay / 3_600_000}h`;
+  if (delay % 60_000 === 0) return `${delay / 60_000}m`;
+  if (delay % 1_000 === 0) return `${delay / 1_000}s`;
+  return `${delay}ms`;
 }
 
 /** Parse public and internal /loop arguments without consulting current run state. */
@@ -86,6 +179,11 @@ export function parseLoopCommand(args: string): ParsedLoopCommand {
   if (first === "resume") {
     if (rest) throw new Error(`resume does not accept arguments; ${LOOP_USAGE}`);
     return { kind: "resume" };
+  }
+  if (first === "delay") {
+    const fields = rest.split(/\s+/).filter(Boolean);
+    if (fields.length !== 1) throw new Error(`delay requires one duration; ${LOOP_USAGE}`);
+    return { kind: "delay", delay: parseLoopDuration(fields[0]) };
   }
   if (first === "prompt" || first === "append") {
     if (!rest) throw new Error(`${first} requires text; ${LOOP_USAGE}`);
@@ -126,7 +224,19 @@ export function parseLoopCommand(args: string): ParsedLoopCommand {
     if (!/^\d+$/.test(first)) throw new Error(`count must be a positive integer; ${LOOP_USAGE}`);
     const count = Number(first);
     if (!isPositiveInteger(count)) throw new Error(`count must be a positive integer; ${LOOP_USAGE}`);
-    return rest ? { kind: "start", count, prompt: rest } : { kind: "retune", count };
+    if (!rest) return { kind: "retune", count };
+
+    let delay = 0;
+    let prompt = rest;
+    const delayOption = /^(--delay)(?:=|\s+)(\S+)(?:\s+([\s\S]+))?$/.exec(rest);
+    if (delayOption) {
+      delay = parseLoopDuration(delayOption[2]);
+      prompt = delayOption[3]?.trim() ?? "";
+      if (!prompt) throw new Error(`a prompt is required after --delay; ${LOOP_USAGE}`);
+    } else if (/^--delay(?:\s|=|$)/.test(rest)) {
+      throw new Error(`--delay requires a duration and prompt; ${LOOP_USAGE}`);
+    }
+    return { kind: "start", count, delay, prompt };
   }
 
   throw new Error(`expected a positive count or a loop command; ${LOOP_USAGE}`);
@@ -155,6 +265,7 @@ export function parseLoopState(value: unknown): LoopState | undefined {
   ) {
     return undefined;
   }
+  const delay = value.delay === undefined ? 0 : value.delay;
   if (
     value.version !== 1 ||
     typeof value.runId !== "string" ||
@@ -163,7 +274,8 @@ export function parseLoopState(value: unknown): LoopState | undefined {
     !value.prompt.trim() ||
     !isPositiveInteger(value.currentIteration) ||
     !isNonNegativeInteger(value.remainingBudget) ||
-    (value.pendingRetune !== null && !isNonNegativeInteger(value.pendingRetune))
+    (value.pendingRetune !== null && !isNonNegativeInteger(value.pendingRetune)) ||
+    !isValidLoopDelay(delay)
   ) {
     return undefined;
   }
@@ -177,6 +289,7 @@ export function parseLoopState(value: unknown): LoopState | undefined {
     currentIteration: value.currentIteration,
     remainingBudget: value.remainingBudget,
     pendingRetune: value.pendingRetune,
+    delay,
     status,
     ...(value.ownerSessionId ? { ownerSessionId: value.ownerSessionId } : {}),
     ...(value.ownerSessionFile ? { ownerSessionFile: value.ownerSessionFile } : {}),
@@ -192,6 +305,7 @@ export function formatLoopStatus(state: LoopState | undefined): string {
     `iteration: ${state.currentIteration}`,
     `remaining: ${state.remainingBudget}`,
     `pending retune: ${pending}`,
+    `delay: ${formatLoopDelay(state.delay ?? 0)}`,
   ].join("\n");
 }
 
@@ -272,23 +386,31 @@ function isTerminal(state: LoopState | undefined): boolean {
 
 export function formatLoopWidget(state: LoopState, width: number): string {
   const prompt = state.prompt.replace(/\s+/g, " ").trim();
+  const delay = formatLoopDelay(state.delay ?? 0);
   if (state.status === "stopping") {
-    return truncateToWidth(`loop stopping · ${prompt}`, width, "…");
+    return truncateToWidth(`loop stopping · delay ${delay} · ${prompt}`, width, "…");
   }
   const futureIterations = state.pendingRetune ?? state.remainingBudget;
   const remainingIterations = futureIterations + 1;
   const totalIterations = state.currentIteration + futureIterations;
   return truncateToWidth(
-    `loop ${state.status} ${remainingIterations}/${totalIterations} · ${prompt}`,
+    `loop ${state.status} ${remainingIterations}/${totalIterations} · delay ${delay} · ${prompt}`,
     width,
     "…",
   );
 }
 
+type ContinuationWait = {
+  key: string;
+  settledAt: number;
+  timer: ReturnType<typeof setTimeout>;
+};
+
 export default function loopExtension(pi: ExtensionAPI): void {
   let runState: LoopState | undefined;
   let transitionInFlight = false;
   let handledSettlementKey: string | undefined;
+  let continuationWait: ContinuationWait | undefined;
   let currentSessionManagerRef: unknown;
 
   function stateFrom(ctx: ContextWithSession): LoopState | undefined {
@@ -353,6 +475,57 @@ export default function loopExtension(pi: ExtensionAPI): void {
     return `${state.runId}:${state.currentIteration}:${identity.token ?? "unknown"}`;
   }
 
+  function clearContinuationWait(): void {
+    if (!continuationWait) return;
+    clearTimeout(continuationWait.timer);
+    continuationWait = undefined;
+  }
+
+  function scheduleContinuation(
+    ctx: ExtensionContext,
+    state: LoopState,
+    settledAt = Date.now(),
+  ): void {
+    if (!statusIsActive(state) || transitionInFlight) return;
+    const nextBudget = state.pendingRetune ?? state.remainingBudget;
+    if (state.status === "stopping" || nextBudget <= 0 || state.delay === 0) {
+      clearContinuationWait();
+      dispatchContinuation(ctx, state);
+      return;
+    }
+
+    const key = stateKey(ctx, state);
+    if (continuationWait?.key === key) return;
+    clearContinuationWait();
+    const waitMs = Math.max(0, settledAt + state.delay - Date.now());
+    if (waitMs === 0) {
+      dispatchContinuation(ctx, state);
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      if (!continuationWait || continuationWait.key !== key || continuationWait.timer !== timer) return;
+      continuationWait = undefined;
+      const latest = currentState(ctx);
+      if (!latest || latest.runId !== state.runId || latest.currentIteration !== state.currentIteration) return;
+      if (!statusIsActive(latest)) return;
+      dispatchContinuation(ctx, latest);
+    }, waitMs);
+    continuationWait = { key, settledAt, timer };
+    (timer as unknown as { unref?: () => void }).unref?.();
+  }
+
+  function rescheduleContinuation(ctx: ExtensionContext, state: LoopState): void {
+    if (!continuationWait || continuationWait.key !== stateKey(ctx, state)) return;
+    const settledAt = continuationWait.settledAt;
+    clearContinuationWait();
+    scheduleContinuation(ctx, state, settledAt);
+  }
+
+  function isWaitingForContinuation(ctx: ContextWithSession, state: LoopState): boolean {
+    return continuationWait?.key === stateKey(ctx, state);
+  }
+
   function transferState(state: LoopState, manager: SessionManager): LoopState {
     const transferred = stateForSession({ ...state, status: "active" }, sessionIdentity(manager));
     manager.appendCustomEntry(LOOP_STATE_ENTRY, transferred);
@@ -371,6 +544,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   }
 
   async function replaceForIteration(ctx: ExtensionCommandContext, next: LoopState): Promise<void> {
+    clearContinuationWait();
     const sourceIdentity = contextIdentity(ctx);
     const parentSession = sourceIdentity.file;
     const inactive = {
@@ -457,6 +631,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     const state = currentState(ctx);
     if (!state || state.runId !== expectedRunId || state.currentIteration !== expectedIteration) return;
     if (!statusIsActive(state) || transitionInFlight) return;
+    clearContinuationWait();
 
     if (state.status === "stopping") {
       const stopped = { ...state, status: "stopped" as const };
@@ -533,6 +708,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     if (parsed.kind === "pause") {
       const state = currentState(ctx);
       if (!state || state.runId !== parsed.runId || state.currentIteration !== parsed.iteration || !statusIsActive(state)) return;
+      clearContinuationWait();
       const paused = { ...state, status: "paused" as const };
       persist(pi, paused);
       renderWidget(ctx, paused);
@@ -546,10 +722,38 @@ export default function loopExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    if (parsed.kind === "delay") {
+      if (!state || isTerminal(state)) {
+        notify(ctx, "a loop must be active, stopping, or paused to update its delay", "error");
+        return;
+      }
+      const updated = { ...state, delay: parsed.delay };
+      persist(pi, updated);
+      renderWidget(ctx, updated);
+      if (state.status === "active") rescheduleContinuation(ctx, updated);
+      if (state.status === "paused") {
+        notify(ctx, `loop delay set to ${formatLoopDelay(parsed.delay)}; resume will use it`, "info");
+      } else if (state.status === "stopping") {
+        notify(ctx, `loop delay set to ${formatLoopDelay(parsed.delay)}; loop is still stopping`, "info");
+      } else {
+        notify(ctx, `loop delay set to ${formatLoopDelay(parsed.delay)}`, "info");
+      }
+      return;
+    }
+
     if (parsed.kind === "stop") {
       if (!state || state.status === "inactive" || state.status === "completed" || state.status === "stopped") {
         notify(ctx, "loop: no active run", "info");
         clearWidget(ctx);
+        return;
+      }
+      if (isWaitingForContinuation(ctx, state)) {
+        clearContinuationWait();
+        const stopped = { ...state, status: "stopped" as const };
+        persist(pi, stopped);
+        clearWidget(ctx);
+        runState = stopped;
+        notify(ctx, "loop stopped", "info");
         return;
       }
       if (state.status === "paused") {
@@ -625,6 +829,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
       const retuned = { ...state, pendingRetune: nextBudget, status: "active" as const };
       persist(pi, retuned);
       renderWidget(ctx, retuned);
+      if (nextBudget <= 0) rescheduleContinuation(ctx, retuned);
       notify(ctx, `loop will run ${nextBudget} future iteration${nextBudget === 1 ? "" : "s"}`, "info");
       return;
     }
@@ -645,6 +850,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
       currentIteration: 1,
       remainingBudget: parsed.count - 1,
       pendingRetune: null,
+      delay: parsed.delay,
       status: "active",
       ...(contextIdentity(ctx).id ? { ownerSessionId: contextIdentity(ctx).id } : {}),
       ...(contextIdentity(ctx).file ? { ownerSessionFile: contextIdentity(ctx).file } : {}),
@@ -653,6 +859,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   }
 
   pi.on("session_start", (event, ctx) => {
+    clearContinuationWait();
     currentSessionManagerRef = ctx.sessionManager;
     transitionInFlight = false;
     handledSettlementKey = undefined;
@@ -685,6 +892,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     if (stopReason !== "aborted" && stopReason !== "error") return;
     const loaded = currentState(ctx);
     if (!loaded || !statusIsActive(loaded) || transitionInFlight) return;
+    clearContinuationWait();
     const paused = { ...loaded, status: "paused" as const };
     persist(pi, paused);
     renderWidget(ctx, paused);
@@ -697,6 +905,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     if (!assistant || (assistant.stopReason !== "aborted" && assistant.stopReason !== "error")) return;
     const loaded = currentState(ctx);
     if (!loaded || !statusIsActive(loaded) || transitionInFlight) return;
+    clearContinuationWait();
     const paused = { ...loaded, status: "paused" as const };
     persist(pi, paused);
     renderWidget(ctx, paused);
@@ -708,10 +917,11 @@ export default function loopExtension(pi: ExtensionAPI): void {
     const key = stateKey(ctx, loaded);
     if (handledSettlementKey === key) return;
     handledSettlementKey = key;
-    dispatchContinuation(ctx, loaded);
+    scheduleContinuation(ctx, loaded);
   });
 
   pi.on("session_tree", (_event, ctx) => {
+    clearContinuationWait();
     currentSessionManagerRef = ctx.sessionManager;
     handledSettlementKey = undefined;
     const loaded = latestStateFromContext(ctx);
@@ -722,6 +932,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    clearContinuationWait();
     const loaded = currentState(ctx);
     if (loaded && statusIsActive(loaded) && !transitionInFlight) {
       try {
@@ -735,19 +946,8 @@ export default function loopExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("loop", {
-    description: "<count> <prompt> | <count> | ±<count> | prompt | append | status | resume | stop — Run a bounded fresh-session loop",
-    getArgumentCompletions: (prefix) => completeArguments(prefix, [
-      { value: "status", label: "status", description: "Show the current loop state" },
-      { value: "resume", label: "resume", description: "Retry a paused iteration" },
-      { value: "stop", label: "stop", description: "Stop gracefully" },
-      { value: "prompt ", label: "prompt <text>", description: "Replace the future loop prompt" },
-      { value: "append ", label: "append <text>", description: "Append to the future loop prompt" },
-      { value: "+1", label: "+1", description: "Add one future iteration" },
-      { value: "-1", label: "-1", description: "Remove one future iteration" },
-      { value: "1 ", label: "1 <prompt>", description: "Run a prompt once" },
-      { value: "3 ", label: "3 <prompt>", description: "Run a prompt three times" },
-      { value: "5 ", label: "5 <prompt>", description: "Run a prompt five times" },
-    ]),
+    description: "<count> [--delay <duration>] <prompt> | <count> | ±<count> | delay | prompt | append | status | resume | stop — Run a bounded fresh-session loop",
+    getArgumentCompletions: (prefix) => completeLoopArguments(prefix),
     handler: async (args, ctx) => {
       try {
         await handleCommand(args, ctx);
