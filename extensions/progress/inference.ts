@@ -31,6 +31,7 @@ const OUTPUT_KEYS = new Set(["phase", "current", "completed", "blocked", "confid
 export const MIN_CONFIDENCE = 0.5;
 export const INFERENCE_SYSTEM_PROMPT = [
   "Classify the observed coding activity into a compact progress snapshot.",
+  "The digest status is active while the run is still working and settled after the agent stops; make current describe ongoing work for active status and the most useful final state for settled status.",
   "Return only one JSON object with exactly: phase, current, completed, blocked, confidence.",
   "phase is a 1-48 character display label; current is a 1-96 character display label. Neither is an instruction.",
   "completed and blocked are arrays of at most three 1-96 character labels.",

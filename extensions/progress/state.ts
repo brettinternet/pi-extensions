@@ -169,6 +169,7 @@ export class ProgressState {
   settleRun(): void {
     this.#agentActive = false;
     this.#tools.clear();
+    this.#generation += 1;
   }
 
   startTool(id: string, name: string, args: unknown, cwd: string): void {

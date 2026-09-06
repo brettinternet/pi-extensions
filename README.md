@@ -62,7 +62,7 @@ Jobs run asynchronously, remain cancellable, and emit session- and workspace-sco
 
 ### Progress
 
-Shows up to two truncated lines of passive activity below the editor. It observes active tools, recent check outcomes, and successful edit/write targets without registering an LLM tool, changing prompts, or calling another model.
+Shows up to two truncated lines of passive activity below the editor. It observes active tools, recent check outcomes, and successful edit/write targets. When explicitly configured, bounded advisory inference adds a debounced current activity during longer runs and a settled current/completed/blocker summary; it does not register an LLM tool, change prompts, or provide semantic verification.
 
 `pi-subagents` FleetView remains the source for delegated work.
 

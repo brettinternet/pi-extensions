@@ -98,13 +98,27 @@ describe("progress inference contract", () => {
     expect(() => inferenceFromCompletion({ content: [], stopReason: "stop" })).toThrow("no usable text");
   });
 
+  test("tells inference whether the run is active or settled", () => {
+    const active = (inferenceRequest(
+      { status: "active", request: "work", events: [], touchedPaths: [], checks: [] },
+      DEFAULT_CONFIG,
+    ).messages[0].content as Array<{ text: string }>)[0].text;
+    const settled = (inferenceRequest(
+      { status: "settled", request: "done", events: [], touchedPaths: [], checks: [] },
+      DEFAULT_CONFIG,
+    ).messages[0].content as Array<{ text: string }>)[0].text;
+    expect(active).toContain('"status":"active"');
+    expect(settled).toContain('"status":"settled"');
+  });
+
   test("truncates the digest at the configured input boundary", () => {
     const request = inferenceRequest(
-      { request: "x".repeat(1_000), events: [], touchedPaths: [], checks: [] },
+      { status: "active", request: "x".repeat(1_000), events: [], touchedPaths: [], checks: [] },
       { ...DEFAULT_CONFIG, maxInputChars: 120 },
     );
     const text = (request.messages[0].content as Array<{ text: string }>)[0].text;
     expect(text.length).toBeLessThanOrEqual(120);
+    expect(text).toContain('"status":"active"');
     expect(text).not.toContain("system prompt");
   });
 });

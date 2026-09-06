@@ -22,6 +22,7 @@ async function flushAsync(): Promise<void> {
 function harness(completions: Array<Promise<any>> = []) {
   const handlers = new Map<string, Handler>();
   const entries: Array<{ type: string; data: unknown }> = [];
+  const requests: unknown[] = [];
   const signals: AbortSignal[] = [];
   let calls = 0;
   let registerToolCalls = 0;
@@ -41,7 +42,8 @@ function harness(completions: Array<Promise<any>> = []) {
       hasConfiguredAuth: () => true,
       getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "test" }),
       getProvider: () => ({
-        streamSimple: (_model: Model, _request: unknown, options: { signal: AbortSignal }) => {
+        streamSimple: (_model: Model, request: unknown, options: { signal: AbortSignal }) => {
+          requests.push(request);
           signals.push(options.signal);
           const completion = completions[calls++] ?? Promise.resolve({
             content: [{ type: "text", text: JSON.stringify(semantic) }],
@@ -53,13 +55,27 @@ function harness(completions: Array<Promise<any>> = []) {
     },
   } as unknown as ExtensionContext;
   progressExtension(pi);
-  return { handlers, entries, signals, get calls() { return calls; }, get registerToolCalls() { return registerToolCalls; }, ctx };
+  return { handlers, entries, requests, signals, get calls() { return calls; }, get registerToolCalls() { return registerToolCalls; }, ctx };
 }
 
 function settleMeaningful(run: ReturnType<typeof harness>, prompt = "Implement inference"): void {
   run.handlers.get("before_agent_start")!({ prompt }, run.ctx);
   run.handlers.get("message_end")!({ message: { role: "assistant", content: "Implemented changes" } }, run.ctx);
   run.handlers.get("agent_settled")!({}, run.ctx);
+}
+
+function completeEdit(run: ReturnType<typeof harness>, id: string, path: string): void {
+  run.handlers.get("tool_execution_start")!({
+    toolCallId: id,
+    toolName: "edit",
+    args: { path: `/repo/${path}` },
+  }, run.ctx);
+  run.handlers.get("tool_result")!({
+    toolCallId: id,
+    toolName: "edit",
+    input: { path: `/repo/${path}` },
+    isError: false,
+  }, run.ctx);
 }
 
 describe("progress inference lifecycle", () => {
@@ -74,6 +90,71 @@ describe("progress inference lifecycle", () => {
       expect(run.calls).toBe(0);
       expect(run.registerToolCalls).toBe(0);
       expect(run.handlers.has("context")).toBeFalse();
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+    }
+  });
+
+  test("debounces meaningful active batches, labels the digest, and does not persist them", async () => {
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = `/tmp/pi-progress-active-${randomUUID()}`;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(`${agentDir}/pi-progress.json`, JSON.stringify({ model: "openai/gpt-5-nano" }));
+    try {
+      const run = harness([Promise.resolve({
+        content: [{ type: "text", text: JSON.stringify({ ...semantic, current: "Editing the active run" }) }],
+        stopReason: "stop",
+      })]);
+      run.handlers.get("session_start")!({}, run.ctx);
+      run.handlers.get("before_agent_start")!({ prompt: "Active work" }, run.ctx);
+      completeEdit(run, "edit-1", "src/a.ts");
+      completeEdit(run, "edit-2", "src/b.ts");
+
+      await Bun.sleep(350);
+      expect(run.calls).toBe(0);
+      await Bun.sleep(300);
+      expect(run.calls).toBe(1);
+      await flushAsync();
+      expect(run.entries).toEqual([]);
+      const request = run.requests[0] as { messages: Array<{ content: Array<{ text: string }> }> };
+      expect(request.messages[0].content[0].text).toContain('"status":"active"');
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+    }
+  });
+
+  test("cancels active inference when newer activity arrives and uses the newest batch", async () => {
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = `/tmp/pi-progress-active-stale-${randomUUID()}`;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(`${agentDir}/pi-progress.json`, JSON.stringify({ model: "openai/gpt-5-nano" }));
+    let resolveFirst!: (value: unknown) => void;
+    let resolveSecond!: (value: unknown) => void;
+    const first = new Promise((resolve) => { resolveFirst = resolve; });
+    const second = new Promise((resolve) => { resolveSecond = resolve; });
+    try {
+      const run = harness([first, second]);
+      run.handlers.get("session_start")!({}, run.ctx);
+      run.handlers.get("before_agent_start")!({ prompt: "Active work" }, run.ctx);
+      completeEdit(run, "edit-1", "src/a.ts");
+      await Bun.sleep(650);
+      expect(run.calls).toBe(1);
+
+      completeEdit(run, "edit-2", "src/b.ts");
+      expect(run.signals[0].aborted).toBeTrue();
+      await Bun.sleep(350);
+      expect(run.calls).toBe(1);
+      await Bun.sleep(300);
+      expect(run.calls).toBe(2);
+
+      resolveFirst({ content: [{ type: "text", text: JSON.stringify({ ...semantic, current: "Stale activity" }) }], stopReason: "stop" });
+      resolveSecond({ content: [{ type: "text", text: JSON.stringify({ ...semantic, current: "Newest activity" }) }], stopReason: "stop" });
+      await flushAsync();
+      expect(run.entries).toEqual([]);
     } finally {
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previous;
@@ -129,6 +210,8 @@ describe("progress inference lifecycle", () => {
       resolveSecond({ content: [{ type: "text", text: JSON.stringify(semantic) }], stopReason: "stop" });
       await flushAsync();
       expect(run.entries).toEqual([{ type: INFERENCE_ENTRY, data: semantic }]);
+      const request = run.requests.at(-1) as { messages: Array<{ content: Array<{ text: string }> }> };
+      expect(request.messages[0].content[0].text).toContain('"status":"settled"');
     } finally {
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previous;

@@ -22,6 +22,22 @@ function toolSummary(snapshot: ProgressSnapshot, theme: Theme): string {
     : theme.fg("success", "✓ settled");
 }
 
+function inferredSummary(snapshot: ProgressSnapshot, theme: Theme): string | undefined {
+  const semantic = snapshot.semantic;
+  if (!semantic) return undefined;
+
+  const label = snapshot.agentActive && semantic.current
+    ? `current: ${semantic.current}`
+    : semantic.blocked[0]
+      ? `blocked: ${semantic.blocked[0]}`
+      : semantic.completed[0]
+        ? `completed: ${semantic.completed[0]}`
+        : semantic.current
+          ? `current: ${semantic.current}`
+          : semantic.phase;
+  return label ? theme.fg("dim", `${label} inferred`) : undefined;
+}
+
 export function renderProgress(
   snapshot: ProgressSnapshot,
   theme: Theme,
@@ -37,24 +53,33 @@ export function renderProgress(
 
   const separator = theme.fg("dim", " · ");
   if (!hasObservedFacts && snapshot.semantic) {
-    return [truncateToWidth([
-      theme.fg("dim", "progress"),
-      theme.fg("dim", `${snapshot.semantic.phase} inferred`),
-    ].join(separator), width)];
+    const inferred = inferredSummary(snapshot, theme);
+    return inferred
+      ? [truncateToWidth([
+        theme.fg("dim", "progress"),
+        inferred,
+      ].join(separator), width)]
+      : [];
   }
   const observedParts = [
     theme.fg("dim", "progress"),
     toolSummary(snapshot, theme),
     ...snapshot.checks.map((check) => formatCheck(check, theme)),
   ];
-  const inferred = snapshot.semantic
-    ? theme.fg("dim", `${snapshot.semantic.phase} inferred`)
-    : undefined;
+  const inferred = inferredSummary(snapshot, theme);
   const withInference = inferred
     ? [observedParts[0], inferred, ...observedParts.slice(1)].join(separator)
     : "";
-  const activity = inferred && visibleWidth(withInference) <= width
-    ? withInference
+  const hasDetailedObservedFacts =
+    snapshot.tools.length > 0 ||
+    snapshot.checks.length > 0 ||
+    snapshot.touchedPaths.length > 0;
+  const inferenceOnly = inferred
+    ? [observedParts[0], inferred].join(separator)
+    : "";
+  const activity = inferred &&
+      (visibleWidth(withInference) <= width || !hasDetailedObservedFacts)
+    ? (visibleWidth(withInference) <= width ? withInference : inferenceOnly)
     : observedParts.join(separator);
   const lines = [truncateToWidth(activity, width)];
 

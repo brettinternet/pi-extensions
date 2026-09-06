@@ -5,7 +5,7 @@ Compact, passive activity progress for the [Pi coding agent](https://pi.dev).
 The extension observes Pi's lifecycle events and renders at most two truncated lines below the editor. Settled progress remains visible until the next user-initiated run begins.
 
 ```text
-progress · Verification inferred · ● edit src/index.ts · ✓ bun test
+progress · current: Updating the implementation inferred · ● edit src/index.ts · ✓ bun test
  touched src/index.ts · test/index.test.ts
 ```
 
@@ -22,7 +22,7 @@ Delegated work remains available through [`pi-subagents`](https://github.com/nic
 
 ## Optional inference
 
-Semantic phase labels are disabled unless an explicit model is configured in `~/.pi/agent/pi-progress.jsonc` (or `$PI_CODING_AGENT_DIR/pi-progress.jsonc`):
+Inference is disabled unless an explicit model is configured in `~/.pi/agent/pi-progress.jsonc` (or `$PI_CODING_AGENT_DIR/pi-progress.jsonc`):
 
 ```json
 {
@@ -37,7 +37,9 @@ The configuration accepts JSON with comments and trailing commas. A legacy `pi-p
 
 Inference receives only a bounded, redacted activity digest: a truncated user request and final response excerpt, previous inference, compact tool names/arguments/outcomes/durations, edit/write paths, and recognized check commands. It does not receive system prompts, reasoning, tool output, file contents, diffs, environment variables, credentials, or the full transcript. Paths, commands, and request/response excerpts are disclosed to the configured model provider. Requests use fresh IDs with prompt-cache retention disabled.
 
-Inference is advisory UI metadata. It does not alter model context, register an LLM-callable tool, control execution, or provide verification evidence. Invalid, low-confidence, failed, timed-out, cancelled, and stale responses are discarded.
+Inference is advisory UI metadata. During an active run, a meaningful edit/write, recognized check, or delegated-tool batch is coalesced and inferred after a short 500 ms quiet period, with at most four active requests per run; newer activity cancels or supersedes that request. When the run settles, one inference starts immediately after the final assistant content is available. Active inference is shown as an inferred current activity but is not written to session history. Only settled inference metadata is persisted and restored.
+
+The widget prefers an inferred current activity while active, or an inferred blocker/completed item after settlement; a generic phase is only a fallback. Inferred text is explicitly marked `inferred`, remains bounded to the compact two-line widget, and is omitted before observed tools, checks, and touched paths when width is constrained. Inference is advisory UI metadata: it does not alter model context, register an LLM-callable tool, control execution, or provide semantic verification evidence. Invalid, low-confidence, failed, timed-out, cancelled, and stale responses are discarded.
 
 ```text
 /progress status                              Show configuration and the last error

@@ -17,6 +17,8 @@ import { renderProgress } from "./render.ts";
 import { ProgressState } from "./state.ts";
 
 const WIDGET_KEY = "pi-progress";
+const ACTIVE_INFERENCE_DEBOUNCE_MS = 500;
+const MAX_ACTIVE_INFERENCES_PER_RUN = 4;
 export const INFERENCE_ENTRY = "pi-progress-inference-v1";
 
 type BranchEntry = {
@@ -41,11 +43,13 @@ export default function progressExtension(pi: ExtensionAPI): void {
   const digest = new ActivityDigest();
   let currentContext: ExtensionContext | undefined;
   let renderScheduled = false;
+  let activeInferenceTimer: ReturnType<typeof setTimeout> | undefined;
   let inferenceController: AbortController | undefined;
   let inferencePromise: Promise<void> | undefined;
   let lastInferenceError: string | undefined;
   let warned = false;
   let configuredModel: string | null = null;
+  let activeInferenceCount = 0;
 
   function render(ctx: ExtensionContext): void {
     if (!ctx.hasUI || ctx !== currentContext) return;
@@ -73,7 +77,8 @@ export default function progressExtension(pi: ExtensionAPI): void {
   }
 
   function scheduleRender(ctx: ExtensionContext): void {
-    currentContext = ctx;
+    if (currentContext && ctx !== currentContext) return;
+    currentContext ??= ctx;
     if (renderScheduled) return;
     renderScheduled = true;
     queueMicrotask(() => {
@@ -83,9 +88,18 @@ export default function progressExtension(pi: ExtensionAPI): void {
   }
 
   function cancelInference(): void {
+    if (activeInferenceTimer !== undefined) clearTimeout(activeInferenceTimer);
+    activeInferenceTimer = undefined;
     inferenceController?.abort();
     inferenceController = undefined;
     inferencePromise = undefined;
+  }
+
+  function noteActivity(ctx: ExtensionContext): void {
+    cancelInference();
+    state.invalidateInference();
+    state.setSemantic(undefined);
+    scheduleRender(ctx);
   }
 
   function reportInferenceError(ctx: ExtensionContext, error: unknown): void {
@@ -117,11 +131,17 @@ export default function progressExtension(pi: ExtensionAPI): void {
     }
   }
 
-  function startInference(ctx: ExtensionContext, config: ProgressConfig): void {
+  type InferenceKind = "active" | "settled";
+
+  function startInference(
+    ctx: ExtensionContext,
+    config: ProgressConfig,
+    kind: InferenceKind,
+    expectedGeneration: number,
+  ): void {
     cancelInference();
     const controller = new AbortController();
     inferenceController = controller;
-    const expectedGeneration = state.generation();
     let timeout: ReturnType<typeof setTimeout> | undefined;
     const timedOut = new Promise<never>((_resolve, reject) => {
       timeout = setTimeout(() => {
@@ -150,7 +170,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
         const semantic = inferenceFromCompletion(response);
         state.setSemantic(semantic);
         lastInferenceError = undefined;
-        pi.appendEntry(INFERENCE_ENTRY, semantic);
+        if (kind === "settled") pi.appendEntry(INFERENCE_ENTRY, semantic);
         scheduleRender(ctx);
       } catch (error) {
         if (controller.signal.aborted && controller.signal.reason?.message !== "progress inference timed out") return;
@@ -166,6 +186,35 @@ export default function progressExtension(pi: ExtensionAPI): void {
     });
   }
 
+  function inferActiveRun(ctx: ExtensionContext): void {
+    if (
+      activeInferenceCount >= MAX_ACTIVE_INFERENCES_PER_RUN ||
+      !state.snapshot().agentActive ||
+      !digest.meaningful()
+    ) return;
+    if (activeInferenceTimer !== undefined) clearTimeout(activeInferenceTimer);
+    const generation = state.generation();
+    activeInferenceTimer = setTimeout(() => {
+      activeInferenceTimer = undefined;
+      void loadConfig()
+        .then((config) => {
+          configuredModel = config.model;
+          if (
+            !config.model ||
+            !state.snapshot().agentActive ||
+            generation !== state.generation() ||
+            ctx !== currentContext ||
+            activeInferenceCount >= MAX_ACTIVE_INFERENCES_PER_RUN
+          ) return;
+          activeInferenceCount += 1;
+          startInference(ctx, config, "active", generation);
+        })
+        .catch((error) => {
+          if (generation === state.generation() && ctx === currentContext) reportInferenceError(ctx, error);
+        });
+    }, ACTIVE_INFERENCE_DEBOUNCE_MS);
+  }
+
   function inferSettledRun(ctx: ExtensionContext): void {
     if (!digest.meaningful()) return;
     const generation = state.generation();
@@ -173,7 +222,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
       .then((config) => {
         configuredModel = config.model;
         if (!config.model || generation !== state.generation() || ctx !== currentContext) return;
-        startInference(ctx, config);
+        startInference(ctx, config, "settled", generation);
       })
       .catch((error) => {
         if (generation === state.generation() && ctx === currentContext) reportInferenceError(ctx, error);
@@ -186,6 +235,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
     digest.reset();
     lastInferenceError = undefined;
     configuredModel = null;
+    activeInferenceCount = 0;
     if (ctx) restoreSemantic(ctx);
   }
 
@@ -199,6 +249,13 @@ export default function progressExtension(pi: ExtensionAPI): void {
   function invalidatePendingInference(): void {
     cancelInference();
     state.invalidateInference();
+    state.setSemantic(undefined);
+  }
+
+  function isCurrentContext(ctx: ExtensionContext): boolean {
+    if (currentContext && currentContext !== ctx) return false;
+    currentContext ??= ctx;
+    return true;
   }
 
   pi.on("session_before_switch", invalidatePendingInference);
@@ -212,46 +269,68 @@ export default function progressExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", (event, ctx) => {
+    if (!isCurrentContext(ctx)) return;
     cancelInference();
     const previous = state.semantic();
+    activeInferenceCount = 0;
     state.beginRun();
     digest.begin(event.prompt ?? "", previous);
     scheduleRender(ctx);
   });
 
   pi.on("agent_start", (_event, ctx) => {
+    if (!isCurrentContext(ctx)) return;
+    cancelInference();
     if (!state.snapshot().agentActive) {
       const previous = state.semantic();
+      activeInferenceCount = 0;
       state.beginRun();
       digest.begin("", previous);
+    } else {
+      state.invalidateInference();
+      state.setSemantic(undefined);
     }
     scheduleRender(ctx);
   });
 
   pi.on("tool_execution_start", (event, ctx) => {
+    if (!isCurrentContext(ctx)) return;
     state.startTool(event.toolCallId, event.toolName, event.args, ctx.cwd);
     digest.startTool(event.toolCallId, event.toolName, event.args, ctx.cwd);
-    scheduleRender(ctx);
+    noteActivity(ctx);
   });
 
   pi.on("tool_call", (event, ctx) => {
+    if (!isCurrentContext(ctx)) return;
     state.updateTool(event.toolCallId, event.toolName, event.input, ctx.cwd);
     digest.updateTool(event.toolCallId, event.toolName, event.input, ctx.cwd);
-    scheduleRender(ctx);
+    noteActivity(ctx);
   });
 
   pi.on("tool_result", (event, ctx) => {
+    if (!isCurrentContext(ctx)) return;
+    const meaningful = digest.meaningfulTool(event.toolName, event.input, ctx.cwd, event.isError);
     state.finishTool(event.toolCallId, event.toolName, event.input, ctx.cwd, event.isError);
     digest.finishTool(event.toolCallId, event.toolName, event.input, ctx.cwd, event.isError);
-    scheduleRender(ctx);
+    noteActivity(ctx);
+    if (meaningful) inferActiveRun(ctx);
   });
 
-  pi.on("message_end", (event) => {
-    if (event.message.role === "assistant") digest.setFinalAssistant(textOf(event.message.content));
+  pi.on("message_end", (event, ctx) => {
+    if (event.message.role !== "assistant") return;
+    if (ctx && !isCurrentContext(ctx)) return;
+    const activeContext = ctx ?? currentContext;
+    if (!activeContext) return;
+    digest.setFinalAssistant(textOf(event.message.content));
+    noteActivity(activeContext);
   });
 
   pi.on("agent_settled", (_event, ctx) => {
+    if (!isCurrentContext(ctx)) return;
+    cancelInference();
     state.settleRun();
+    state.setSemantic(undefined);
+    digest.settle();
     scheduleRender(ctx);
     inferSettledRun(ctx);
   });
@@ -262,6 +341,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
     if (ctx === currentContext) currentContext = undefined;
     state.reset();
     digest.reset();
+    activeInferenceCount = 0;
   });
 
   pi.registerCommand("progress", {
@@ -307,11 +387,10 @@ export default function progressExtension(pi: ExtensionAPI): void {
           await saveConfig(config);
           configuredModel = config.model;
           cancelInference();
+          state.invalidateInference();
+          state.setSemantic(undefined);
           lastInferenceError = undefined;
-          if (!config.model) {
-            state.setSemantic(undefined);
-            scheduleRender(ctx);
-          }
+          scheduleRender(ctx);
           ctx.ui.notify(`Progress model: ${config.model ?? "off"}`, "info");
           return;
         }

@@ -16,6 +16,7 @@ describe("progress activity digest", () => {
     digest.finishTool("shell", "bash", { command: "cat > /tmp/x <<'EOF'\nraw inline file bytes\nEOF" }, "/repo", false);
 
     const snapshot = digest.snapshot();
+    expect(snapshot.status).toBe("active");
     const serialized = JSON.stringify(snapshot);
     expect(snapshot.events[0]).toEqual({
       tool: "edit",
@@ -31,6 +32,8 @@ describe("progress activity digest", () => {
     expect(snapshot.touchedPaths).toEqual(["src/auth.ts"]);
     expect(snapshot.checks).toEqual([{ command: "bun test --token=[REDACTED]", outcome: "passed" }]);
     expect(digest.meaningful()).toBeTrue();
+    digest.settle();
+    expect(digest.snapshot().status).toBe("settled");
   });
 
   test("filters read-only activity unless there is a user-visible outcome", () => {
@@ -39,6 +42,9 @@ describe("progress activity digest", () => {
     digest.startTool("read", "read", { path: "/repo/a.ts" }, "/repo");
     digest.finishTool("read", "read", { path: "/repo/a.ts" }, "/repo", false);
     expect(digest.meaningful()).toBeFalse();
+    expect(digest.meaningfulTool("read", { path: "/repo/a.ts" }, "/repo")).toBeFalse();
+    expect(digest.meaningfulTool("edit", { path: "/repo/a.ts" }, "/repo")).toBeTrue();
+    expect(digest.meaningfulTool("bash", { command: "bun test" }, "/repo")).toBeTrue();
     digest.setFinalAssistant("Found the issue");
     expect(digest.meaningful()).toBeTrue();
   });

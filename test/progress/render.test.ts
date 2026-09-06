@@ -90,7 +90,7 @@ describe("progress rendering", () => {
     };
 
     expect(renderProgress(snapshot, theme, 80)).toEqual([
-      "progress · Implementation inferred · ● edit src/a.ts",
+      "progress · current: Updating progress inference inferred · ● edit src/a.ts",
     ]);
     expect(renderProgress(snapshot, theme, 30)).toEqual([
       "progress · ● edit src/a.ts",
@@ -112,7 +112,7 @@ describe("progress rendering", () => {
       checks: [],
       touchedPaths: [],
       semantic,
-    }, theme, 80)).toEqual(["progress · Verification inferred"]);
+    }, theme, 80)).toEqual(["progress · current: Checking configuration inferred"]);
 
     expect(renderProgress({
       runStarted: true,
@@ -122,6 +122,81 @@ describe("progress rendering", () => {
       touchedPaths: [],
       semantic,
     }, theme, 45)).toEqual(["progress · ● edit src/a.ts · ✓ bun test"]);
+  });
+
+  test("prefers a settled blocker or completed item over the phase", () => {
+    const base = {
+      runStarted: true,
+      agentActive: false,
+      tools: [],
+      checks: [],
+      touchedPaths: [],
+    };
+
+    expect(renderProgress({
+      ...base,
+      semantic: {
+        phase: "Verification",
+        current: "Waiting for a follow-up",
+        completed: ["Updated the progress widget"],
+        blocked: [],
+        confidence: 0.9,
+      },
+    }, theme, 100)).toEqual([
+      "progress · completed: Updated the progress widget inferred · ✓ settled",
+    ]);
+
+    expect(renderProgress({
+      ...base,
+      semantic: {
+        phase: "Verification",
+        current: "Waiting for a follow-up",
+        completed: ["Updated the progress widget"],
+        blocked: ["A required check needs attention"],
+        confidence: 0.9,
+      },
+    }, theme, 100)).toEqual([
+      "progress · blocked: A required check needs attention inferred · ✓ settled",
+    ]);
+  });
+
+  test("prefers inferred settlement over the generic idle label when it is the only detail", () => {
+    const lines = renderProgress({
+      runStarted: true,
+      agentActive: false,
+      tools: [],
+      checks: [],
+      touchedPaths: [],
+      semantic: {
+        phase: "Verification",
+        current: "Waiting for a follow-up",
+        completed: ["Completed a long implementation item"],
+        blocked: [],
+        confidence: 0.9,
+      },
+    }, theme, 32);
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("progress · completed: Complet");
+    expect(visibleWidth(lines[0]!)).toBeLessThanOrEqual(32);
+  });
+
+  test("keeps observed checks visible when inference does not fit", () => {
+    expect(renderProgress({
+      runStarted: true,
+      agentActive: false,
+      tools: [],
+      checks: [{ id: "1", label: "bun test", outcome: "failed" }],
+      touchedPaths: [],
+      semantic: {
+        phase: "Verification",
+        current: "Waiting for a follow-up",
+        completed: ["A very long inferred completion that should be dropped before observed facts"],
+        blocked: [],
+        confidence: 0.9,
+      },
+    }, theme, 45)).toEqual([
+      "progress · ✓ settled · ✗ bun test",
+    ]);
   });
 
   test("truncates rather than wrapping into additional rows", () => {
