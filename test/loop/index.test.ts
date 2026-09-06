@@ -175,6 +175,14 @@ describe("loop parser and state", () => {
     expect(parseLoopCommand("4")).toEqual({ kind: "retune", count: 4 });
     expect(parseLoopCommand("+2")).toEqual({ kind: "adjust", delta: 2 });
     expect(parseLoopCommand("-1")).toEqual({ kind: "adjust", delta: -1 });
+    expect(parseLoopCommand("prompt focus on tests")).toEqual({
+      kind: "replacePrompt",
+      prompt: "focus on tests",
+    });
+    expect(parseLoopCommand("append preserve the public API")).toEqual({
+      kind: "appendPrompt",
+      prompt: "preserve the public API",
+    });
     expect(parseLoopCommand("status")).toEqual({ kind: "status" });
     expect(parseLoopCommand("")).toEqual({ kind: "stop" });
     expect(() => parseLoopCommand("0 prompt")).toThrow("positive integer");
@@ -182,6 +190,8 @@ describe("loop parser and state", () => {
     expect(() => parseLoopCommand("-2 prompt")).toThrow("adjustment");
     expect(() => parseLoopCommand("2.5 prompt")).toThrow("positive integer");
     expect(() => parseLoopCommand("status now")).toThrow("does not accept");
+    expect(() => parseLoopCommand("prompt")).toThrow("requires text");
+    expect(() => parseLoopCommand("append")).toThrow("requires text");
   });
 
   test("completes public controls and common iteration counts", () => {
@@ -195,6 +205,9 @@ describe("loop parser and state", () => {
     ]);
     expect(command.getArgumentCompletions?.("+")).toEqual([
       { value: "+1", label: "+1", description: "Add one future iteration" },
+    ]);
+    expect(command.getArgumentCompletions?.("ap")).toEqual([
+      { value: "append ", label: "append <text>", description: "Append to the future loop prompt" },
     ]);
     expect(command.getArgumentCompletions?.("__")).toBeNull();
   });
@@ -286,6 +299,68 @@ describe("loop lifecycle", () => {
     await harness.settle();
     expect(harness.state()).toMatchObject({ currentIteration: 2, remainingBudget: 3, pendingRetune: null });
     expect(latestWidgetLines(harness)).toEqual(["loop active 4/5 · repeat the check"]);
+  });
+
+  test("replaces and cumulatively appends to future iteration prompts", async () => {
+    const harness = createHarness();
+    await harness.command.handler("3 broad review", harness.context);
+    await harness.command.handler("prompt fix the failing tests", commandContext(harness));
+    await harness.command.handler("append preserve public APIs", commandContext(harness));
+    await harness.command.handler("append update relevant docs", commandContext(harness));
+
+    expect(harness.prompts).toEqual(["broad review"]);
+    expect(harness.state()).toMatchObject({
+      prompt: "fix the failing tests\n\npreserve public APIs\n\nupdate relevant docs",
+      remainingBudget: 2,
+      pendingRetune: null,
+      status: "active",
+    });
+    expect(harness.notifications.at(-1)).toBe("future loop prompt extended; active iteration unchanged");
+
+    await harness.settle();
+    expect(harness.prompts).toEqual([
+      "broad review",
+      "fix the failing tests\n\npreserve public APIs\n\nupdate relevant docs",
+    ]);
+    expect(harness.state()).toMatchObject({ currentIteration: 2, remainingBudget: 1 });
+  });
+
+  test("updates the prompt while paused and uses it on resume", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 retry this", harness.context);
+    harness.agentEnd("error");
+
+    await harness.command.handler("prompt use the new approach", commandContext(harness));
+    expect(harness.state()).toMatchObject({
+      prompt: "use the new approach",
+      status: "paused",
+      currentIteration: 1,
+      remainingBudget: 1,
+    });
+    expect(harness.notifications.at(-1)).toBe("loop prompt replaced; resume will use it");
+
+    await harness.command.handler("resume", commandContext(harness));
+    expect(harness.prompts).toEqual(["retry this", "use the new approach"]);
+  });
+
+  test("prompt updates preserve stopping state and reject terminal runs", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 work", harness.context);
+    await harness.command.handler("stop", commandContext(harness));
+    await harness.command.handler("append if resumed, focus on tests", commandContext(harness));
+
+    expect(harness.state()).toMatchObject({
+      prompt: "work\n\nif resumed, focus on tests",
+      status: "stopping",
+      remainingBudget: 1,
+    });
+    expect(harness.notifications.at(-1)).toBe("loop prompt extended; loop is still stopping");
+
+    await harness.settle();
+    expect(harness.state()?.status).toBe("stopped");
+    await harness.command.handler("prompt cannot apply", commandContext(harness));
+    expect(harness.state()?.prompt).toBe("work\n\nif resumed, focus on tests");
+    expect(harness.notifications.at(-1)).toContain("must be active, stopping, or paused");
   });
 
   test("adds and subtracts future iterations while active", async () => {

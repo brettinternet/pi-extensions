@@ -11,7 +11,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 export const LOOP_STATE_ENTRY = "pi-loop-state-v1";
 export const LOOP_WIDGET_KEY = "pi-loop";
 export const LOOP_USAGE =
-  "usage: /loop <positive-count> <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop status | /loop resume | /loop stop";
+  "usage: /loop <positive-count> <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop prompt <text> | /loop append <text> | /loop status | /loop resume | /loop stop";
 
 export type LoopStatus = "active" | "stopping" | "paused" | "completed" | "stopped" | "inactive";
 
@@ -31,6 +31,8 @@ export type ParsedLoopCommand =
   | { kind: "start"; count: number; prompt: string }
   | { kind: "retune"; count: number }
   | { kind: "adjust"; delta: number }
+  | { kind: "replacePrompt"; prompt: string }
+  | { kind: "appendPrompt"; prompt: string }
   | { kind: "status" }
   | { kind: "resume" }
   | { kind: "stop" }
@@ -84,6 +86,12 @@ export function parseLoopCommand(args: string): ParsedLoopCommand {
   if (first === "resume") {
     if (rest) throw new Error(`resume does not accept arguments; ${LOOP_USAGE}`);
     return { kind: "resume" };
+  }
+  if (first === "prompt" || first === "append") {
+    if (!rest) throw new Error(`${first} requires text; ${LOOP_USAGE}`);
+    return first === "prompt"
+      ? { kind: "replacePrompt", prompt: rest }
+      : { kind: "appendPrompt", prompt: rest };
   }
 
   // These commands are only emitted by the extension itself. Keeping them in
@@ -579,6 +587,30 @@ export default function loopExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    if (parsed.kind === "replacePrompt" || parsed.kind === "appendPrompt") {
+      if (!state || isTerminal(state)) {
+        notify(ctx, "a loop must be active, stopping, or paused to update its prompt", "error");
+        return;
+      }
+      const prompt = parsed.kind === "replacePrompt"
+        ? parsed.prompt
+        : `${state.prompt}\n\n${parsed.prompt}`;
+      const updated = { ...state, prompt };
+      persist(pi, updated);
+      renderWidget(ctx, updated);
+      const action = parsed.kind === "replacePrompt" ? "replaced" : "extended";
+      if (state.status === "paused") {
+        notify(ctx, `loop prompt ${action}; resume will use it`, "info");
+      } else if (state.status === "stopping") {
+        notify(ctx, `loop prompt ${action}; loop is still stopping`, "info");
+      } else if ((state.pendingRetune ?? state.remainingBudget) === 0) {
+        notify(ctx, `future loop prompt ${action}; no future iteration is scheduled`, "info");
+      } else {
+        notify(ctx, `future loop prompt ${action}; active iteration unchanged`, "info");
+      }
+      return;
+    }
+
     if (parsed.kind === "retune" || parsed.kind === "adjust") {
       if (!state || (state.status !== "active" && state.status !== "stopping")) {
         notify(ctx, "a loop must be active to retune its remaining budget", "error");
@@ -703,11 +735,13 @@ export default function loopExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("loop", {
-    description: "<count> <prompt> | <count> | ±<count> | status | resume | stop — Run a bounded fresh-session loop",
+    description: "<count> <prompt> | <count> | ±<count> | prompt | append | status | resume | stop — Run a bounded fresh-session loop",
     getArgumentCompletions: (prefix) => completeArguments(prefix, [
       { value: "status", label: "status", description: "Show the current loop state" },
       { value: "resume", label: "resume", description: "Retry a paused iteration" },
       { value: "stop", label: "stop", description: "Stop gracefully" },
+      { value: "prompt ", label: "prompt <text>", description: "Replace the future loop prompt" },
+      { value: "append ", label: "append <text>", description: "Append to the future loop prompt" },
       { value: "+1", label: "+1", description: "Add one future iteration" },
       { value: "-1", label: "-1", description: "Remove one future iteration" },
       { value: "1 ", label: "1 <prompt>", description: "Run a prompt once" },

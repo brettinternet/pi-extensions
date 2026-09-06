@@ -44,6 +44,8 @@ Each iteration gets a fresh Pi session. Filesystem changes carry forward; conver
 ```text
 /loop <count> <prompt>   Start
 /loop <count>            Retune future iterations
+/loop prompt <text>       Replace the future prompt
+/loop append <text>       Append to the future prompt
 /loop status             Inspect
 /loop                    Request graceful stop
 /loop stop               Request graceful stop
