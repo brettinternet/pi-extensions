@@ -10,7 +10,7 @@ import type {
   EditorTheme,
   TUI,
 } from "@earendil-works/pi-tui";
-import { withApprovalStatus } from "../approval-status/index.ts";
+import { withHerdrBlocked } from "../shared/herdr-blocked.ts";
 import {
   BACKGROUND_ACTIVITY_FINISHED_EVENT,
   BACKGROUND_ACTIVITY_STARTED_EVENT,
@@ -154,7 +154,7 @@ class LiveExtensionRuntime {
       } catch (error) {
         if (!(error instanceof VoiceLockHeldError) || !error.owner) throw error;
         const owner = error.owner;
-        const moveVoice = await withApprovalStatus(
+        const moveVoice = await withHerdrBlocked(
           this.#pi,
           "Voice handoff approval required",
           () => context.ui.confirm(

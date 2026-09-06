@@ -39,7 +39,6 @@
   },
   "pi": {
     "extensions": [
-      "./extensions/approval-status/index.ts",
       "./extensions/live-codex/index.ts",
       "./extensions/loop/index.ts",
       "./extensions/progress/index.ts",
