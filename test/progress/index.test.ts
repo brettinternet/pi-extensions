@@ -110,6 +110,24 @@ describe("progress extension", () => {
     ]);
   });
 
+  test("tracks activity when Pi supplies a fresh context for each event", async () => {
+    const { handlers, widgets, ctx } = setup();
+
+    handlers.get("session_start")!({}, { ...ctx });
+    handlers.get("before_agent_start")!({}, { ...ctx });
+    handlers.get("tool_execution_start")!(
+      {
+        toolCallId: "edit-1",
+        toolName: "edit",
+        args: { path: "/repo/src/a.ts" },
+      },
+      { ...ctx },
+    );
+    await flushRender();
+
+    expect(latestLines(widgets)).toEqual(["progress <1m · ● edit src/a.ts"]);
+  });
+
   test("starts counting runtime at the first prompt", async () => {
     const now = spyOn(Date, "now").mockReturnValue(1_000);
     const { handlers, widgets, ctx } = setup();

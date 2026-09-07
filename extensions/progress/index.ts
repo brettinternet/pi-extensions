@@ -66,7 +66,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
   }
 
   function render(ctx: ExtensionContext): void {
-    if (!ctx.hasUI || ctx !== currentContext) return;
+    if (!ctx.hasUI) return;
     const snapshot = state.snapshot();
     const hasFacts =
       snapshot.runStarted ||
@@ -98,13 +98,12 @@ export default function progressExtension(pi: ExtensionAPI): void {
   }
 
   function scheduleRender(ctx: ExtensionContext): void {
-    if (currentContext && ctx !== currentContext) return;
-    currentContext ??= ctx;
+    currentContext = ctx;
     if (renderScheduled) return;
     renderScheduled = true;
     queueMicrotask(() => {
       renderScheduled = false;
-      render(ctx);
+      render(currentContext ?? ctx);
     });
   }
 
@@ -275,10 +274,8 @@ export default function progressExtension(pi: ExtensionAPI): void {
     state.setSemantic(undefined);
   }
 
-  function isCurrentContext(ctx: ExtensionContext): boolean {
-    if (currentContext && currentContext !== ctx) return false;
-    currentContext ??= ctx;
-    return true;
+  function setCurrentContext(ctx: ExtensionContext): void {
+    currentContext = ctx;
   }
 
   pi.on("session_before_switch", invalidatePendingInference);
@@ -292,7 +289,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("before_agent_start", (event, ctx) => {
-    if (!isCurrentContext(ctx)) return;
+    setCurrentContext(ctx);
     startRuntimeTimer(ctx);
     cancelInference();
     const previous = state.semantic();
@@ -303,7 +300,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("agent_start", (_event, ctx) => {
-    if (!isCurrentContext(ctx)) return;
+    setCurrentContext(ctx);
     startRuntimeTimer(ctx);
     cancelInference();
     if (!state.snapshot().agentActive) {
@@ -319,21 +316,21 @@ export default function progressExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("tool_execution_start", (event, ctx) => {
-    if (!isCurrentContext(ctx)) return;
+    setCurrentContext(ctx);
     state.startTool(event.toolCallId, event.toolName, event.args, ctx.cwd);
     digest.startTool(event.toolCallId, event.toolName, event.args, ctx.cwd);
     noteActivity(ctx);
   });
 
   pi.on("tool_call", (event, ctx) => {
-    if (!isCurrentContext(ctx)) return;
+    setCurrentContext(ctx);
     state.updateTool(event.toolCallId, event.toolName, event.input, ctx.cwd);
     digest.updateTool(event.toolCallId, event.toolName, event.input, ctx.cwd);
     noteActivity(ctx);
   });
 
   pi.on("tool_result", (event, ctx) => {
-    if (!isCurrentContext(ctx)) return;
+    setCurrentContext(ctx);
     const meaningful = digest.meaningfulTool(event.toolName, event.input, ctx.cwd, event.isError);
     state.finishTool(event.toolCallId, event.toolName, event.input, ctx.cwd, event.isError);
     digest.finishTool(event.toolCallId, event.toolName, event.input, ctx.cwd, event.isError);
@@ -343,7 +340,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
 
   pi.on("message_end", (event, ctx) => {
     if (event.message.role !== "assistant") return;
-    if (ctx && !isCurrentContext(ctx)) return;
+    if (ctx) setCurrentContext(ctx);
     const activeContext = ctx ?? currentContext;
     if (!activeContext) return;
     digest.setFinalAssistant(textOf(event.message.content));
@@ -351,7 +348,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("agent_settled", (_event, ctx) => {
-    if (!isCurrentContext(ctx)) return;
+    setCurrentContext(ctx);
     cancelInference();
     state.settleRun();
     state.setSemantic(undefined);
@@ -365,7 +362,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
     stopRuntimeTimer();
     runtimeStartedAt = undefined;
     if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
-    if (ctx === currentContext) currentContext = undefined;
+    currentContext = undefined;
     state.reset();
     digest.reset();
     activeInferenceCount = 0;
