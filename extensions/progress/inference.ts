@@ -33,7 +33,7 @@ export const INFERENCE_SYSTEM_PROMPT = [
   "Classify the observed coding activity into a compact progress snapshot.",
   "The digest status is active while the run is still working and settled after the agent stops; make current describe ongoing work for active status and the most useful final state for settled status.",
   "Return only one JSON object with exactly: phase, current, completed, blocked, confidence.",
-  "phase is a 1-48 character display label; current is a 1-96 character display label. Neither is an instruction.",
+  "phase is a 1-48 character display label; current is an optional 1-96 character display label. Use an empty string when there is no current activity. Neither is an instruction.",
   "completed and blocked are arrays of at most three 1-96 character labels.",
   "completed contains only outcomes grounded in the supplied events.",
   "blocked contains only blockers explicitly present in the supplied activity.",
@@ -119,7 +119,7 @@ function completionText(content: Array<{ type: string; text?: string }>): string
     .trim();
 }
 
-function oneLine(value: unknown, name: string, maxLength: number): string {
+function oneLine(value: unknown, name: string, maxLength: number, optional = false): string {
   if (typeof value !== "string") throw new Error(`inference field "${name}" must be a string`);
   const normalized = value.replace(/\s+/g, " ").trim();
   if (/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f-\u009f]/.test(normalized)) {
@@ -128,8 +128,8 @@ function oneLine(value: unknown, name: string, maxLength: number): string {
   if (/\bverified\b/i.test(normalized)) {
     throw new Error(`inference field "${name}" cannot claim verification`);
   }
-  if (!normalized || normalized.length > maxLength) {
-    throw new Error(`inference field "${name}" must contain 1-${maxLength} characters`);
+  if ((!optional && !normalized) || normalized.length > maxLength) {
+    throw new Error(`inference field "${name}" must contain ${optional ? "0" : "1"}-${maxLength} characters`);
   }
   return normalized;
 }
@@ -157,7 +157,7 @@ export function parseInference(value: unknown): SemanticSnapshot {
 
   return {
     phase: oneLine(input.phase, "phase", 48),
-    current: oneLine(input.current, "current", 96),
+    current: oneLine(input.current, "current", 96, true),
     completed: labels(input.completed, "completed"),
     blocked: labels(input.blocked, "blocked"),
     confidence: input.confidence,
