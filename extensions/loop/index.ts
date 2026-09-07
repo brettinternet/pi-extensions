@@ -11,7 +11,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 export const LOOP_STATE_ENTRY = "pi-loop-state-v1";
 export const LOOP_WIDGET_KEY = "pi-loop";
 export const LOOP_USAGE =
-  "usage: /loop <positive-count> [--delay <duration>] <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop delay <duration> | /loop prompt <text> | /loop append <text> | /loop status | /loop resume | /loop stop";
+  "usage: /loop <positive-count> [--delay <duration>] <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop delay <duration> | /loop prompt <text> | /loop append <text> | /loop status | /loop resume | /loop next | /loop stop";
 
 export const MIN_LOOP_DELAY_MS = 1_000;
 export const MAX_LOOP_DELAY_MS = 24 * 60 * 60 * 1_000;
@@ -43,6 +43,7 @@ export type ParsedLoopCommand =
   | { kind: "appendPrompt"; prompt: string }
   | { kind: "status" }
   | { kind: "resume" }
+  | { kind: "next" }
   | { kind: "stop" }
   | { kind: "continue"; runId: string; iteration: number }
   | { kind: "pause"; runId: string; iteration: number };
@@ -100,6 +101,7 @@ function completeLoopArguments(prefix: string): ArgumentCompletion[] | null {
   return completeArguments(prefix, [
     { value: "status", label: "status", description: "Show the current loop state" },
     { value: "resume", label: "resume", description: "Retry a paused iteration" },
+    { value: "next", label: "next", description: "Skip a paused iteration and start the next one" },
     { value: "stop", label: "stop", description: "Stop gracefully" },
     { value: "delay ", label: "delay <duration>", description: "Set the delay between settled iterations" },
     { value: "--delay ", label: "--delay <duration>", description: "Set the delay when starting a loop" },
@@ -183,6 +185,10 @@ export function parseLoopCommand(args: string): ParsedLoopCommand {
   if (first === "resume") {
     if (rest) throw new Error(`resume does not accept arguments; ${LOOP_USAGE}`);
     return { kind: "resume" };
+  }
+  if (first === "next") {
+    if (rest) throw new Error(`next does not accept arguments; ${LOOP_USAGE}`);
+    return { kind: "next" };
   }
   if (first === "delay") {
     const fields = rest.split(/\s+/).filter(Boolean);
@@ -667,10 +673,16 @@ export default function loopExtension(pi: ExtensionAPI): void {
     }
   }
 
-  async function advanceAtBoundary(ctx: ExtensionCommandContext, expectedRunId: string, expectedIteration: number): Promise<void> {
+  async function advanceAtBoundary(
+    ctx: ExtensionCommandContext,
+    expectedRunId: string,
+    expectedIteration: number,
+    allowPaused = false,
+  ): Promise<void> {
     const state = currentState(ctx);
     if (!state || state.runId !== expectedRunId || state.currentIteration !== expectedIteration) return;
-    if (!statusIsActive(state) || transitionInFlight) return;
+    const canAdvance = ACTIVE_STATUSES.has(state.status) || (allowPaused && state.status === "paused");
+    if (!canAdvance || transitionInFlight) return;
     clearContinuationWait();
 
     if (state.status === "stopping") {
@@ -838,6 +850,15 @@ export default function loopExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    if (parsed.kind === "next") {
+      if (!state || state.status !== "paused") {
+        notify(ctx, state && statusIsActive(state) ? "loop is active; /loop next is only available while paused" : "loop is not paused; /loop next is only available while paused", "error");
+        return;
+      }
+      await advanceAtBoundary(ctx, state.runId, state.currentIteration, true);
+      return;
+    }
+
     if (parsed.kind === "replacePrompt" || parsed.kind === "appendPrompt") {
       if (!state || isTerminal(state)) {
         notify(ctx, "a loop must be active, stopping, or paused to update its prompt", "error");
@@ -990,7 +1011,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("loop", {
-    description: "<count> [--delay <duration>] <prompt> | <count> | ±<count> | delay | prompt | append | status | resume | stop — Run a bounded fresh-session loop",
+    description: "<count> [--delay <duration>] <prompt> | <count> | ±<count> | delay | prompt | append | status | resume | next | stop — Run a bounded fresh-session loop",
     getArgumentCompletions: (prefix) => completeLoopArguments(prefix),
     handler: async (args, ctx) => {
       try {

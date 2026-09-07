@@ -15,7 +15,8 @@
 /loop status                                 Show run, iteration, budget, pending retune, and delay
 /loop                                         Gracefully stop after the active iteration
 /loop stop                                   Gracefully stop, or stop a paused loop immediately
-/loop resume                                 Retry a paused iteration, or cancel a pending stop
+/loop resume                                 Retry a paused iteration in the same session, or cancel a pending stop
+/loop next                                   Complete a paused iteration and start the next one in a fresh session
 ```
 
 Durations use a number followed by `ms`, `s`, `m`, or `h` (for example `1000ms`, `2s`, or `1m`). Delays must be at least `1s` and no more than `24h`; use `/loop delay off` to remove the delay from a running loop. The delay starts after a settled iteration and never delays the first iteration. While a delay is pending, stop cancels it immediately; prompt, budget, and delay updates are applied to the next iteration safely.
@@ -24,7 +25,7 @@ A retune changes only the next boundary's future budget; it never changes the pr
 
 Prompt updates never affect the active iteration or change its budget. `prompt` replaces the complete prompt, including prior appended instructions. `append` adds a blank line and the supplied text. Updates persist across all not-yet-started iterations and may also be made while paused for the retried iteration. Updating a stopping loop preserves the pending stop. Ordinary messages still belong only to the current session; use these commands to configure future fresh sessions.
 
-Loops continue only after `agent_settled`. Aborted or error assistant output pauses the loop without consuming an iteration. If a mid-run `/loop` command interrupts the assistant, the extension continues that iteration in the same session so completed work and conversation context are preserved. `/loop resume` also continues a paused iteration in place; only the boundary between completed iterations creates a fresh session. State is stored in custom session entries, and each replacement records its parent session while keeping conversational messages out of the new session. The compact status widget is shown only while a loop is active, stopping, or paused. It counts down (`loop active 4/4`, then `3/4`), shows the configured delay, and shows the prompt after a middle dot, truncated to one line at the current terminal width.
+Loops continue only after `agent_settled`. Aborted or error assistant output pauses the loop without consuming an iteration. If a mid-run `/loop` command interrupts the assistant, the extension continues that iteration in the same session so completed work and conversation context are preserved. `/loop resume` continues a paused iteration in place; `/loop next` treats it as complete and advances to the next iteration in a fresh session. Only the boundary between completed iterations creates a fresh session. State is stored in custom session entries, and each replacement records its parent session while keeping conversational messages out of the new session. The compact status widget is shown only while a loop is active, stopping, or paused. It counts down (`loop active 4/4`, then `3/4`), shows the configured delay, and shows the prompt after a middle dot, truncated to one line at the current terminal width.
 
 The extension does not use dialogs and is safe to load in print, JSON, and RPC modes.
 

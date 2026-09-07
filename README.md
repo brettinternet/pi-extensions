@@ -49,7 +49,8 @@ Each iteration gets a fresh Pi session. Filesystem changes carry forward; conver
 /loop status             Inspect
 /loop                    Request graceful stop
 /loop stop               Request graceful stop
-/loop resume             Retry a paused iteration
+/loop resume             Retry a paused iteration in place
+/loop next               Skip a paused iteration and start the next one
 ```
 
 Aborted or failed output pauses the run. State and session ownership are persisted in custom entries, with a compact active/paused widget.

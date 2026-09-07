@@ -200,12 +200,14 @@ describe("loop parser and state", () => {
       prompt: "preserve the public API",
     });
     expect(parseLoopCommand("status")).toEqual({ kind: "status" });
+    expect(parseLoopCommand("next")).toEqual({ kind: "next" });
     expect(parseLoopCommand("")).toEqual({ kind: "stop" });
     expect(() => parseLoopCommand("0 prompt")).toThrow("positive integer");
     expect(() => parseLoopCommand("+0")).toThrow("positive integer");
     expect(() => parseLoopCommand("-2 prompt")).toThrow("adjustment");
     expect(() => parseLoopCommand("2.5 prompt")).toThrow("positive integer");
     expect(() => parseLoopCommand("status now")).toThrow("does not accept");
+    expect(() => parseLoopCommand("next now")).toThrow("does not accept");
     expect(() => parseLoopCommand("prompt")).toThrow("requires text");
     expect(() => parseLoopCommand("append")).toThrow("requires text");
     expect(() => parseLoopCommand("delay")).toThrow("requires one duration");
@@ -229,6 +231,9 @@ describe("loop parser and state", () => {
     ]);
     expect(command.getArgumentCompletions?.("ap")).toEqual([
       { value: "append ", label: "append <text>", description: "Append to the future loop prompt" },
+    ]);
+    expect(command.getArgumentCompletions?.("ne")).toEqual([
+      { value: "next", label: "next", description: "Skip a paused iteration and start the next one" },
     ]);
     expect(command.getArgumentCompletions?.("delay ")).toContainEqual({
       value: "delay off",
@@ -411,6 +416,45 @@ describe("loop lifecycle", () => {
       "fix the failing tests\n\npreserve public APIs\n\nupdate relevant docs",
     ]);
     expect(harness.state()).toMatchObject({ currentIteration: 2, remainingBudget: 1 });
+  });
+
+  test("advances a paused iteration with next into a fresh session", async () => {
+    const harness = createHarness();
+    await harness.command.handler("3 retry this", harness.context);
+    harness.agentEnd("error");
+    expect(harness.state()).toMatchObject({ status: "paused", currentIteration: 1, remainingBudget: 2 });
+
+    const pausedSession = harness.current.getSessionId();
+    await harness.command.handler("next", commandContext(harness));
+
+    expect(harness.current.getSessionId()).not.toBe(pausedSession);
+    expect(harness.prompts).toEqual(["retry this", "retry this"]);
+    expect(harness.state()).toMatchObject({ status: "active", currentIteration: 2, remainingBudget: 1 });
+  });
+
+  test("completes a paused final iteration with next without creating a session", async () => {
+    const harness = createHarness();
+    await harness.command.handler("1 finish this", harness.context);
+    harness.agentEnd("error");
+    const pausedSession = harness.current.getSessionId();
+
+    await harness.command.handler("next", commandContext(harness));
+
+    expect(harness.current.getSessionId()).toBe(pausedSession);
+    expect(harness.prompts).toEqual(["finish this"]);
+    expect(harness.state()).toMatchObject({ status: "completed", currentIteration: 1, remainingBudget: 0 });
+  });
+
+  test("rejects next unless the loop is paused", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 keep working", harness.context);
+    const session = harness.current.getSessionId();
+
+    await harness.command.handler("next", commandContext(harness));
+
+    expect(harness.current.getSessionId()).toBe(session);
+    expect(harness.state()).toMatchObject({ status: "active", currentIteration: 1, remainingBudget: 1 });
+    expect(harness.notifications.at(-1)).toBe("loop is active; /loop next is only available while paused");
   });
 
   test("updates the prompt while paused and uses it on resume", async () => {
