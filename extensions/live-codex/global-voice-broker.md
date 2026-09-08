@@ -2,7 +2,7 @@
 
 ## Idea and motivation
 
-Today `pi-live-codex` has one cooperative owner per host. The owner is an atomic lock directory with a short-lived loopback control endpoint. That keeps voice handoff local, explicit, and easy to recover when a process dies. A future global voice broker could make voice a shared Pi capability across sessions, workspaces, and providers: one broker would own the audio connection, route controls to the selected Pi session, and expose consistent status to other voice clients.
+Today `pi-live-codex` has one cooperative active-audio owner per host. The owner is an atomic lock directory with a short-lived loopback control endpoint. Other Pi sessions may keep a paused voice surface with their transcript and drafts while their audio transport is closed. That keeps voice handoff local, explicit, and easy to recover when a process dies. A future global voice broker could make voice a shared Pi capability across sessions, workspaces, and providers: one broker would own the audio connection, route controls to the selected Pi session, and expose consistent status to other voice clients.
 
 The motivation is continuity. Users should be able to move between Pi sessions without treating the voice transport as a second execution engine or interrupting work already running in the original session. A broker could also support discoverable ownership, richer handoff UX, and clients other than this extension.
 
@@ -10,7 +10,7 @@ The motivation is continuity. Users should be able to move between Pi sessions w
 
 The broker would own voice transport, ownership, authentication, and routing. It would not own Pi turns, foreground or background jobs, tool policy, confirmation policy, session history, or workspace authority. Pi sessions would remain responsible for their own work and would explicitly report whether a handoff is safe.
 
-The current loopback protocol is deliberately narrower: it authenticates a same-host requester, asks the current owner to stop only its `LiveSession`, and leaves Pi work running. It refuses handoff while voice requests are queued or voice-routed confirmations are pending; active/running work is not itself a blocker.
+The current loopback protocol is deliberately narrower: it authenticates a same-host requester, asks the current owner to pause its audio transport and release the active-audio lock, and leaves its `LiveSession`, transcript, drafts, and Pi work running. It refuses handoff while voice-routed confirmations are pending; queued or active work is not itself a blocker.
 
 ## Migration path
 

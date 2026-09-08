@@ -21,6 +21,7 @@ export type LivePhase =
   | "working"
   | "speaking"
   | "muted"
+  | "paused"
   | "error";
 
 export const DEFAULT_TRANSCRIPT_LIMIT = 4;
@@ -36,6 +37,7 @@ interface TranscriptUtterance {
 export interface LiveVisualizerOptions {
   onStop(): void;
   onToggleMute(): void;
+  onResume(): void;
   onDrop(data: string): void;
   onTypedNote?(text: string): void;
   transcriptLimit?: number;
@@ -181,7 +183,8 @@ export class LiveVisualizer extends CustomEditor {
       return;
     }
     if (matchesKey(data, "space") && this.getText().length === 0) {
-      this.#options.onToggleMute();
+      if (this.#phase === "paused") this.#options.onResume();
+      else this.#options.onToggleMute();
       return;
     }
     if (
@@ -211,7 +214,7 @@ export class LiveVisualizer extends CustomEditor {
       `┌${"─".repeat(innerWidth)}${width > 1 ? "┐" : ""}`,
     );
     const spectrumColor: ThemeColor =
-      this.#phase === "muted"
+      this.#phase === "muted" || this.#phase === "paused"
         ? "dim"
         : this.#phase === "error"
           ? "error"
@@ -290,6 +293,7 @@ export class LiveVisualizer extends CustomEditor {
       working: "○",
       speaking: "»",
       muted: "×",
+      paused: "⏸",
       error: "!",
     };
     const phaseColors: Record<LivePhase, ThemeColor> = {
@@ -298,6 +302,7 @@ export class LiveVisualizer extends CustomEditor {
       working: "warning",
       speaking: "accent",
       muted: "dim",
+      paused: "dim",
       error: "error",
     };
     const icon =
@@ -310,7 +315,8 @@ export class LiveVisualizer extends CustomEditor {
       this.#workStatus.failed > 0 ? `${this.#workStatus.failed} failed` : "",
     ].filter(Boolean).join(" · ");
     const workLabel = work ? ` · ${work}` : "";
-    const fullLabel = ` ${icon} ${this.#phase}${workLabel} · space mute · esc end `;
+    const spaceAction = this.#phase === "paused" ? "resume" : "mute";
+    const fullLabel = ` ${icon} ${this.#phase}${workLabel} · space ${spaceAction} · esc end `;
     const shortLabel = ` ${icon} ${this.#phase}${workLabel} `;
     const label =
       innerWidth >= visibleWidth(fullLabel) + 1
@@ -342,7 +348,9 @@ export class LiveVisualizer extends CustomEditor {
     const blocks = [" ", "▁", "▂", "▃", "▄", "▅", "▆", "▇", "█"];
     const output = Array.from({ length: rows }, () => "");
     const energy =
-      this.#phase === "muted" ? 0 : Math.min(1, Math.sqrt(this.#displayLevel * 5));
+      this.#phase === "muted" || this.#phase === "paused"
+        ? 0
+        : Math.min(1, Math.sqrt(this.#displayLevel * 5));
     const maxHeight = rows * (blocks.length - 1);
     for (let column = 0; column < width; column += 1) {
       const carrier = 0.5 + 0.5 * Math.sin(this.#frame * 0.43 + column * 0.71);

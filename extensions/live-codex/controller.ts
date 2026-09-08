@@ -76,6 +76,8 @@ Treat delegation context as your own internal progress and results. Never mentio
 const CONFIRMATION_CORRECTIVE_COMMENTARY =
   "A confirmation is still pending. The user's last answer was not accepted or executed. Ask the exact question again and tell the user to say only the single word approve or deny. Never resend their answer as ordinary work.";
 const INPUT_CONTINUATION_GRACE_MS = 1_500;
+const RESUME_TRANSCRIPT_UTTERANCES = 8;
+const MAX_RESUME_CONTEXT_CHARS = 12_000;
 
 export type LiveStopMode = "handoff" | "shutdown";
 
@@ -202,9 +204,17 @@ export class OutputActivityLatch {
     }, this.#releaseDelayMs);
   }
 
-  dispose(): void {
+  reset(): void {
     clearTimeout(this.#releaseTimer);
     this.#releaseTimer = undefined;
+    if (this.#active) {
+      this.#active = false;
+      this.#onChange(false);
+    }
+  }
+
+  dispose(): void {
+    this.reset();
   }
 }
 
@@ -230,6 +240,8 @@ export class LiveSession {
   #outputActive = false;
   readonly #outputActivity: OutputActivityLatch;
   #muted = false;
+  #paused = false;
+  #resuming = false;
   #stopped = false;
   #terminalError: Error | undefined;
   #terminalEmitted = false;
@@ -255,6 +267,8 @@ export class LiveSession {
   #suppressResolvedConfirmationTranscript = false;
   #attachmentLoadTail: Promise<void> = Promise.resolve();
   #stopSnapshotDiscovery: (() => void) | undefined;
+  readonly #recentTranscript: Array<{ role: "user" | "assistant"; text: string }> = [];
+  readonly #pausedContext: string[] = [];
 
   constructor(options: LiveSessionOptions) {
     this.#pi = options.pi;
@@ -275,62 +289,152 @@ export class LiveSession {
   async start(): Promise<void> {
     this.#callbacks.onPhase("connecting");
     try {
-      const transport = this.#createTransport({
-        sessionId: this.#context.sessionManager.getSessionId(),
-        instructions: LIVE_INSTRUCTIONS,
-        voice: this.#voice,
-        getAccess: async () => {
-          const auth = await this.#context.modelRegistry.getProviderAuth(
-            "openai-codex",
-          );
-          const accessToken = auth?.auth.apiKey;
-          if (!accessToken) {
-            throw new Error(
-              "No OpenAI Codex OAuth credential. Run /login openai-codex first.",
-            );
-          }
-          return { accessToken };
-        },
-        callbacks: {
-          onEvent: (event) => this.#handleLiveEvent(event),
-          onOutputLevel: (level) => {
-            this.#outputLevel = level;
-            this.#outputActivity.update(level > OUTPUT_ACTIVE_LEVEL);
-          },
-        },
-      });
-      this.#transport = transport;
-      await transport.connect();
-      if (this.#stopped) {
-        this.#pendingSends = [];
-        return;
-      }
-      this.#transportConnected = true;
-      const pendingSends = this.#pendingSends;
-      this.#pendingSends = [];
-      for (const message of pendingSends) this.#enqueueConnectedSend(message);
-      this.#recorder = this.#createAudioCapture((error, samples) => {
-        if (error) {
-          this.#fail(error);
-          return;
-        }
-        this.#handleMicrophoneAudio(samples);
-      });
-      this.#refreshPhase();
-      const stopSnapshotDiscovery = requestBackgroundActivitySnapshot(
-        this.#pi,
-        currentActivityScope(this.#context),
-        (activity) => {
-          if (!this.#stopped) this.handleBackgroundActivityStarted(activity);
-        },
-      );
-      if (this.#stopped) stopSnapshotDiscovery();
-      else this.#stopSnapshotDiscovery = stopSnapshotDiscovery;
+      await this.#connectTransport();
     } catch (cause) {
       this.#pendingSends = [];
       this.#fail(cause instanceof Error ? cause : new Error(String(cause)));
       throw cause;
     }
+  }
+
+  isPaused(): boolean {
+    return this.#paused;
+  }
+
+  async pause(): Promise<void> {
+    if (this.#stopped || this.#paused) return;
+    this.#paused = true;
+    this.#transportConnected = false;
+    this.#callbacks.onInputLevel(0);
+    this.#outputLevel = 0;
+    this.#outputActivity.reset();
+    this.#stopSnapshotDiscovery?.();
+    this.#stopSnapshotDiscovery = undefined;
+
+    const recorder = this.#recorder;
+    this.#recorder = undefined;
+    try {
+      recorder?.stop();
+    } catch {}
+
+    try {
+      await this.#attachmentLoadTail;
+      await this.#actionTail;
+      await this.#sendTail;
+    } catch {}
+
+    const transport = this.#transport;
+    this.#transport = undefined;
+    if (transport) {
+      try {
+        await transport.send(buildSessionClose());
+      } catch {}
+      try {
+        await transport.close();
+      } catch {}
+    }
+    if (!this.#stopped) this.#callbacks.onPhase("paused");
+  }
+
+  async resume(): Promise<void> {
+    if (this.#stopped || !this.#paused) return;
+    this.#paused = false;
+    this.#resuming = true;
+    this.#muted = false;
+    this.#callbacks.onPhase("connecting");
+    try {
+      await this.#connectTransport();
+    } catch (cause) {
+      this.#resuming = false;
+      this.#paused = true;
+      this.#transportConnected = false;
+      this.#callbacks.onPhase("paused");
+      throw cause;
+    }
+  }
+
+  async #connectTransport(): Promise<void> {
+    const transport = this.#createTransport({
+      sessionId: this.#context.sessionManager.getSessionId(),
+      instructions: LIVE_INSTRUCTIONS,
+      voice: this.#voice,
+      getAccess: async () => {
+        const auth = await this.#context.modelRegistry.getProviderAuth(
+          "openai-codex",
+        );
+        const accessToken = auth?.auth.apiKey;
+        if (!accessToken) {
+          throw new Error(
+            "No OpenAI Codex OAuth credential. Run /login openai-codex first.",
+          );
+        }
+        return { accessToken };
+      },
+      callbacks: {
+        onEvent: (event) => this.#handleLiveEvent(event),
+        onOutputLevel: (level) => {
+          this.#outputLevel = level;
+          this.#outputActivity.update(level > OUTPUT_ACTIVE_LEVEL);
+        },
+      },
+    });
+    this.#transport = transport;
+    try {
+      await transport.connect();
+    } catch (cause) {
+      if (this.#transport === transport) this.#transport = undefined;
+      try {
+        await transport.close();
+      } catch {}
+      throw cause;
+    }
+    if (this.#stopped || this.#paused) {
+      this.#resuming = false;
+      try {
+        await transport.close();
+      } catch {}
+      return;
+    }
+    if (this.#resuming) this.#queueResumeContext();
+    this.#resuming = false;
+    this.#transportConnected = true;
+    const pendingSends = this.#pendingSends;
+    this.#pendingSends = [];
+    for (const message of pendingSends) this.#enqueueConnectedSend(message);
+    this.#recorder = this.#createAudioCapture((error, samples) => {
+      if (error) {
+        this.#fail(error);
+        return;
+      }
+      this.#handleMicrophoneAudio(samples);
+    });
+    this.#refreshPhase();
+    const stopSnapshotDiscovery = requestBackgroundActivitySnapshot(
+      this.#pi,
+      currentActivityScope(this.#context),
+      (activity) => {
+        if (!this.#stopped) this.handleBackgroundActivityStarted(activity);
+      },
+    );
+    if (this.#stopped || this.#paused) stopSnapshotDiscovery();
+    else this.#stopSnapshotDiscovery = stopSnapshotDiscovery;
+  }
+
+  #queueResumeContext(): void {
+    const transcript = this.#recentTranscript.map(({ role, text }) =>
+      `${role === "user" ? "User" : "Assistant"}: ${text.slice(0, 1_500)}`
+    );
+    const updates = this.#pausedContext.splice(0);
+    const sections = [
+      updates.length > 0 ? `Updates while voice was paused:\n${updates.join("\n\n")}` : "",
+      transcript.length > 0 ? `Recent voice transcript:\n${transcript.join("\n")}` : "",
+    ].filter(Boolean);
+    if (sections.length === 0) return;
+    const text = `Voice session resumed. Use this context for continuity without announcing the resume itself.\n\n${sections.join("\n\n")}`
+      .slice(0, MAX_RESUME_CONTEXT_CHARS);
+    this.#pendingSends.unshift(...chunkLiveContext(text).map((chunk) =>
+      buildSessionContextAppend(chunk, "commentary")
+    ));
   }
 
   async loadImages(
@@ -375,7 +479,7 @@ export class LiveSession {
   }
 
   toggleMute(): void {
-    if (this.#stopped) return;
+    if (this.#stopped || this.#paused) return;
     this.#muted = !this.#muted;
     this.#transport?.setMuted(this.#muted);
     if (this.#muted) this.#callbacks.onInputLevel(0);
@@ -434,23 +538,10 @@ export class LiveSession {
   }
 
   handoffBlockers(): string[] {
-    const blockers: string[] = [];
-    if (this.#pendingDelegationEvents > 0 || this.#activities.status().queued > 0) {
-      blockers.push(
-        "The old voice session has queued voice requests that have not been dispatched. Resolve or wait for them in the old session first, then retry.",
-      );
-    }
-    if (this.#confirmations.size > 0) {
-      blockers.push(
-        "The old voice session has pending voice-routed confirmations. Approve or deny them in the old session first, then retry.",
-      );
-    }
-    if (this.#pendingTypedNotes.length > 0 || this.#delegationTypedNotes.size > 0) {
-      blockers.push(
-        "The old voice session has a staged typed note. Speak an ordinary request to deliver it or stop live mode first, then retry.",
-      );
-    }
-    return blockers;
+    if (this.#confirmations.size === 0) return [];
+    return [
+      "The old voice session has pending voice-routed confirmations. Approve or deny them in the old session first, then retry.",
+    ];
   }
 
   handleConfirmationRequested(value: unknown): void {
@@ -561,6 +652,8 @@ export class LiveSession {
 
   async #stop(): Promise<void> {
     this.#stopped = true;
+    this.#paused = false;
+    this.#resuming = false;
     this.#transportConnected = false;
     this.#pendingSends = [];
     const pendingRequests = [...this.#confirmations.values()].map(({ request, timer }) => {
@@ -614,7 +707,7 @@ export class LiveSession {
   }
 
   #handleLiveEvent(event: LiveServerEvent): void {
-    if (this.#stopped) return;
+    if (this.#stopped || this.#paused || this.#resuming) return;
     switch (event.type) {
       case "session.started":
         this.#refreshPhase();
@@ -653,6 +746,7 @@ export class LiveSession {
       case "turn.done":
         if (event.turn.role === "user") {
           const transcript = event.turn.transcript || this.#inputTranscript;
+          this.#rememberTranscript("user", transcript);
           if (this.#suppressResolvedConfirmationTranscript &&
             transcriptConfirmationDecision(transcript)) {
             this.#suppressResolvedConfirmationTranscript = false;
@@ -671,6 +765,7 @@ export class LiveSession {
           this.#callbacks.onUserTranscript(transcript.trim(), true, false);
         } else {
           const transcript = event.turn.transcript || this.#outputTranscript;
+          this.#rememberTranscript("assistant", transcript);
           this.#outputTranscript = "";
           this.#outputTurnComplete = true;
           this.#foregroundCancellationPending = false;
@@ -897,10 +992,32 @@ export class LiveSession {
     text: string,
     channel?: "speakable" | "commentary",
   ): void {
+    if (this.#paused || this.#resuming) {
+      this.#rememberPausedContext(text);
+      return;
+    }
     for (const chunk of chunkLiveContext(text)) {
       this.#queueSend(
         buildDelegationContextAppend(delegationId, chunk, channel),
       );
+    }
+  }
+
+  #rememberTranscript(role: "user" | "assistant", text: string): void {
+    const normalized = text.replaceAll("\t", " ").replace(/\s+/g, " ").trim();
+    if (!normalized) return;
+    this.#recentTranscript.push({ role, text: normalized });
+    while (this.#recentTranscript.length > RESUME_TRANSCRIPT_UTTERANCES) {
+      this.#recentTranscript.shift();
+    }
+  }
+
+  #rememberPausedContext(text: string): void {
+    const normalized = text.trim();
+    if (!normalized) return;
+    this.#pausedContext.push(normalized);
+    while (this.#pausedContext.join("\n\n").length > MAX_RESUME_CONTEXT_CHARS) {
+      this.#pausedContext.shift();
     }
   }
 
@@ -972,6 +1089,14 @@ export class LiveSession {
 
   #queueSend(message: LiveClientMessage): void {
     if (this.#stopped) return;
+    if (this.#paused || this.#resuming) {
+      if ("content" in message) {
+        this.#rememberPausedContext(
+          message.content.map(({ text }) => text).join("\n"),
+        );
+      }
+      return;
+    }
     if (!this.#transport || !this.#transportConnected) {
       this.#pendingSends.push(message);
       return;
@@ -1007,7 +1132,9 @@ export class LiveSession {
 
   #refreshPhase(): void {
     if (this.#stopped) return;
-    if (this.#muted) this.#callbacks.onPhase("muted");
+    if (this.#paused) this.#callbacks.onPhase("paused");
+    else if (this.#resuming) this.#callbacks.onPhase("connecting");
+    else if (this.#muted) this.#callbacks.onPhase("muted");
     else if (
       this.#activities.status().active > 0 ||
       this.#activities.status().queued > 0

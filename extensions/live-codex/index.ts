@@ -99,6 +99,7 @@ class LiveExtensionRuntime {
   #context: ExtensionContext | undefined;
   #visualizer: LiveVisualizer | undefined;
   #animation: NodeJS.Timeout | undefined;
+  #resumePromise: Promise<void> | undefined;
   #previousEditor: EditorFactory | undefined;
   #previousText = "";
 
@@ -158,13 +159,13 @@ class LiveExtensionRuntime {
           this.#pi,
           "Voice handoff approval required",
           () => context.ui.confirm(
-            "Move voice mode here?",
-            `Another Pi session currently owns live voice (PID ${owner.pid}, session ${owner.sessionId}). Move voice controls here? Work already running in that session will continue there; only voice controls move to this session.`,
+            "Activate voice here?",
+            `Another Pi session currently owns live voice (PID ${owner.pid}, session ${owner.sessionId}). Pause voice there and activate it here? Its transcript, drafts, and running work will remain in that session.`,
           ),
         );
         if (!moveVoice) {
           context.ui.notify(
-            "Voice mode remains active in the other Pi session.",
+            "Voice remains active in the other Pi session.",
             "info",
           );
           return;
@@ -229,6 +230,7 @@ class LiveExtensionRuntime {
             transcriptLimit: parsedTranscriptLimit,
             onStop: () => void this.stop(),
             onToggleMute: () => activeSession.toggleMute(),
+            onResume: () => void this.#resume(activeSession),
             onDrop: (data) =>
               void this.#attachDroppedImages(activeSession, data),
             onTypedNote: (text) => activeSession.stageTypedNote(text),
@@ -259,6 +261,66 @@ class LiveExtensionRuntime {
         this.#reset(error);
       }
     }
+  }
+
+  async #resume(session: LiveSession): Promise<void> {
+    if (this.#session !== session || !session.isPaused()) return;
+    if (this.#resumePromise) return this.#resumePromise;
+    const context = this.#context;
+    if (!context) return;
+
+    const resume = async (): Promise<void> => {
+      const sessionId = context.sessionManager.getSessionId();
+      let voiceLock: VoiceLock;
+      let assignedLock: VoiceLock | undefined;
+      try {
+        try {
+          voiceLock = await acquireVoiceLock(sessionId);
+        } catch (error) {
+          if (!(error instanceof VoiceLockHeldError) || !error.owner) throw error;
+          const handoff = await requestVoiceLockHandoff(error.owner, sessionId);
+          if (!handoff.accepted) {
+            throw new Error(
+              handoff.reason ?? "The active voice session declined the pause request.",
+            );
+          }
+          voiceLock = await acquireVoiceLock(sessionId);
+        }
+        if (this.#session !== session || !session.isPaused()) {
+          voiceLock.release();
+          return;
+        }
+        this.#voiceLock = voiceLock;
+        assignedLock = voiceLock;
+        voiceLock.setHandoffHandler((request) => this.#handleHandoff(request));
+        await session.resume();
+        if (this.#session === session) {
+          context.ui.setStatus(
+            "pi-live-codex",
+            session.isPaused() ? "paused" : "live",
+          );
+        }
+      } catch (cause) {
+        if (assignedLock && this.#voiceLock === assignedLock) {
+          try {
+            assignedLock.release();
+          } catch {}
+          this.#voiceLock = undefined;
+        }
+        if (this.#session === session) {
+          context.ui.setStatus("pi-live-codex", "paused");
+          context.ui.notify(
+            cause instanceof Error ? cause.message : String(cause),
+            "warning",
+          );
+        }
+      }
+    };
+
+    this.#resumePromise = resume().finally(() => {
+      this.#resumePromise = undefined;
+    });
+    return this.#resumePromise;
   }
 
   async #attachDroppedImages(
@@ -345,14 +407,17 @@ class LiveExtensionRuntime {
       return { accepted: false, reason: blockers.join(" ") };
     }
     try {
-      await this.stop("handoff");
+      await session.pause();
+      this.#voiceLock?.release();
+      this.#voiceLock = undefined;
+      this.#context?.ui.setStatus("pi-live-codex", "paused");
       return { accepted: true };
     } catch (cause) {
       return {
         accepted: false,
         reason: cause instanceof Error
-          ? `Voice handoff could not stop the old voice session: ${cause.message}`
-          : "Voice handoff could not stop the old voice session.",
+          ? `Voice could not be paused in the old session: ${cause.message}`
+          : "Voice could not be paused in the old session.",
       };
     }
   }
@@ -367,6 +432,7 @@ class LiveExtensionRuntime {
   #reset(error?: Error, pendingTypedNote?: string): void {
     clearInterval(this.#animation);
     this.#animation = undefined;
+    this.#resumePromise = undefined;
     const context = this.#context;
     const liveDraft = context && this.#visualizer
       ? context.ui.getEditorText()

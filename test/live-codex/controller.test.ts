@@ -184,7 +184,7 @@ function delegation(id: string, text: string): LiveServerEvent {
 }
 
 function createHarness(
-  connectPromise?: Promise<void>,
+  connectPromise?: Promise<void> | Promise<void>[],
   now: () => number = Date.now,
 ): Harness {
   const bus = new EventBus();
@@ -197,6 +197,9 @@ function createHarness(
   let abortCount = 0;
   let idle = true;
   let transport: FakeTransport | undefined;
+  const connectPromises = Array.isArray(connectPromise)
+    ? [...connectPromise]
+    : [connectPromise ?? Promise.resolve()];
   const pi = {
     events: bus,
     sendMessage: (message: unknown) => sentToAgent.push(message),
@@ -230,7 +233,10 @@ function createHarness(
     context,
     callbacks,
     createTransport: (options) => {
-      transport = new FakeTransport(options, connectPromise);
+      transport = new FakeTransport(
+        options,
+        connectPromises.shift() ?? Promise.resolve(),
+      );
       return transport;
     },
     createAudioCapture: () => ({ stop: () => {} }),
@@ -436,7 +442,7 @@ test("delegations received during confirmation cannot consume typed notes", asyn
   await harness.session.stop();
 });
 
-test("queued typed notes block handoff and are recoverable on stop", async () => {
+test("queued typed notes survive parking and remain recoverable on stop", async () => {
   const harness = createHarness();
   await harness.session.start();
   harness.setIdle(false);
@@ -444,7 +450,9 @@ test("queued typed notes block handoff and are recoverable on stop", async () =>
   harness.transport().emit(delegation("queued-note", "Run later"));
   await flush();
 
-  assert.match(harness.session.handoffBlockers().join(" "), /staged typed note/);
+  assert.deepEqual(harness.session.handoffBlockers(), []);
+  await harness.session.pause();
+  assert.equal(harness.session.isPaused(), true);
   assert.equal(harness.session.takePendingTypedNote(), "handoff note");
   await harness.session.stop();
 });
@@ -469,7 +477,7 @@ function contextText(message: LiveClientMessage): string {
     : "";
 }
 
-test("handoff blocks queued delegations and pending confirmations, not active work", async () => {
+test("parking blocks pending confirmations but preserves queued and active work", async () => {
   const harness = createHarness();
   await harness.session.start();
   await activateVoiceDelegation(harness, "active");
@@ -479,7 +487,7 @@ test("handoff blocks queued delegations and pending confirmations, not active wo
   harness.setIdle(false);
   harness.transport().emit(delegation("queued", "Run another visible command"));
   await flush();
-  assert.match(harness.session.handoffBlockers().join(" "), /queued voice requests/);
+  assert.deepEqual(harness.session.handoffBlockers(), []);
 
   harness.setIdle(true);
   harness.session.handleAgentSettled();
@@ -488,6 +496,75 @@ test("handoff blocks queued delegations and pending confirmations, not active wo
 
   harness.session.handleConfirmationRequested(confirmationRequest("handoff-confirmation"));
   assert.match(harness.session.handoffBlockers().join(" "), /pending voice-routed confirmations/);
+  await harness.session.stop();
+});
+
+test("pause closes audio and resume reconnects with transcript continuity", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  const firstTransport = harness.transport();
+  firstTransport.emit({
+    type: "turn.done",
+    turn: { role: "user", transcript: "Remember this request" },
+  });
+  firstTransport.emit({
+    type: "turn.done",
+    turn: { role: "assistant", transcript: "I will remember it" },
+  });
+
+  await harness.session.pause();
+
+  assert.equal(harness.session.isPaused(), true);
+  assert.equal(firstTransport.closed, true);
+  assert.equal(harness.phases.at(-1), "paused");
+
+  await harness.session.resume();
+  await flush();
+
+  assert.equal(harness.session.isPaused(), false);
+  assert.notEqual(harness.transport(), firstTransport);
+  assert.ok(harness.transport().sent.some((message) =>
+    message.type === "session.context.append" &&
+    contextText(message).includes("Recent voice transcript")
+  ));
+  assert.equal(harness.phases.at(-1), "listening");
+  await harness.session.stop();
+});
+
+test("work updates accumulated after a failed resume reach the retry", async () => {
+  const failedConnect = Promise.reject(new Error("offline"));
+  void failedConnect.catch(() => {});
+  const harness = createHarness([
+    Promise.resolve(),
+    failedConnect,
+    Promise.resolve(),
+  ]);
+  await harness.session.start();
+  await harness.session.pause();
+
+  harness.session.handleBackgroundActivityStarted(started("workbench", "before-failure", {
+    resumed: true,
+    originId: undefined,
+  }));
+  harness.session.handleBackgroundActivityFinished(finished("workbench", "before-failure"));
+  await flush();
+  await assert.rejects(harness.session.resume(), /offline/);
+
+  harness.session.handleBackgroundActivityStarted(started("workbench", "after-failure", {
+    resumed: true,
+    originId: undefined,
+  }));
+  harness.session.handleBackgroundActivityFinished(finished("workbench", "after-failure"));
+  await flush();
+  await harness.session.resume();
+  await flush();
+
+  const resumedContext = harness.transport().sent
+    .filter((message) => message.type === "session.context.append")
+    .map(contextText)
+    .join("");
+  assert.match(resumedContext, /before-failure/);
+  assert.match(resumedContext, /after-failure/);
   await harness.session.stop();
 });
 

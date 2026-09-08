@@ -66,7 +66,7 @@ export class VoiceLockHeldError extends Error {
       ? ` (PID ${owner.pid}, session ${owner.sessionId})`
       : "";
     super(
-      `Voice mode is already active in another Pi session${detail}. Stop it there before starting /live here.`,
+      `Voice is already active in another Pi session${detail}. Pause it there or activate voice here to request a handoff.`,
     );
     this.name = "VoiceLockHeldError";
     this.owner = owner;
@@ -499,7 +499,7 @@ export function requestVoiceLockHandoff(
   if (!controlPort) {
     return Promise.reject(
       new Error(
-        "The current voice owner does not support cooperative handoff; stop voice mode there first.",
+        "The current voice owner does not support cooperative pause; end voice mode there first.",
       ),
     );
   }

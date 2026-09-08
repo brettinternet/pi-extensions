@@ -18,6 +18,7 @@ function createVisualizer(
     {
       onStop() {},
       onToggleMute() {},
+      onResume() {},
       onDrop() {},
       transcriptLimit,
       ...overrides,
@@ -62,6 +63,22 @@ describe("Live visualizer", () => {
     assert.equal(visualizer.getText(), "x ");
   });
 
+  test("uses bare space to resume while paused", () => {
+    let resumed = 0;
+    let muted = 0;
+    const visualizer = createVisualizer(undefined, {
+      onResume: () => resumed++,
+      onToggleMute: () => muted++,
+    });
+
+    visualizer.setPhase("paused");
+    visualizer.handleInput(" ");
+
+    assert.equal(resumed, 1);
+    assert.equal(muted, 0);
+    assert.match(visualizer.render(80).join("\n"), /space resume/);
+  });
+
   test("stages verbatim multiline text without invoking normal submission", () => {
     const submitted: string[] = [];
     const notes: string[] = [];
@@ -100,7 +117,7 @@ describe("Live visualizer", () => {
         fg: (_color: string, text: string) => text,
         inverse: (text: string) => text,
       } as never,
-      { onStop() {}, onToggleMute() {}, onDrop() {} },
+      { onStop() {}, onToggleMute() {}, onResume() {}, onDrop() {} },
     );
     visualizer.onAction("app.tools.expand", () => expanded++);
     visualizer.setText("existing draft");
@@ -125,6 +142,7 @@ describe("Live visualizer", () => {
       {
         onStop() {},
         onToggleMute() {},
+        onResume() {},
         onDrop: (data) => drops.push(data),
       },
     );
