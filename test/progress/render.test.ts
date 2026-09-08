@@ -238,6 +238,30 @@ describe("progress rendering", () => {
     ]);
   });
 
+  test("bounds long tool calls so the latest check remains visible", () => {
+    const lines = renderProgress(
+      {
+        runStarted: true,
+        agentActive: true,
+        tools: [{ id: "1", name: "bash", label: `git status ${"x".repeat(100)}` }],
+        checks: [
+          { id: "2", label: "bun run check", outcome: "passed" },
+          { id: "3", label: "go test ./cmd/uhh/...", outcome: "failed" },
+        ],
+        touchedPaths: [],
+      },
+      theme,
+      80,
+    );
+
+    expect(lines).toHaveLength(1);
+    expect(lines[0]).toContain("● git status");
+    expect(lines[0]).toContain("…");
+    expect(lines[0]).toContain("✗ go test ./cmd/uhh/...");
+    expect(lines[0]).not.toContain("bun run check");
+    expect(visibleWidth(lines[0]!)).toBeLessThanOrEqual(80);
+  });
+
   test("truncates rather than wrapping into additional rows", () => {
     const lines = renderProgress(
       {

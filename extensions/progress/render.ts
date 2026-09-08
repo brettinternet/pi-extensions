@@ -3,6 +3,9 @@ import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { CheckActivity, ProgressSnapshot } from "./state.ts";
 
 const MAX_VISIBLE_PATHS = 3;
+const MAX_TOOL_SUMMARY_WIDTH = 48;
+const MAX_CHECK_SUMMARY_WIDTH = 32;
+const MIN_TOOL_SUMMARY_WIDTH = 12;
 
 export function formatRuntime(elapsedMs: number): string {
   const minutes = Math.floor(Math.max(0, elapsedMs) / 60_000);
@@ -13,22 +16,63 @@ export function formatRuntime(elapsedMs: number): string {
   return hours < 24 ? `${hours}h` : `${Math.floor(hours / 24)}d`;
 }
 
-function formatCheck(check: CheckActivity, theme: Theme): string {
-  return check.outcome === "passed"
-    ? theme.fg("success", `✓ ${check.label}`)
-    : theme.fg("error", `✗ ${check.label}`);
+function formatCheck(
+  check: CheckActivity,
+  theme: Theme,
+  maxWidth = MAX_CHECK_SUMMARY_WIDTH,
+): string {
+  const marker = check.outcome === "passed" ? "✓" : "✗";
+  const color = check.outcome === "passed" ? "success" : "error";
+  return theme.fg(
+    color,
+    `${marker} ${truncateToWidth(check.label, Math.max(1, maxWidth - 2), "…")}`,
+  );
 }
 
-function toolSummary(snapshot: ProgressSnapshot, theme: Theme): string {
+function toolSummary(
+  snapshot: ProgressSnapshot,
+  theme: Theme,
+  maxWidth = MAX_TOOL_SUMMARY_WIDTH,
+): string {
   const [current, ...rest] = snapshot.tools;
   if (current) {
     const label = current.check?.label ?? current.label;
-    const suffix = rest.length ? theme.fg("dim", ` +${rest.length}`) : "";
-    return `${theme.fg("accent", "●")} ${theme.fg("text", label)}${suffix}`;
+    const suffixText = rest.length ? ` +${rest.length}` : "";
+    const labelWidth = Math.max(1, maxWidth - 2 - visibleWidth(suffixText));
+    const suffix = rest.length ? theme.fg("dim", suffixText) : "";
+    return `${theme.fg("accent", "●")} ${theme.fg("text", truncateToWidth(label, labelWidth, "…"))}${suffix}`;
   }
   return snapshot.agentActive
     ? `${theme.fg("accent", "●")} ${theme.fg("dim", "thinking")}`
     : theme.fg("success", "✓ settled");
+}
+
+function buildObservedParts(
+  snapshot: ProgressSnapshot,
+  theme: Theme,
+  width: number,
+  heading: string,
+  separator: string,
+): string[] {
+  let checks = snapshot.checks.map((check) => formatCheck(check, theme));
+  const joinWithTool = (toolWidth: number) => [
+    heading,
+    toolSummary(snapshot, theme, toolWidth),
+    ...checks,
+  ];
+
+  while (
+    checks.length > 1 &&
+    visibleWidth(joinWithTool(MAX_TOOL_SUMMARY_WIDTH).join(separator)) > width
+  ) checks = checks.slice(1);
+
+  const reservedWidth = visibleWidth([heading, ...checks].join(separator)) +
+    visibleWidth(separator);
+  const toolWidth = Math.max(
+    MIN_TOOL_SUMMARY_WIDTH,
+    Math.min(MAX_TOOL_SUMMARY_WIDTH, width - reservedWidth),
+  );
+  return joinWithTool(toolWidth);
 }
 
 function inferredSummary(snapshot: ProgressSnapshot, theme: Theme): string | undefined {
@@ -75,11 +119,14 @@ export function renderProgress(
       ].join(separator), width)]
       : [];
   }
-  const observedParts = [
+  const observedParts = buildObservedParts(
+    snapshot,
+    theme,
+    width,
     heading,
-    toolSummary(snapshot, theme),
-    ...snapshot.checks.map((check) => formatCheck(check, theme)),
-  ];
+    separator,
+  );
+  const observed = observedParts.join(separator);
   const inferred = inferredSummary(snapshot, theme);
   const withInference = inferred
     ? [observedParts[0], inferred, ...observedParts.slice(1)].join(separator)
@@ -94,7 +141,7 @@ export function renderProgress(
   const activity = inferred &&
       (visibleWidth(withInference) <= width || !hasDetailedObservedFacts)
     ? (visibleWidth(withInference) <= width ? withInference : inferenceOnly)
-    : observedParts.join(separator);
+    : observed;
   const lines = [truncateToWidth(activity, width)];
 
   if (snapshot.touchedPaths.length > 0) {
