@@ -44,7 +44,7 @@ function inferredSummary(snapshot: ProgressSnapshot, theme: Theme): string | und
         : semantic.current
           ? `current: ${semantic.current}`
           : semantic.phase;
-  return label ? theme.fg("dim", `${label} inferred`) : undefined;
+  return label ? theme.fg("warning", `${label} inferred`) : undefined;
 }
 
 export function renderProgress(

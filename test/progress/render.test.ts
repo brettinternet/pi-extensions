@@ -114,6 +114,28 @@ describe("progress rendering", () => {
     ]);
   });
 
+  test("renders inference in the brighter warning color", () => {
+    const colorTheme = {
+      fg: (color: string, text: string) => `[${color}]${text}[/${color}]`,
+    } as Theme;
+    const lines = renderProgress({
+      runStarted: false,
+      agentActive: false,
+      tools: [],
+      checks: [],
+      touchedPaths: [],
+      semantic: {
+        phase: "Implementation",
+        current: "Updating progress colors",
+        completed: [],
+        blocked: [],
+        confidence: 0.9,
+      },
+    }, colorTheme, 120);
+
+    expect(lines[0]).toContain("[warning]current: Updating progress colors inferred[/warning]");
+  });
+
   test("renders restored semantics alone and drops inference before observed facts", () => {
     const semantic = {
       phase: "Verification",

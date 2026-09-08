@@ -32,7 +32,7 @@ export function titleFooterLine(
   const location = `${formatFooterCwd(cwd, home)}${branch ? ` (${branch})` : ""}`;
   const styledLocation = theme.fg("dim", location);
   const styledTitle = title
-    ? `${theme.fg("dim", " • ")}${theme.fg("muted", title)}`
+    ? `${theme.fg("dim", " • ")}${theme.fg("accent", title)}`
     : "";
   return truncateToWidth(styledLocation + styledTitle, width, theme.fg("dim", "..."));
 }

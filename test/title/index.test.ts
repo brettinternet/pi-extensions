@@ -173,9 +173,10 @@ describe("completion options", () => {
 });
 
 describe("title footer", () => {
-  test("renders the location dim and the title in a subtle contrasting color", () => {
+  test("renders the location dim and the title in the accent color", () => {
     const theme = {
-      fg: (color: string, text: string) => `\x1b[${color === "dim" ? "2" : "36"}m${text}\x1b[0m`,
+      fg: (color: string, text: string) =>
+        `\x1b[${color === "dim" ? "2" : color === "accent" ? "35" : "36"}m${text}\x1b[0m`,
     } as ExtensionCommandContext["ui"]["theme"];
 
     const line = titleFooterLine(
@@ -188,7 +189,7 @@ describe("title footer", () => {
     );
 
     expect(line).toContain("\x1b[2m~/project (main)\x1b[0m");
-    expect(line).toContain("\x1b[2m • \x1b[0m\x1b[36mRefine footer title\x1b[0m");
+    expect(line).toContain("\x1b[2m • \x1b[0m\x1b[35mRefine footer title\x1b[0m");
   });
 });
 
