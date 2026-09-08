@@ -7,6 +7,7 @@ import titleExtension, {
   completionOptions,
   resolveModel,
   splitModelReference,
+  titleFooterLine,
   titleFromCompletion,
 } from "../../extensions/title/index.js";
 
@@ -168,6 +169,26 @@ describe("completion options", () => {
   test("omits reasoning when effort is off or not configured", () => {
     expect(completionOptions(config(null))).not.toHaveProperty("reasoning");
     expect(completionOptions(config("openrouter/model:off"), "off")).not.toHaveProperty("reasoning");
+  });
+});
+
+describe("title footer", () => {
+  test("renders the location dim and the title in a subtle contrasting color", () => {
+    const theme = {
+      fg: (color: string, text: string) => `\x1b[${color === "dim" ? "2" : "36"}m${text}\x1b[0m`,
+    } as ExtensionCommandContext["ui"]["theme"];
+
+    const line = titleFooterLine(
+      "/Users/test/project",
+      "/Users/test",
+      "main",
+      "Refine footer title",
+      80,
+      theme,
+    );
+
+    expect(line).toContain("\x1b[2m~/project (main)\x1b[0m");
+    expect(line).toContain("\x1b[2m • \x1b[0m\x1b[36mRefine footer title\x1b[0m");
   });
 });
 

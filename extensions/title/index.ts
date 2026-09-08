@@ -1,10 +1,41 @@
 import { randomUUID } from "node:crypto";
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { isAbsolute, relative, resolve, sep } from "node:path";
+import { FooterComponent, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth } from "@earendil-works/pi-tui";
 import { completeArguments, completeModelArgument } from "./completions.ts";
 import { configPath, loadConfig, saveConfig, type Config } from "./config.js";
 import { cleanTitle, firstCompletedExchange, TITLE_SYSTEM_PROMPT } from "./title.js";
 
 type TitleSource = { user: string; assistant?: string };
+type FooterTheme = ExtensionContext["ui"]["theme"];
+
+function formatFooterCwd(cwd: string, home: string | undefined): string {
+  if (!home) return cwd;
+
+  const resolvedCwd = resolve(cwd);
+  const resolvedHome = resolve(home);
+  const relativeToHome = relative(resolvedHome, resolvedCwd);
+  const isInsideHome = relativeToHome === "" ||
+    (relativeToHome !== ".." && !relativeToHome.startsWith(`..${sep}`) && !isAbsolute(relativeToHome));
+  if (!isInsideHome) return cwd;
+  return relativeToHome === "" ? "~" : `~${sep}${relativeToHome}`;
+}
+
+export function titleFooterLine(
+  cwd: string,
+  home: string | undefined,
+  branch: string | null,
+  title: string | undefined,
+  width: number,
+  theme: FooterTheme,
+): string {
+  const location = `${formatFooterCwd(cwd, home)}${branch ? ` (${branch})` : ""}`;
+  const styledLocation = theme.fg("dim", location);
+  const styledTitle = title
+    ? `${theme.fg("dim", " • ")}${theme.fg("muted", title)}`
+    : "";
+  return truncateToWidth(styledLocation + styledTitle, width, theme.fg("dim", "..."));
+}
 
 const AUTOMATIC_MODEL_CANDIDATES = [
   "openai/gpt-5-nano",
@@ -309,6 +340,48 @@ export default function titleExtension(pi: ExtensionAPI) {
     completionContext = ctx;
     resetGeneration();
     deferTerminalTitle(ctx);
+
+    if (ctx.mode === "tui") {
+      ctx.ui.setFooter((tui, theme, footerData) => {
+        const footerSession = {
+          state: {
+            get model() {
+              return ctx.model;
+            },
+            get thinkingLevel() {
+              return ctx.thinkingLevel;
+            },
+          },
+          sessionManager: ctx.sessionManager,
+          getContextUsage: () => ctx.getContextUsage(),
+          modelRuntime: {
+            isUsingSubscription: (provider: string) => provider === "kimi-coding",
+          },
+        } as unknown as ConstructorParameters<typeof FooterComponent>[0];
+        const footer = new FooterComponent(footerSession, footerData);
+        const unsubscribe = footerData.onBranchChange(() => tui.requestRender());
+
+        return {
+          render(width: number): string[] {
+            const lines = footer.render(width);
+            lines[0] = titleFooterLine(
+              ctx.cwd,
+              process.env.HOME || process.env.USERPROFILE,
+              footerData.getGitBranch(),
+              pi.getSessionName(),
+              width,
+              theme,
+            );
+            return lines;
+          },
+          invalidate: () => footer.invalidate(),
+          dispose: () => {
+            unsubscribe();
+            footer.dispose();
+          },
+        };
+      });
+    }
   });
 
   pi.on("session_shutdown", () => {
