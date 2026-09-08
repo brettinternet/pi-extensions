@@ -1135,10 +1135,6 @@ export class LiveSession {
     if (this.#paused) this.#callbacks.onPhase("paused");
     else if (this.#resuming) this.#callbacks.onPhase("connecting");
     else if (this.#muted) this.#callbacks.onPhase("muted");
-    else if (
-      this.#activities.status().active > 0 ||
-      this.#activities.status().queued > 0
-    ) this.#callbacks.onPhase("working");
     else if (this.#outputActive) this.#callbacks.onPhase("speaking");
     else this.#callbacks.onPhase("listening");
   }

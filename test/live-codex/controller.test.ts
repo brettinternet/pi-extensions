@@ -273,6 +273,19 @@ async function activateVoiceDelegation(
   harness.sentToAgent.length = 0;
 }
 
+test("keeps the voice phase independent while delegated work is active", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+
+  harness.transport().emit(delegation("delegation-1", "Run the checks"));
+  await flush();
+  assert.equal(harness.phases.at(-1), "listening");
+
+  harness.transport().options.callbacks.onOutputLevel(0.2);
+  assert.equal(harness.phases.at(-1), "speaking");
+  await harness.session.stop();
+});
+
 test("a spoken foreground cancellation aborts immediately instead of queueing", async () => {
   const harness = createHarness();
   await harness.session.start();

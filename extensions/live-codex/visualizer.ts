@@ -18,7 +18,6 @@ import {
 export type LivePhase =
   | "connecting"
   | "listening"
-  | "working"
   | "speaking"
   | "muted"
   | "paused"
@@ -290,7 +289,6 @@ export class LiveVisualizer extends CustomEditor {
     const staticIcons: Record<LivePhase, string> = {
       connecting: "○",
       listening: "●",
-      working: "○",
       speaking: "»",
       muted: "×",
       paused: "⏸",
@@ -299,17 +297,15 @@ export class LiveVisualizer extends CustomEditor {
     const phaseColors: Record<LivePhase, ThemeColor> = {
       connecting: "dim",
       listening: "success",
-      working: "warning",
       speaking: "accent",
       muted: "dim",
       paused: "dim",
       error: "error",
     };
-    const icon =
-      this.#phase === "working"
-        ? spinners[this.#frame % spinners.length]
-        : staticIcons[this.#phase];
+    const icon = staticIcons[this.#phase];
+    const workPending = this.#workStatus.active > 0 || this.#workStatus.queued > 0;
     const work = [
+      workPending ? `${spinners[this.#frame % spinners.length]} working` : "",
       this.#workStatus.active > 0 ? `${this.#workStatus.active} active` : "",
       this.#workStatus.queued > 0 ? `${this.#workStatus.queued} queued` : "",
       this.#workStatus.failed > 0 ? `${this.#workStatus.failed} failed` : "",

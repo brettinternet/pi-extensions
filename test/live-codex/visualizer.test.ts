@@ -79,6 +79,23 @@ describe("Live visualizer", () => {
     assert.match(visualizer.render(80).join("\n"), /space resume/);
   });
 
+  test("shows delegated work alongside the current voice phase", () => {
+    const visualizer = createVisualizer();
+    visualizer.setPhase("listening");
+    visualizer.setWorkStatus({ active: 1, queued: 2, failed: 0 });
+
+    assert.match(
+      visualizer.render(80).join("\n"),
+      /● listening · ⠋ working · 1 active · 2 queued/,
+    );
+
+    visualizer.setPhase("speaking");
+    assert.match(
+      visualizer.render(80).join("\n"),
+      /» speaking · ⠋ working · 1 active · 2 queued/,
+    );
+  });
+
   test("stages verbatim multiline text without invoking normal submission", () => {
     const submitted: string[] = [];
     const notes: string[] = [];
