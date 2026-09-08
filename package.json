@@ -43,7 +43,8 @@
       "./extensions/loop/index.ts",
       "./extensions/progress/index.ts",
       "./extensions/title/index.ts",
-      "./extensions/workbench/index.ts"
+      "./extensions/workbench/index.ts",
+      "./extensions/herdr-agent-state/index.ts"
     ]
   }
 }
