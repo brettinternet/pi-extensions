@@ -8,6 +8,7 @@ Slash-command descriptions show each command's argument shape. Press `Tab` to co
 
 | Extension | What it does | Details |
 |---|---|---|
+| **Copy Prompt** | Copies the current prompt editor text to the system clipboard with `Alt+C`. | [`README`](extensions/copy-prompt/README.md) |
 | **Live Codex** | Realtime `gpt-live-1-codex` voice mode for Pi. | [`docs`](extensions/live-codex/global-voice-broker.md) |
 | **Loop** | Runs a prompt a bounded number of times in fresh Pi sessions. | [`README`](extensions/loop/README.md) |
 | **Herdr Workbench** | Provides visible Neovim, LazyGit, and foreground-job panes. | [`README`](extensions/workbench/README.md) |
@@ -138,6 +139,7 @@ pi install git:github.com/brettinternet/pi-extensions
 Or install individual extensions from npm:
 
 ```sh
+pi install npm:@brettinternet/pi-copy-prompt
 pi install npm:pi-live-codex
 pi install npm:@brettinternet/pi-progress
 pi install npm:@brettinternet/pi-loop

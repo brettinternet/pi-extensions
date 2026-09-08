@@ -1,0 +1,40 @@
+{
+  "name": "@brettinternet/pi-copy-prompt",
+  "version": "0.1.0",
+  "description": "Copy the current Pi prompt editor text to the system clipboard",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brettinternet/pi-extensions.git",
+    "directory": "extensions/copy-prompt"
+  },
+  "homepage": "https://github.com/brettinternet/pi-extensions#copy-prompt",
+  "bugs": {
+    "url": "https://github.com/brettinternet/pi-extensions/issues"
+  },
+  "files": [
+    "*.ts",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "clipboard",
+    "prompt"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
