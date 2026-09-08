@@ -20,7 +20,10 @@ import {
   CONFIRMATION_REQUESTED_EVENT,
 } from "./confirmation.ts";
 import { LiveSession, type LiveStopMode } from "./controller.ts";
-import { loadDroppedImages } from "./image-attachments.ts";
+import {
+  isDroppedFilePaste,
+  loadDroppedImages,
+} from "./image-attachments.ts";
 import {
   acquireVoiceLock,
   requestVoiceLockHandoff,
@@ -231,6 +234,7 @@ class LiveExtensionRuntime {
             onStop: () => void this.stop(),
             onToggleMute: () => activeSession.toggleMute(),
             onResume: () => void this.#resume(activeSession),
+            isDrop: (data) => isDroppedFilePaste(data, context.cwd),
             onDrop: (data) =>
               void this.#attachDroppedImages(activeSession, data),
             onTypedNote: (text) => activeSession.stageTypedNote(text),

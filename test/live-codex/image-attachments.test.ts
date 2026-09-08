@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import {
   droppedFilePaths,
+  isDroppedFilePaste,
   loadDroppedImages,
 } from "../../extensions/live-codex/image-attachments.ts";
 
@@ -23,6 +24,21 @@ test("parses quoted and escaped dropped image paths", () => {
 
 test("ignores ordinary keyboard input", () => {
   assert.deepEqual(droppedFilePaths("/tmp/image.png", "/project"), []);
+});
+
+test("distinguishes dropped files from pasted text", async () => {
+  const directory = await mkdtemp(join(tmpdir(), "pi-live-drop-test-"));
+  const path = join(directory, "image.png");
+  await writeFile(path, "image");
+
+  assert.equal(
+    isDroppedFilePaste(`\x1b[200~${path}\x1b[201~`, process.cwd()),
+    true,
+  );
+  assert.equal(
+    isDroppedFilePaste("\x1b[200~Warning: pasted text\x1b[201~", process.cwd()),
+    false,
+  );
 });
 
 test("rejects an image that cannot be decoded", async () => {

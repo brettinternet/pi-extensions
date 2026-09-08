@@ -160,6 +160,7 @@ describe("Live visualizer", () => {
         onStop() {},
         onToggleMute() {},
         onResume() {},
+        isDrop: () => true,
         onDrop: (data) => drops.push(data),
       },
     );
@@ -167,6 +168,16 @@ describe("Live visualizer", () => {
     visualizer.handleInput("\x1b[200~/tmp/screenshot.png\x1b[201~");
 
     assert.deepEqual(drops, ["\x1b[200~/tmp/screenshot.png\x1b[201~"]);
+  });
+
+  test("inserts bracketed paste text when it is not a dropped file", () => {
+    const visualizer = createVisualizer(undefined, {
+      isDrop: () => false,
+    });
+
+    visualizer.handleInput("\x1b[200~Warning: pasted text\x1b[201~");
+
+    assert.equal(visualizer.getText(), "Warning: pasted text");
   });
 
   test("wraps and labels the complete input transcript", () => {

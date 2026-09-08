@@ -37,6 +37,7 @@ export interface LiveVisualizerOptions {
   onStop(): void;
   onToggleMute(): void;
   onResume(): void;
+  isDrop?(data: string): boolean;
   onDrop(data: string): void;
   onTypedNote?(text: string): void;
   transcriptLimit?: number;
@@ -169,7 +170,11 @@ export class LiveVisualizer extends CustomEditor {
   }
 
   override handleInput(data: string): void {
-    if (data.startsWith("\x1b[200~") && data.endsWith("\x1b[201~")) {
+    if (
+      data.startsWith("\x1b[200~") &&
+      data.endsWith("\x1b[201~") &&
+      this.#options.isDrop?.(data)
+    ) {
       this.#options.onDrop(data);
       return;
     }

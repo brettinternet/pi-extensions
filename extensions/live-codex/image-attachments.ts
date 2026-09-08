@@ -1,3 +1,4 @@
+import { existsSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, isAbsolute, resolve } from "node:path";
@@ -57,6 +58,11 @@ export function droppedFilePaths(data: string, cwd: string): string[] {
         : path;
     return isAbsolute(expanded) ? expanded : resolve(cwd, expanded);
   });
+}
+
+export function isDroppedFilePaste(data: string, cwd: string): boolean {
+  const paths = droppedFilePaths(data, cwd);
+  return paths.length > 0 && paths.every((path) => existsSync(path));
 }
 
 export async function loadDroppedImages(
