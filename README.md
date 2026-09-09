@@ -26,7 +26,7 @@ Start Pi in its interactive TUI:
 /live <voice>
 ```
 
-![prompt with live voice enabled](docs/screenshot.png)
+![prompt with live voice enabled](docs/live.png)
 
 Known realtime voices support completion; custom voice names are also accepted. `Ctrl+L` toggles voice mode and `Esc` ends it.
 
@@ -65,6 +65,8 @@ Registers a typed `workbench` tool for visible Neovim, LazyGit, and foreground-j
 Jobs run asynchronously, remain cancellable, and emit session- and workspace-scoped background activity events. The tool only mutates trusted projects and limits follow-up operations to resources owned by the current Pi session.
 
 ### Progress
+
+![session progress reported as history of work](docs/progress.png)
 
 Shows up to two truncated lines of passive activity below the editor. It observes active tools, recent check outcomes, and successful edit/write targets. When explicitly configured, bounded advisory inference adds a debounced current activity during longer runs and a settled current/completed/blocker summary; it does not register an LLM tool, change prompts, or provide semantic verification.
 
