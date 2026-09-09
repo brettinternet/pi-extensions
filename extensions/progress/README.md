@@ -41,7 +41,7 @@ Inference is advisory UI metadata. During an active run, a meaningful edit/write
 
 When newer activity invalidates a displayed active inference, the widget retains it dimmed with `updating…` until its replacement arrives instead of briefly removing it. The widget prefers an inferred current activity while active, or an inferred blocker/completed item after settlement; a generic phase is only a fallback. Inferred text is explicitly marked `inferred`, remains bounded to the compact two-line widget, and is omitted before observed tools, checks, and touched paths when width is constrained. Inference is advisory UI metadata: it does not alter model context, register an LLM-callable tool, control execution, or provide semantic verification evidence. Invalid, low-confidence, failed, timed-out, cancelled, and stale responses are discarded.
 
-Settled inference summaries from the current session branch can be viewed in a small, scrollable overlay above the prompt. Use `/progress steps` or `Alt+G`; the overlay reads existing session metadata and does not make another model request.
+Settled inference summaries from the current session branch can be toggled in a full-width widget directly above the prompt with `/progress steps` or `Alt+G`. The widget shows the latest eight summary lines, reports how many earlier lines are hidden, reads existing session metadata, and does not make another model request.
 
 ```text
 /progress steps                               Show inferred progress history

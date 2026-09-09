@@ -267,7 +267,7 @@ describe("progress extension", () => {
     ]);
   });
 
-  test("shows progress history from the command and shortcut", async () => {
+  test("shows progress history from the command and shortcut without a TUI", async () => {
     const { command, shortcut, notifications, ctx } = setup();
     ctx.sessionManager.getBranch = () => [{
       type: "custom",
@@ -288,6 +288,37 @@ describe("progress extension", () => {
       "1. Implementation · Updated progress history\n  ✓ Added the overlay",
       "1. Implementation · Updated progress history\n  ✓ Added the overlay",
     ]);
+  });
+
+  test("toggles full-width progress history above the TUI editor", async () => {
+    const { command, widgets, ctx } = setup();
+    (ctx as { mode?: string }).mode = "tui";
+    ctx.sessionManager.getBranch = () => [{
+      type: "custom",
+      customType: "pi-progress-inference-v1",
+      data: {
+        phase: "Implementation",
+        current: "Moved progress history",
+        completed: ["Used an above-editor widget"],
+        blocked: [],
+        confidence: 0.9,
+      },
+    }] as any;
+
+    await command.handler("steps", ctx as unknown as ExtensionCommandContext);
+    expect(widgets.at(-1)?.options).toEqual({ placement: "aboveEditor" });
+    expect(latestLines(widgets)).toEqual([
+      "Progress history",
+      "1. Implementation · Moved progress history",
+      "✓ Used an above-editor widget",
+      "alt+g or /progress steps to close",
+    ]);
+
+    await command.handler("steps", ctx as unknown as ExtensionCommandContext);
+    expect(widgets.at(-1)).toMatchObject({
+      key: "pi-progress-history",
+      content: undefined,
+    });
   });
 
   test("sets, shows, and disables the inference model", async () => {
@@ -323,9 +354,9 @@ describe("progress extension", () => {
     const { handlers, widgets, ctx } = setup();
     handlers.get("session_start")!({}, ctx);
     handlers.get("session_shutdown")!({}, ctx);
-    expect(widgets.at(-1)).toMatchObject({
-      key: "pi-progress",
-      content: undefined,
-    });
+    expect(widgets.slice(-2)).toEqual([
+      { key: "pi-progress", content: undefined, options: undefined },
+      { key: "pi-progress-history", content: undefined, options: undefined },
+    ]);
   });
 });

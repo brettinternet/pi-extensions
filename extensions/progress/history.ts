@@ -1,15 +1,11 @@
 import type { ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import {
-  Key,
-  matchesKey,
-  truncateToWidth,
-  type Component,
-} from "@earendil-works/pi-tui";
+import { truncateToWidth, type Component } from "@earendil-works/pi-tui";
 import { parseInference } from "./inference.ts";
 import type { SemanticSnapshot } from "./state.ts";
 
 export const PROGRESS_HISTORY_SHORTCUT = "alt+g" as const;
-const VISIBLE_HISTORY_LINES = 8;
+export const PROGRESS_HISTORY_WIDGET_KEY = "pi-progress-history";
+const MAX_VISIBLE_HISTORY_LINES = 8;
 
 type BranchEntry = {
   type?: string;
@@ -57,94 +53,61 @@ function historyText(lines: readonly ProgressHistoryLine[]): string {
   }).join("\n");
 }
 
-class ProgressHistoryOverlay implements Component {
-  readonly #lines: readonly ProgressHistoryLine[];
-  readonly #theme: Theme;
-  readonly #done: () => void;
-  #offset: number;
-
-  constructor(lines: readonly ProgressHistoryLine[], theme: Theme, done: () => void) {
-    this.#lines = lines;
-    this.#theme = theme;
-    this.#done = done;
-    this.#offset = Math.max(0, lines.length - VISIBLE_HISTORY_LINES);
-  }
-
-  render(width: number): string[] {
-    const contentWidth = Math.max(1, width - 2);
-    const visible = this.#lines.slice(this.#offset, this.#offset + VISIBLE_HISTORY_LINES);
-    const body = visible.length > 0
-      ? visible.map((line) => {
-        const prefix = line.kind === "completed" ? "✓ " : line.kind === "blocked" ? "! " : "";
-        const color = line.kind === "completed" ? "success" : line.kind === "blocked" ? "warning" : "text";
-        return ` ${this.#theme.fg(color, truncateToWidth(`${prefix}${line.text}`, contentWidth))}`;
-      })
-      : [` ${this.#theme.fg("muted", "No inferred progress history in this branch.")}`];
-    const position = this.#lines.length > VISIBLE_HISTORY_LINES
-      ? ` · ${this.#offset + 1}-${Math.min(this.#offset + VISIBLE_HISTORY_LINES, this.#lines.length)}/${this.#lines.length}`
-      : "";
-    return [
-      ` ${this.#theme.fg("accent", this.#theme.bold("Progress history"))}`,
-      ...body,
-      ` ${this.#theme.fg("dim", `↑↓ scroll · esc close${position}`)}`,
-    ].map((line) => truncateToWidth(line, width));
-  }
-
-  handleInput(data: string): void {
-    const maxOffset = Math.max(0, this.#lines.length - VISIBLE_HISTORY_LINES);
-    if (matchesKey(data, Key.escape) || matchesKey(data, Key.ctrl("c"))) {
-      this.#done();
-    } else if (matchesKey(data, Key.up)) {
-      this.#offset = Math.max(0, this.#offset - 1);
-    } else if (matchesKey(data, Key.down)) {
-      this.#offset = Math.min(maxOffset, this.#offset + 1);
-    } else if (matchesKey(data, Key.pageUp)) {
-      this.#offset = Math.max(0, this.#offset - VISIBLE_HISTORY_LINES);
-    } else if (matchesKey(data, Key.pageDown)) {
-      this.#offset = Math.min(maxOffset, this.#offset + VISIBLE_HISTORY_LINES);
-    } else if (matchesKey(data, Key.home)) {
-      this.#offset = 0;
-    } else if (matchesKey(data, Key.end)) {
-      this.#offset = maxOffset;
-    }
-  }
-
-  invalidate(): void {}
+function renderHistory(
+  lines: readonly ProgressHistoryLine[],
+  theme: Theme,
+  width: number,
+): string[] {
+  const visible = lines.slice(-MAX_VISIBLE_HISTORY_LINES);
+  const hidden = lines.length - visible.length;
+  const body = visible.length > 0
+    ? visible.map((line) => {
+      const prefix = line.kind === "completed" ? "✓ " : line.kind === "blocked" ? "! " : "";
+      const color = line.kind === "completed" ? "success" : line.kind === "blocked" ? "warning" : "text";
+      return theme.fg(color, truncateToWidth(`${prefix}${line.text}`, width));
+    })
+    : [theme.fg("muted", "No inferred progress history in this branch.")];
+  const heading = hidden > 0
+    ? `Progress history · ${hidden} earlier lines hidden`
+    : "Progress history";
+  return [
+    theme.fg("accent", heading),
+    ...body,
+    theme.fg("dim", `${PROGRESS_HISTORY_SHORTCUT} or /progress steps to close`),
+  ].map((line) => truncateToWidth(line, width));
 }
 
-export async function showProgressHistory(
+export function setProgressHistoryVisible(
   ctx: Pick<ExtensionContext, "mode" | "sessionManager" | "ui">,
   inferenceEntryType: string,
-): Promise<void> {
-  const branch = (ctx.sessionManager.getBranch?.() ?? []) as BranchEntry[];
-  const lines = progressHistoryLines(progressHistory(branch, inferenceEntryType));
+  visible: boolean,
+): void {
   if (ctx.mode !== "tui") {
-    ctx.ui.notify(historyText(lines), "info");
+    if (visible) {
+      const branch = (ctx.sessionManager.getBranch?.() ?? []) as BranchEntry[];
+      ctx.ui.notify(historyText(progressHistoryLines(progressHistory(branch, inferenceEntryType))), "info");
+    }
     return;
   }
 
-  await ctx.ui.custom<void>(
-    (tui, theme, _keybindings, done) => {
-      const overlay = new ProgressHistoryOverlay(lines, theme, done);
-      return {
-        render: (width) => overlay.render(width),
-        handleInput: (data) => {
-          overlay.handleInput?.(data);
-          tui.requestRender();
-        },
-        invalidate: () => overlay.invalidate(),
-      };
-    },
-    {
-      overlay: true,
-      overlayOptions: {
-        anchor: "bottom-center",
-        width: "75%",
-        minWidth: 44,
-        maxHeight: 11,
-        offsetY: -4,
-        margin: 1,
+  if (!visible) {
+    ctx.ui.setWidget(PROGRESS_HISTORY_WIDGET_KEY, undefined);
+    return;
+  }
+
+  ctx.ui.setWidget(
+    PROGRESS_HISTORY_WIDGET_KEY,
+    (_tui, theme): Component => ({
+      render: (width) => {
+        const branch = (ctx.sessionManager.getBranch?.() ?? []) as BranchEntry[];
+        return renderHistory(
+          progressHistoryLines(progressHistory(branch, inferenceEntryType)),
+          theme,
+          width,
+        );
       },
-    },
+      invalidate: () => {},
+    }),
+    { placement: "aboveEditor" },
   );
 }

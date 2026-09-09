@@ -7,7 +7,8 @@ import { configPath, loadConfig, saveConfig, type ProgressConfig } from "./confi
 import { ActivityDigest } from "./digest.ts";
 import {
   PROGRESS_HISTORY_SHORTCUT,
-  showProgressHistory,
+  PROGRESS_HISTORY_WIDGET_KEY,
+  setProgressHistoryVisible,
 } from "./history.ts";
 import {
   completeInference,
@@ -59,6 +60,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
   let activeRuntimeStartedAt: number | undefined;
   let hasRecordedRuntime = false;
   let runtimeTimer: ReturnType<typeof setInterval> | undefined;
+  let historyVisible = false;
 
   function stopRuntimeTimer(): void {
     if (runtimeTimer !== undefined) clearInterval(runtimeTimer);
@@ -420,7 +422,11 @@ export default function progressExtension(pi: ExtensionAPI): void {
     const wasActive = state.snapshot().agentActive;
     pauseRuntimeTimer();
     if (wasActive) pi.appendEntry(RUNTIME_ENTRY, { activeMs: accumulatedRuntimeMs });
-    if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
+    if (ctx.hasUI) {
+      ctx.ui.setWidget(WIDGET_KEY, undefined);
+      ctx.ui.setWidget(PROGRESS_HISTORY_WIDGET_KEY, undefined);
+    }
+    historyVisible = false;
     currentContext = undefined;
     state.reset();
     digest.reset();
@@ -429,8 +435,9 @@ export default function progressExtension(pi: ExtensionAPI): void {
     hasRecordedRuntime = false;
   });
 
-  async function openHistory(ctx: ExtensionContext): Promise<void> {
-    await showProgressHistory(ctx, INFERENCE_ENTRY);
+  function openHistory(ctx: ExtensionContext): void {
+    if (ctx.mode === "tui") historyVisible = !historyVisible;
+    setProgressHistoryVisible(ctx, INFERENCE_ENTRY, ctx.mode === "tui" ? historyVisible : true);
   }
 
   pi.registerShortcut(PROGRESS_HISTORY_SHORTCUT, {
@@ -457,7 +464,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
       const [action, ...rest] = input.split(/\s+/).filter(Boolean);
       try {
         if (action === "steps") {
-          await openHistory(ctx);
+          openHistory(ctx);
           return;
         }
 
