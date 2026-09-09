@@ -98,7 +98,6 @@ export function registerHerdrAgentState(
   let blockedLabel: string | undefined;
   let sessionRef: Record<string, string> = {};
   let reportSeq = 0;
-  let settleReaffirmationQueued = false;
   let lastState: AgentState | undefined;
   let lastMessage: string | undefined;
   let pending: StateReport | undefined;
@@ -204,21 +203,11 @@ export function registerHerdrAgentState(
     if (!rootSession || ctx.isIdle() !== true) return;
     updateSession(ctx);
     agentActive = false;
-    if (desiredState().state === "idle") {
-      publish();
-      return;
-    }
-    if (settleReaffirmationQueued) return;
-    settleReaffirmationQueued = true;
-    queueMicrotask(() => {
-      settleReaffirmationQueued = false;
-      if (rootSession && desiredState().state !== "idle") publish(true);
-    });
+    publish();
   });
 
   pi.on("session_shutdown", () => {
     rootSession = false;
-    settleReaffirmationQueued = false;
     pending = undefined;
     busyCount = 0;
     blockedCount = 0;

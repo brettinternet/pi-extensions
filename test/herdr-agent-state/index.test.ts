@@ -55,7 +55,7 @@ async function start(hooks: Map<string, (event: unknown, ctx: ExtensionContext) 
   await hooks.get("session_start")!({}, ctx);
 }
 
-describe("Herdr Pi agent state workaround", () => {
+describe("Herdr Pi agent state integration", () => {
   test("restores busy state received before the interactive session starts", async () => {
     const reports: Record<string, unknown>[] = [];
     const { events, hooks, ctx, bridge } = setup(async (request) => {
@@ -70,25 +70,20 @@ describe("Herdr Pi agent state workaround", () => {
     expect(reports[0]).toMatchObject({ state: "working", message: "subagent" });
   });
 
-  test("reaffirms working after managed idle when a sibling is busy", async () => {
+  test("keeps working after the parent settles while a sibling is busy", async () => {
     const reports: Record<string, unknown>[] = [];
-    let currentTime = 1_000;
     const { events, hooks, ctx, bridge } = setup(async (request) => {
       reports.push(params(request));
-    }, () => currentTime);
+    });
     await start(hooks, ctx);
     reports.length = 0;
 
     hooks.get("agent_start")!({}, ctx);
     events.emit("herdr:busy", { active: true, label: "⏳ 1 subagent" });
-    await bridge.flush();
-    currentTime = 2_000;
     hooks.get("agent_settled")!({}, ctx);
-    reports.push({ state: "idle", seq: currentTime * 1000 - 1 });
-    await Promise.resolve();
     await bridge.flush();
 
-    expect(reports.map((report) => report.state)).toEqual(["working", "working", "idle", "working"]);
+    expect(reports.map((report) => report.state)).toEqual(["working", "working"]);
     expect(reports.at(-1)).toMatchObject({
       pane_id: "pane-1",
       source: "herdr:pi",
@@ -97,8 +92,10 @@ describe("Herdr Pi agent state workaround", () => {
       message: "⏳ 1 subagent",
       agent_session_path: "/tmp/pi-session.jsonl",
     });
-    expect(reports.at(-1)!.seq).toBe(currentTime * 1000);
-    expect(reports.at(-1)!.seq).toBeGreaterThan(reports.at(-2)!.seq as number);
+
+    events.emit("herdr:busy", { active: false });
+    await bridge.flush();
+    expect(reports.at(-1)).toMatchObject({ state: "idle" });
   });
 
   test("gives blocked status precedence and restores the underlying state", async () => {
