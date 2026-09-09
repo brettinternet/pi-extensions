@@ -25,6 +25,7 @@ const theme = {
 function setup() {
   const handlers = new Map<string, Handler>();
   let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+  let shortcut: Parameters<ExtensionAPI["registerShortcut"]>[1] | undefined;
   const notifications: string[] = [];
   const entries: Array<{ type: string; data: unknown }> = [];
   const widgets: Array<{
@@ -36,6 +37,9 @@ function setup() {
     on: (name: string, handler: Handler) => handlers.set(name, handler),
     registerCommand: (_name: string, options: Parameters<ExtensionAPI["registerCommand"]>[1]) => {
       command = options;
+    },
+    registerShortcut: (_key: string, options: Parameters<ExtensionAPI["registerShortcut"]>[1]) => {
+      shortcut = options;
     },
     appendEntry: (type: string, data: unknown) => entries.push({ type, data }),
   } as unknown as ExtensionAPI;
@@ -54,7 +58,7 @@ function setup() {
     modelRegistry: { getAvailable: () => [] },
   } as unknown as ExtensionContext;
   progressExtension(pi);
-  return { handlers, widgets, command: command!, notifications, entries, ctx };
+  return { handlers, widgets, command: command!, shortcut: shortcut!, notifications, entries, ctx };
 }
 
 async function flushRender(): Promise<void> {
@@ -250,13 +254,39 @@ describe("progress extension", () => {
     expect(latestLines(widgets)).toEqual(["progress <1m · ● thinking"]);
   });
 
-  test("completes status, model, and disabling inference", () => {
+  test("completes steps, status, model, and disabling inference", () => {
     const { command } = setup();
-    expect(command.getArgumentCompletions?.("st")).toEqual([
+    expect(command.getArgumentCompletions?.("ste")).toEqual([
+      { value: "steps", label: "steps", description: "Show inferred progress history" },
+    ]);
+    expect(command.getArgumentCompletions?.("sta")).toEqual([
       { value: "status", label: "status", description: "Show inference status and configuration" },
     ]);
     expect(command.getArgumentCompletions?.("model of")).toEqual([
       { value: "model off", label: "off", description: "Disable progress inference" },
+    ]);
+  });
+
+  test("shows progress history from the command and shortcut", async () => {
+    const { command, shortcut, notifications, ctx } = setup();
+    ctx.sessionManager.getBranch = () => [{
+      type: "custom",
+      customType: "pi-progress-inference-v1",
+      data: {
+        phase: "Implementation",
+        current: "Updated progress history",
+        completed: ["Added the overlay"],
+        blocked: [],
+        confidence: 0.9,
+      },
+    }] as any;
+
+    await command.handler("steps", ctx as unknown as ExtensionCommandContext);
+    await shortcut.handler(ctx);
+
+    expect(notifications).toEqual([
+      "1. Implementation · Updated progress history\n  ✓ Added the overlay",
+      "1. Implementation · Updated progress history\n  ✓ Added the overlay",
     ]);
   });
 

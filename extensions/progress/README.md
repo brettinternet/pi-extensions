@@ -39,9 +39,12 @@ Inference receives only a bounded, redacted activity digest: a truncated user re
 
 Inference is advisory UI metadata. During an active run, a meaningful edit/write, recognized check, or delegated-tool batch is coalesced and inferred after a short 500 ms quiet period, with at most four active requests per run; newer activity cancels or supersedes that request. When the run settles, one inference starts immediately after the final assistant content is available. Active inference is shown as an inferred current activity but is not written to session history. Only settled inference metadata is persisted and restored.
 
-The widget prefers an inferred current activity while active, or an inferred blocker/completed item after settlement; a generic phase is only a fallback. Inferred text is explicitly marked `inferred`, remains bounded to the compact two-line widget, and is omitted before observed tools, checks, and touched paths when width is constrained. Inference is advisory UI metadata: it does not alter model context, register an LLM-callable tool, control execution, or provide semantic verification evidence. Invalid, low-confidence, failed, timed-out, cancelled, and stale responses are discarded.
+When newer activity invalidates a displayed active inference, the widget retains it dimmed with `updating…` until its replacement arrives instead of briefly removing it. The widget prefers an inferred current activity while active, or an inferred blocker/completed item after settlement; a generic phase is only a fallback. Inferred text is explicitly marked `inferred`, remains bounded to the compact two-line widget, and is omitted before observed tools, checks, and touched paths when width is constrained. Inference is advisory UI metadata: it does not alter model context, register an LLM-callable tool, control execution, or provide semantic verification evidence. Invalid, low-confidence, failed, timed-out, cancelled, and stale responses are discarded.
+
+Settled inference summaries from the current session branch can be viewed in a small, scrollable overlay above the prompt. Use `/progress steps` or `Alt+G`; the overlay reads existing session metadata and does not make another model request.
 
 ```text
+/progress steps                               Show inferred progress history
 /progress status                              Show configuration and the last error
 /progress model                               Show the configured inference model
 /progress model openai/gpt-5-nano:low         Set the inference model and thinking level

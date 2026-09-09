@@ -78,6 +78,30 @@ describe("progress state", () => {
     ]);
   });
 
+  test("marks existing inference stale until it is replaced", () => {
+    const state = new ProgressState();
+    state.beginRun();
+    state.setSemantic({
+      phase: "Implementation",
+      current: "Editing progress",
+      completed: [],
+      blocked: [],
+      confidence: 0.9,
+    });
+
+    state.markInferenceStale();
+    expect(state.snapshot().semanticStale).toBeTrue();
+
+    state.setSemantic({
+      phase: "Verification",
+      current: "Checking progress",
+      completed: [],
+      blocked: [],
+      confidence: 0.9,
+    });
+    expect(state.snapshot().semanticStale).toBeUndefined();
+  });
+
   test("keeps completed facts after settling and clears them for the next run", () => {
     const state = new ProgressState();
     state.beginRun();

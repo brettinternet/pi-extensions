@@ -29,6 +29,7 @@ function harness(completions: Array<Promise<any>> = []) {
   const pi = {
     on: (name: string, handler: Handler) => handlers.set(name, handler),
     registerCommand: () => {},
+    registerShortcut: () => {},
     registerTool: () => { registerToolCalls += 1; },
     appendEntry: (type: string, data: unknown) => entries.push({ type, data }),
   } as unknown as ExtensionAPI;

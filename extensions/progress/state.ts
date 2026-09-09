@@ -37,6 +37,7 @@ export interface ProgressSnapshot {
   checks: CheckActivity[];
   touchedPaths: string[];
   semantic?: SemanticSnapshot;
+  semanticStale?: boolean;
 }
 
 function record(value: unknown): Record<string, unknown> | undefined {
@@ -124,6 +125,7 @@ export class ProgressState {
   readonly #checks: CheckActivity[] = [];
   readonly #touchedPaths = new Map<string, true>();
   #semantic: SemanticSnapshot | undefined;
+  #semanticStale = false;
   #generation = 0;
 
   reset(): void {
@@ -133,6 +135,7 @@ export class ProgressState {
     this.#checks.length = 0;
     this.#touchedPaths.clear();
     this.#semantic = undefined;
+    this.#semanticStale = false;
     this.#generation += 1;
   }
 
@@ -143,6 +146,7 @@ export class ProgressState {
     this.#checks.length = 0;
     this.#touchedPaths.clear();
     this.#semantic = undefined;
+    this.#semanticStale = false;
     this.#generation += 1;
   }
 
@@ -158,6 +162,11 @@ export class ProgressState {
     this.#semantic = semantic
       ? { ...semantic, completed: [...semantic.completed], blocked: [...semantic.blocked] }
       : undefined;
+    this.#semanticStale = false;
+  }
+
+  markInferenceStale(): void {
+    if (this.#semantic) this.#semanticStale = true;
   }
 
   semantic(): SemanticSnapshot | undefined {
@@ -223,7 +232,10 @@ export class ProgressState {
       tools: [...this.#tools.values()],
       checks: [...this.#checks],
       touchedPaths: [...this.#touchedPaths.keys()],
-      ...(this.#semantic ? { semantic: this.semantic() } : {}),
+      ...(this.#semantic ? {
+        semantic: this.semantic(),
+        ...(this.#semanticStale ? { semanticStale: true } : {}),
+      } : {}),
     };
   }
 }

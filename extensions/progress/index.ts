@@ -6,6 +6,10 @@ import { completeArguments, completeModelArgument } from "./completions.ts";
 import { configPath, loadConfig, saveConfig, type ProgressConfig } from "./config.ts";
 import { ActivityDigest } from "./digest.ts";
 import {
+  PROGRESS_HISTORY_SHORTCUT,
+  showProgressHistory,
+} from "./history.ts";
+import {
   completeInference,
   inferenceFromCompletion,
   inferenceRequest,
@@ -134,7 +138,8 @@ export default function progressExtension(pi: ExtensionAPI): void {
   function noteActivity(ctx: ExtensionContext): void {
     cancelInference();
     state.invalidateInference();
-    state.setSemantic(undefined);
+    if (activeInferenceCount < MAX_ACTIVE_INFERENCES_PER_RUN) state.markInferenceStale();
+    else state.setSemantic(undefined);
     scheduleRender(ctx);
   }
 
@@ -424,8 +429,17 @@ export default function progressExtension(pi: ExtensionAPI): void {
     hasRecordedRuntime = false;
   });
 
+  async function openHistory(ctx: ExtensionContext): Promise<void> {
+    await showProgressHistory(ctx, INFERENCE_ENTRY);
+  }
+
+  pi.registerShortcut(PROGRESS_HISTORY_SHORTCUT, {
+    description: "Show inferred progress history",
+    handler: openHistory,
+  });
+
   pi.registerCommand("progress", {
-    description: "[status | model [provider/model[:thinking]|off]] — Show or configure progress inference",
+    description: "[steps | status | model [provider/model[:thinking]|off]] — Show progress history or configure inference",
     getArgumentCompletions: (prefix) => {
       if (/^model\s/i.test(prefix)) {
         return completeModelArgument(prefix, currentContext, [
@@ -433,6 +447,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
         ]);
       }
       return completeArguments(prefix, [
+        { value: "steps", label: "steps", description: "Show inferred progress history" },
         { value: "status", label: "status", description: "Show inference status and configuration" },
         { value: "model ", label: "model", description: "Show or select the inference model" },
       ]);
@@ -441,8 +456,12 @@ export default function progressExtension(pi: ExtensionAPI): void {
       const input = args.trim();
       const [action, ...rest] = input.split(/\s+/).filter(Boolean);
       try {
-        const config = await loadConfig();
+        if (action === "steps") {
+          await openHistory(ctx);
+          return;
+        }
 
+        const config = await loadConfig();
         if (!action || action === "status") {
           configuredModel = config.model;
           ctx.ui.notify([
@@ -475,7 +494,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
           return;
         }
 
-        throw new Error("usage: /progress [status|model <provider/model[:off|minimal|low|medium|high|xhigh|max]|off>]");
+        throw new Error("usage: /progress [steps|status|model <provider/model[:off|minimal|low|medium|high|xhigh|max]|off>]");
       } catch (error) {
         ctx.ui.notify(error instanceof Error ? error.message : String(error), "error");
       }

@@ -114,6 +114,28 @@ describe("progress rendering", () => {
     ]);
   });
 
+  test("retains stale active inference dimmed while its replacement updates", () => {
+    const lines = renderProgress({
+      runStarted: true,
+      agentActive: true,
+      tools: [],
+      checks: [],
+      touchedPaths: [],
+      semanticStale: true,
+      semantic: {
+        phase: "Implementation",
+        current: "Updating progress inference",
+        completed: [],
+        blocked: [],
+        confidence: 0.9,
+      },
+    }, theme, 100);
+
+    expect(lines).toEqual([
+      "progress · current: Updating progress inference inferred · updating… · ● thinking",
+    ]);
+  });
+
   test("renders inference in the brighter warning color", () => {
     const colorTheme = {
       fg: (color: string, text: string) => `[${color}]${text}[/${color}]`,
