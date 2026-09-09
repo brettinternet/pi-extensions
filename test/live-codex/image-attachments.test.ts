@@ -44,7 +44,7 @@ test("distinguishes dropped files from pasted text", async () => {
 test("rejects an image that cannot be decoded", async () => {
   const directory = await mkdtemp(join(tmpdir(), "pi-live-image-test-"));
   const path = join(directory, "broken.png");
-  const validImage = await readFile("docs/screenshot.png");
+  const validImage = await readFile("docs/live.png");
   await writeFile(path, validImage.subarray(0, 64));
 
   await assert.rejects(
@@ -55,11 +55,11 @@ test("rejects an image that cannot be decoded", async () => {
 
 test("loads a dropped image for Pi", async () => {
   const [attachment] = await loadDroppedImages(
-    "\x1b[200~docs/screenshot.png\x1b[201~",
+    "\x1b[200~docs/live.png\x1b[201~",
     process.cwd(),
   );
 
-  assert.equal(attachment?.name, "screenshot.png");
+  assert.equal(attachment?.name, "live.png");
   assert.equal(attachment?.content.type, "image");
   assert.match(attachment?.content.mimeType ?? "", /^image\//);
   assert.ok((attachment?.content.data.length ?? 0) > 0);
