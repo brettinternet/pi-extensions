@@ -8,6 +8,7 @@ Slash-command descriptions show each command's argument shape. Press `Tab` to co
 
 | Extension | What it does | Details |
 |---|---|---|
+| **Colima Sandbox** | Runs Pi's filesystem and shell tools in a disposable Colima container. | [`README`](extensions/colima-sandbox/README.md) |
 | **Copy Prompt** | Copies the current prompt editor text to the system clipboard with `Alt+C`. | [`README`](extensions/copy-prompt/README.md) |
 | **Live Codex** | Realtime `gpt-live-1-codex` voice mode for Pi. | [`docs`](extensions/live-codex/global-voice-broker.md) |
 | **Loop** | Runs a prompt a bounded number of times in fresh Pi sessions. | [`README`](extensions/loop/README.md) |
@@ -105,29 +106,6 @@ Model behavior:
 /title model active                      Use the active session model
 /title regenerate                        Replace the title automatically
 ```
-
-## Colima sandbox
-
-`bin/pi-sandbox` runs Pi's filesystem and shell tools in a disposable Colima container. Run it from a Git repository root:
-
-```sh
-~/dev/me/pi-extensions/bin/pi-sandbox --
-~/dev/me/pi-extensions/bin/pi-sandbox -- --model gpt-5 --thinking high
-~/dev/me/pi-extensions/bin/pi-sandbox -- --print "inspect the tests"
-```
-
-Requirements:
-
-- Docker's `colima` context
-- `~/.dotfiles/ai/pi/extensions/dcg-guard.ts`
-
-The repository is mounted read-write at `/workspace`. Host credentials and environment remain unavailable. Networking is disabled by default:
-
-```sh
-~/dev/me/pi-extensions/bin/pi-sandbox --network=unrestricted --
-```
-
-Only built-in file and shell tools are available. Linked worktrees, launches below the repository root, custom tools, MCP, subagents, and project extensions are unsupported. Docker, Colima, and the Pi host remain trusted.
 
 ## Install
 
