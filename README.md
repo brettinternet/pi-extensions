@@ -11,6 +11,7 @@ Slash-command descriptions show each command's argument shape. Press `Tab` to co
 | **Copy Prompt** | Copies the current prompt editor text to the system clipboard with `Alt+C`. | [`README`](extensions/copy-prompt/README.md) |
 | **Live Codex** | Realtime `gpt-live-1-codex` voice mode for Pi. | [`docs`](extensions/live-codex/global-voice-broker.md) |
 | **Loop** | Runs a prompt a bounded number of times in fresh Pi sessions. | [`README`](extensions/loop/README.md) |
+| **Herdr Agent State** | Reports aggregate Pi lifecycle state to Herdr and keeps the pane working while async subagents run. | [`README`](extensions/herdr-agent-state/README.md) |
 | **Herdr Workbench** | Provides visible Neovim, LazyGit, and foreground-job panes. | [`README`](extensions/workbench/README.md) |
 | **Progress** | Shows compact, passive main-agent activity below the editor. | [`README`](extensions/progress/README.md) |
 | **Title** | Generates and persists a concise session title. | Configuration below |
