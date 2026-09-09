@@ -58,6 +58,10 @@ function harness(completions: Array<Promise<any>> = []) {
   return { handlers, entries, requests, signals, get calls() { return calls; }, get registerToolCalls() { return registerToolCalls; }, ctx };
 }
 
+function inferenceEntries(run: ReturnType<typeof harness>): Array<{ type: string; data: unknown }> {
+  return run.entries.filter((entry) => entry.type === INFERENCE_ENTRY);
+}
+
 function settleMeaningful(run: ReturnType<typeof harness>, prompt = "Implement inference"): void {
   run.handlers.get("before_agent_start")!({ prompt }, run.ctx);
   run.handlers.get("message_end")!({ message: { role: "assistant", content: "Implemented changes" } }, run.ctx);
@@ -117,7 +121,7 @@ describe("progress inference lifecycle", () => {
       await Bun.sleep(300);
       expect(run.calls).toBe(1);
       await flushAsync();
-      expect(run.entries).toEqual([]);
+      expect(inferenceEntries(run)).toEqual([]);
       const request = run.requests[0] as { messages: Array<{ content: Array<{ text: string }> }> };
       expect(request.messages[0].content[0].text).toContain('"status":"active"');
     } finally {
@@ -154,7 +158,7 @@ describe("progress inference lifecycle", () => {
       resolveFirst({ content: [{ type: "text", text: JSON.stringify({ ...semantic, current: "Stale activity" }) }], stopReason: "stop" });
       resolveSecond({ content: [{ type: "text", text: JSON.stringify({ ...semantic, current: "Newest activity" }) }], stopReason: "stop" });
       await flushAsync();
-      expect(run.entries).toEqual([]);
+      expect(inferenceEntries(run)).toEqual([]);
     } finally {
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previous;
@@ -176,7 +180,7 @@ describe("progress inference lifecycle", () => {
       }
       await flushAsync();
       expect(run.calls).toBe(0);
-      expect(run.entries).toEqual([]);
+      expect(inferenceEntries(run)).toEqual([]);
     } finally {
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previous;
@@ -209,7 +213,7 @@ describe("progress inference lifecycle", () => {
       resolveFirst({ content: [{ type: "text", text: JSON.stringify({ ...semantic, phase: "Stale" }) }], stopReason: "stop" });
       resolveSecond({ content: [{ type: "text", text: JSON.stringify(semantic) }], stopReason: "stop" });
       await flushAsync();
-      expect(run.entries).toEqual([{ type: INFERENCE_ENTRY, data: semantic }]);
+      expect(inferenceEntries(run)).toEqual([{ type: INFERENCE_ENTRY, data: semantic }]);
       const request = run.requests.at(-1) as { messages: Array<{ content: Array<{ text: string }> }> };
       expect(request.messages[0].content[0].text).toContain('"status":"settled"');
     } finally {

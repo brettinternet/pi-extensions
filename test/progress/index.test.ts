@@ -10,7 +10,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import type { Component, TUI } from "@earendil-works/pi-tui";
 import { loadConfig } from "../../extensions/progress/config.ts";
-import progressExtension from "../../extensions/progress/index.ts";
+import progressExtension, { RUNTIME_ENTRY } from "../../extensions/progress/index.ts";
 
 type Handler = (
   event: Record<string, unknown>,
@@ -26,6 +26,7 @@ function setup() {
   const handlers = new Map<string, Handler>();
   let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
   const notifications: string[] = [];
+  const entries: Array<{ type: string; data: unknown }> = [];
   const widgets: Array<{
     key: string;
     content: WidgetFactory | undefined;
@@ -36,7 +37,7 @@ function setup() {
     registerCommand: (_name: string, options: Parameters<ExtensionAPI["registerCommand"]>[1]) => {
       command = options;
     },
-    appendEntry: () => {},
+    appendEntry: (type: string, data: unknown) => entries.push({ type, data }),
   } as unknown as ExtensionAPI;
   const ctx = {
     cwd: "/repo",
@@ -53,7 +54,7 @@ function setup() {
     modelRegistry: { getAvailable: () => [] },
   } as unknown as ExtensionContext;
   progressExtension(pi);
-  return { handlers, widgets, command: command!, notifications, ctx };
+  return { handlers, widgets, command: command!, notifications, entries, ctx };
 }
 
 async function flushRender(): Promise<void> {
@@ -143,6 +144,49 @@ describe("progress extension", () => {
       handlers.get("session_shutdown")!({}, ctx);
       now.mockRestore();
     }
+  });
+
+  test("accumulates active work while excluding idle and UI prompt time", async () => {
+    const now = spyOn(Date, "now").mockReturnValue(0);
+    const { handlers, widgets, entries, ctx } = setup();
+    try {
+      handlers.get("session_start")!({}, ctx);
+      handlers.get("before_agent_start")!({ prompt: "First" }, ctx);
+      now.mockReturnValue(30_000);
+      handlers.get("ui_prompt_start")!({}, ctx);
+      now.mockReturnValue(90_000);
+      handlers.get("ui_prompt_end")!({}, ctx);
+      now.mockReturnValue(120_000);
+      handlers.get("agent_settled")!({}, ctx);
+      await flushRender();
+
+      expect(latestLines(widgets)).toEqual(["progress 1m · ✓ settled"]);
+      expect(entries).toContainEqual({ type: RUNTIME_ENTRY, data: { activeMs: 60_000 } });
+
+      now.mockReturnValue(420_000);
+      expect(latestLines(widgets)).toEqual(["progress 1m · ✓ settled"]);
+
+      handlers.get("before_agent_start")!({ prompt: "Second" }, ctx);
+      now.mockReturnValue(480_000);
+      await flushRender();
+      expect(latestLines(widgets)).toEqual(["progress 2m · ● thinking"]);
+    } finally {
+      handlers.get("session_shutdown")!({}, ctx);
+      now.mockRestore();
+    }
+  });
+
+  test("restores accumulated active work from session metadata", () => {
+    const { handlers, widgets, ctx } = setup();
+    ctx.sessionManager.getBranch = () => [{
+      type: "custom",
+      customType: RUNTIME_ENTRY,
+      data: { activeMs: 90 * 60_000 },
+    }] as any;
+
+    handlers.get("session_start")!({}, ctx);
+    expect(latestLines(widgets)).toEqual(["progress 1h"]);
+    handlers.get("session_shutdown")!({}, ctx);
   });
 
   test("keeps a read-only result until the next request starts", async () => {

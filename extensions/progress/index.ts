@@ -20,6 +20,7 @@ const WIDGET_KEY = "pi-progress";
 const ACTIVE_INFERENCE_DEBOUNCE_MS = 500;
 const MAX_ACTIVE_INFERENCES_PER_RUN = 4;
 export const INFERENCE_ENTRY = "pi-progress-inference-v1";
+export const RUNTIME_ENTRY = "pi-progress-runtime-v1";
 
 type BranchEntry = {
   type?: string;
@@ -50,7 +51,9 @@ export default function progressExtension(pi: ExtensionAPI): void {
   let warned = false;
   let configuredModel: string | null = null;
   let activeInferenceCount = 0;
-  let runtimeStartedAt: number | undefined;
+  let accumulatedRuntimeMs = 0;
+  let activeRuntimeStartedAt: number | undefined;
+  let hasRecordedRuntime = false;
   let runtimeTimer: ReturnType<typeof setInterval> | undefined;
 
   function stopRuntimeTimer(): void {
@@ -59,10 +62,25 @@ export default function progressExtension(pi: ExtensionAPI): void {
   }
 
   function startRuntimeTimer(ctx: ExtensionContext): void {
-    if (runtimeStartedAt !== undefined) return;
-    runtimeStartedAt = Date.now();
+    if (activeRuntimeStartedAt !== undefined) return;
+    activeRuntimeStartedAt = Date.now();
+    hasRecordedRuntime = true;
     runtimeTimer = setInterval(() => scheduleRender(ctx), 60_000);
     runtimeTimer.unref?.();
+  }
+
+  function pauseRuntimeTimer(): void {
+    if (activeRuntimeStartedAt !== undefined) {
+      accumulatedRuntimeMs += Math.max(0, Date.now() - activeRuntimeStartedAt);
+      activeRuntimeStartedAt = undefined;
+    }
+    stopRuntimeTimer();
+  }
+
+  function currentRuntimeMs(): number {
+    return accumulatedRuntimeMs + (activeRuntimeStartedAt === undefined
+      ? 0
+      : Math.max(0, Date.now() - activeRuntimeStartedAt));
   }
 
   function render(ctx: ExtensionContext): void {
@@ -75,7 +93,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
       snapshot.checks.length > 0 ||
       snapshot.touchedPaths.length > 0 ||
       Boolean(snapshot.semantic);
-    if (!hasFacts && runtimeStartedAt === undefined) {
+    if (!hasFacts && !hasRecordedRuntime) {
       ctx.ui.setWidget(WIDGET_KEY, undefined);
       return;
     }
@@ -87,9 +105,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
           snapshot,
           theme,
           width,
-          runtimeStartedAt === undefined
-            ? undefined
-            : formatRuntime(Date.now() - runtimeStartedAt),
+          hasRecordedRuntime ? formatRuntime(currentRuntimeMs()) : undefined,
         ),
         invalidate: () => {},
       }),
@@ -129,6 +145,21 @@ export default function progressExtension(pi: ExtensionAPI): void {
     const message = `Progress inference: ${lastInferenceError}`;
     if (ctx.hasUI) ctx.ui.notify(message, "warning");
     else console.warn(`[pi-progress] ${message}`);
+  }
+
+  function restoreRuntime(ctx: ExtensionContext): void {
+    const branch = ctx.sessionManager?.getBranch?.() as BranchEntry[] | undefined;
+    if (!branch) return;
+    for (let index = branch.length - 1; index >= 0; index -= 1) {
+      const entry = branch[index];
+      if (entry.type !== "custom" || entry.customType !== RUNTIME_ENTRY) continue;
+      const activeMs = (entry.data as { activeMs?: unknown } | undefined)?.activeMs;
+      if (typeof activeMs === "number" && Number.isFinite(activeMs) && activeMs >= 0) {
+        accumulatedRuntimeMs = activeMs;
+        hasRecordedRuntime = true;
+      }
+      return;
+    }
   }
 
   function restoreSemantic(ctx: ExtensionContext): void {
@@ -251,20 +282,25 @@ export default function progressExtension(pi: ExtensionAPI): void {
 
   function resetSession(ctx?: ExtensionContext): void {
     cancelInference();
+    stopRuntimeTimer();
     state.reset();
     digest.reset();
     lastInferenceError = undefined;
     configuredModel = null;
     activeInferenceCount = 0;
-    if (ctx) restoreSemantic(ctx);
+    accumulatedRuntimeMs = 0;
+    activeRuntimeStartedAt = undefined;
+    hasRecordedRuntime = false;
+    if (ctx) {
+      restoreSemantic(ctx);
+      restoreRuntime(ctx);
+    }
   }
 
   pi.on("session_start", (_event, ctx) => {
     currentContext = ctx;
     warned = false;
     resetSession(ctx);
-    stopRuntimeTimer();
-    runtimeStartedAt = undefined;
     render(ctx);
   });
 
@@ -347,25 +383,45 @@ export default function progressExtension(pi: ExtensionAPI): void {
     noteActivity(activeContext);
   });
 
+  pi.on("ui_prompt_start", (_event, ctx) => {
+    setCurrentContext(ctx);
+    if (!state.snapshot().agentActive) return;
+    pauseRuntimeTimer();
+    scheduleRender(ctx);
+  });
+
+  pi.on("ui_prompt_end", (_event, ctx) => {
+    setCurrentContext(ctx);
+    if (!state.snapshot().agentActive) return;
+    startRuntimeTimer(ctx);
+    scheduleRender(ctx);
+  });
+
   pi.on("agent_settled", (_event, ctx) => {
     setCurrentContext(ctx);
     cancelInference();
+    const wasActive = state.snapshot().agentActive;
+    pauseRuntimeTimer();
     state.settleRun();
     state.setSemantic(undefined);
     digest.settle();
+    if (wasActive) pi.appendEntry(RUNTIME_ENTRY, { activeMs: accumulatedRuntimeMs });
     scheduleRender(ctx);
     inferSettledRun(ctx);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
     cancelInference();
-    stopRuntimeTimer();
-    runtimeStartedAt = undefined;
+    const wasActive = state.snapshot().agentActive;
+    pauseRuntimeTimer();
+    if (wasActive) pi.appendEntry(RUNTIME_ENTRY, { activeMs: accumulatedRuntimeMs });
     if (ctx.hasUI) ctx.ui.setWidget(WIDGET_KEY, undefined);
     currentContext = undefined;
     state.reset();
     digest.reset();
     activeInferenceCount = 0;
+    accumulatedRuntimeMs = 0;
+    hasRecordedRuntime = false;
   });
 
   pi.registerCommand("progress", {
