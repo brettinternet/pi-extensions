@@ -51,6 +51,12 @@ function params(request: Record<string, unknown>): Record<string, unknown> {
   return request.params as Record<string, unknown>;
 }
 
+function collectStateReports(reports: Record<string, unknown>[]) {
+  return async (request: Record<string, unknown>): Promise<void> => {
+    if (request.method === "pane.report_agent") reports.push(params(request));
+  };
+}
+
 async function start(hooks: Map<string, (event: unknown, ctx: ExtensionContext) => unknown>, ctx: ExtensionContext): Promise<void> {
   await hooks.get("session_start")!({}, ctx);
 }
@@ -58,9 +64,7 @@ async function start(hooks: Map<string, (event: unknown, ctx: ExtensionContext) 
 describe("Herdr Pi agent state integration", () => {
   test("restores busy state received before the interactive session starts", async () => {
     const reports: Record<string, unknown>[] = [];
-    const { events, hooks, ctx, bridge } = setup(async (request) => {
-      reports.push(params(request));
-    });
+    const { events, hooks, ctx, bridge } = setup(collectStateReports(reports));
 
     events.emit("herdr:busy", { active: true, label: "subagent" });
     await start(hooks, ctx);
@@ -70,11 +74,30 @@ describe("Herdr Pi agent state integration", () => {
     expect(reports[0]).toMatchObject({ state: "working", message: "subagent" });
   });
 
+  test("anchors the Pi session before reporting initial lifecycle state", async () => {
+    const requests: Record<string, unknown>[] = [];
+    const { hooks, ctx, bridge } = setup(async (request) => {
+      requests.push(request);
+    });
+
+    await hooks.get("session_start")!({ reason: "startup" }, ctx);
+    await bridge.flush();
+
+    expect(requests.map((request) => request.method)).toEqual([
+      "pane.report_agent_session",
+      "pane.report_agent",
+    ]);
+    expect(params(requests[0])).toMatchObject({
+      source: "herdr:pi",
+      agent: "pi",
+      session_start_source: "startup",
+      agent_session_path: "/tmp/pi-session.jsonl",
+    });
+  });
+
   test("keeps working after the parent settles while a sibling is busy", async () => {
     const reports: Record<string, unknown>[] = [];
-    const { events, hooks, ctx, bridge } = setup(async (request) => {
-      reports.push(params(request));
-    });
+    const { events, hooks, ctx, bridge } = setup(collectStateReports(reports));
     await start(hooks, ctx);
     reports.length = 0;
 
@@ -100,9 +123,7 @@ describe("Herdr Pi agent state integration", () => {
 
   test("gives blocked status precedence and restores the underlying state", async () => {
     const reports: Record<string, unknown>[] = [];
-    const { events, hooks, ctx, bridge } = setup(async (request) => {
-      reports.push(params(request));
-    });
+    const { events, hooks, ctx, bridge } = setup(collectStateReports(reports));
     await start(hooks, ctx);
     reports.length = 0;
 
@@ -122,9 +143,7 @@ describe("Herdr Pi agent state integration", () => {
 
   test("does nothing outside Herdr or outside the interactive TUI", async () => {
     const reports: Record<string, unknown>[] = [];
-    const headless = setup(async (request) => {
-      reports.push(params(request));
-    });
+    const headless = setup(collectStateReports(reports));
     const headlessCtx = { ...headless.ctx, mode: "json" } as ExtensionContext;
     headless.events.emit("herdr:busy", { active: true });
     await headless.hooks.get("session_start")!({}, headlessCtx);
@@ -144,6 +163,7 @@ describe("Herdr Pi agent state integration", () => {
     let releaseFirst!: () => void;
     const firstSend = new Promise<void>((resolve) => { releaseFirst = resolve; });
     const { events, hooks, ctx, bridge } = setup(async (request) => {
+      if (request.method !== "pane.report_agent") return;
       reports.push(params(request));
       if (reports.length === 1) await firstSend;
     });
@@ -157,7 +177,7 @@ describe("Herdr Pi agent state integration", () => {
     await flushed;
 
     expect(reports.map((report) => report.state)).toEqual(["idle", "working"]);
-    expect(reports[0].seq).toBe(1_000_000);
+    expect(reports[0].seq).toBe(1_000_001);
     expect(reports[1].seq).toBeGreaterThan(reports[0].seq as number);
   });
 });

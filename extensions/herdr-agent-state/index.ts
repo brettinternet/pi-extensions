@@ -156,6 +156,22 @@ export function registerHerdrAgentState(
     sessionRef = sessionReference(ctx);
   };
 
+  const reportSession = async (reason?: string): Promise<void> => {
+    if (Object.keys(sessionRef).length === 0) return;
+    await send({
+      id: `${SOURCE}:session:${Date.now()}:${Math.random().toString(36).slice(2)}`,
+      method: "pane.report_agent_session",
+      params: {
+        pane_id: paneId,
+        source: SOURCE,
+        agent: "pi",
+        seq: nextSeq(),
+        session_start_source: reason,
+        ...sessionRef,
+      },
+    });
+  };
+
   pi.events.on("herdr:busy", (value) => {
     const active = activeValue(value);
     if (active === undefined) return;
@@ -182,11 +198,12 @@ export function registerHerdrAgentState(
     publish();
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", async (event, ctx) => {
     if (ctx.mode !== "tui") return;
     rootSession = true;
     agentActive = ctx.isIdle() === false;
     updateSession(ctx);
+    await reportSession(event.reason);
     publish(true);
   });
 
