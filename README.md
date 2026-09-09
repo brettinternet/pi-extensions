@@ -1,6 +1,6 @@
 # pi-extensions
 
-Personal extensions for the [Pi coding agent](https://pi.dev).
+Personal extensions and themes for the [Pi coding agent](https://pi.dev).
 
 Slash-command descriptions show each command's argument shape. Press `Tab` to complete subcommands, common values, voices, and model references. Thinking levels complete after `:`.
 
@@ -107,9 +107,17 @@ Model behavior:
 /title regenerate                        Replace the title automatically
 ```
 
+## Themes
+
+| Theme | What it does |
+|---|---|
+| **Terminal** | Uses the terminal's ANSI palette so Pi follows the terminal color scheme. |
+
+Select `terminal` in `/settings` after installation.
+
 ## Install
 
-Install all extensions:
+Install all extensions and themes:
 
 ```sh
 pi install git:github.com/brettinternet/pi-extensions

@@ -2,7 +2,7 @@
   "name": "pi-extensions",
   "version": "0.1.0",
   "private": true,
-  "description": "Personal extensions for the Pi coding agent",
+  "description": "Personal extensions and themes for the Pi coding agent",
   "type": "module",
   "license": "MIT",
   "repository": {
@@ -46,6 +46,9 @@
       "./extensions/title/index.ts",
       "./extensions/workbench/index.ts",
       "./extensions/herdr-agent-state/index.ts"
+    ],
+    "themes": [
+      "./themes/terminal.json"
     ]
   }
 }
