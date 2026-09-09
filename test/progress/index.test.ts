@@ -25,7 +25,7 @@ const theme = {
 function setup() {
   const handlers = new Map<string, Handler>();
   let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
-  let shortcut: Parameters<ExtensionAPI["registerShortcut"]>[1] | undefined;
+  const shortcuts = new Map<string, Parameters<ExtensionAPI["registerShortcut"]>[1]>();
   const notifications: string[] = [];
   const entries: Array<{ type: string; data: unknown }> = [];
   const widgets: Array<{
@@ -38,8 +38,8 @@ function setup() {
     registerCommand: (_name: string, options: Parameters<ExtensionAPI["registerCommand"]>[1]) => {
       command = options;
     },
-    registerShortcut: (_key: string, options: Parameters<ExtensionAPI["registerShortcut"]>[1]) => {
-      shortcut = options;
+    registerShortcut: (key: string, options: Parameters<ExtensionAPI["registerShortcut"]>[1]) => {
+      shortcuts.set(key, options);
     },
     appendEntry: (type: string, data: unknown) => entries.push({ type, data }),
   } as unknown as ExtensionAPI;
@@ -58,7 +58,16 @@ function setup() {
     modelRegistry: { getAvailable: () => [] },
   } as unknown as ExtensionContext;
   progressExtension(pi);
-  return { handlers, widgets, command: command!, shortcut: shortcut!, notifications, entries, ctx };
+  return {
+    handlers,
+    widgets,
+    command: command!,
+    shortcut: shortcuts.get("alt+g")!,
+    shortcuts,
+    notifications,
+    entries,
+    ctx,
+  };
 }
 
 async function flushRender(): Promise<void> {
@@ -256,8 +265,11 @@ describe("progress extension", () => {
 
   test("completes steps, status, model, and disabling inference", () => {
     const { command } = setup();
-    expect(command.getArgumentCompletions?.("ste")).toEqual([
-      { value: "steps", label: "steps", description: "Show inferred progress history" },
+    expect(command.getArgumentCompletions?.("steps a")).toEqual([
+      { value: "steps all", label: "steps all", description: "Show the full inferred progress history" },
+    ]);
+    expect(command.getArgumentCompletions?.("steps r")).toEqual([
+      { value: "steps recent", label: "steps recent", description: "Show the latest eight history lines" },
     ]);
     expect(command.getArgumentCompletions?.("sta")).toEqual([
       { value: "status", label: "status", description: "Show inference status and configuration" },
@@ -290,8 +302,8 @@ describe("progress extension", () => {
     ]);
   });
 
-  test("toggles full-width progress history above the TUI editor", async () => {
-    const { command, widgets, ctx } = setup();
+  test("toggles recent and full-width progress history above the TUI editor", async () => {
+    const { command, shortcuts, widgets, ctx } = setup();
     (ctx as { mode?: string }).mode = "tui";
     ctx.sessionManager.getBranch = () => [{
       type: "custom",
@@ -314,7 +326,28 @@ describe("progress extension", () => {
       "alt+g or /progress steps to close",
     ]);
 
-    await command.handler("steps", ctx as unknown as ExtensionCommandContext);
+    ctx.sessionManager.getBranch = () => Array.from({ length: 9 }, (_, index) => ({
+      type: "custom",
+      customType: "pi-progress-inference-v1",
+      data: {
+        phase: `Run ${index + 1}`,
+        current: "Done",
+        completed: [],
+        blocked: [],
+        confidence: 0.9,
+      },
+    })) as any;
+    expect(latestLines(widgets)[0]).toBe(
+      "Progress history · 1 earlier lines · /progress steps all or alt+shift+g",
+    );
+
+    await command.handler("steps all", ctx as unknown as ExtensionCommandContext);
+    expect(latestLines(widgets)).toHaveLength(11);
+    expect(latestLines(widgets).at(-1)).toBe(
+      "alt+shift+g to close · /progress steps recent to collapse",
+    );
+
+    await shortcuts.get("alt+shift+g")!.handler(ctx);
     expect(widgets.at(-1)).toMatchObject({
       key: "pi-progress-history",
       content: undefined,

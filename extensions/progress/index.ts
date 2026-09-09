@@ -6,9 +6,11 @@ import { completeArguments, completeModelArgument } from "./completions.ts";
 import { configPath, loadConfig, saveConfig, type ProgressConfig } from "./config.ts";
 import { ActivityDigest } from "./digest.ts";
 import {
+  PROGRESS_HISTORY_ALL_SHORTCUT,
   PROGRESS_HISTORY_SHORTCUT,
   PROGRESS_HISTORY_WIDGET_KEY,
-  setProgressHistoryVisible,
+  setProgressHistoryMode,
+  type ProgressHistoryMode,
 } from "./history.ts";
 import {
   completeInference,
@@ -60,7 +62,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
   let activeRuntimeStartedAt: number | undefined;
   let hasRecordedRuntime = false;
   let runtimeTimer: ReturnType<typeof setInterval> | undefined;
-  let historyVisible = false;
+  let historyMode: ProgressHistoryMode = "hidden";
 
   function stopRuntimeTimer(): void {
     if (runtimeTimer !== undefined) clearInterval(runtimeTimer);
@@ -426,7 +428,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
       ctx.ui.setWidget(WIDGET_KEY, undefined);
       ctx.ui.setWidget(PROGRESS_HISTORY_WIDGET_KEY, undefined);
     }
-    historyVisible = false;
+    historyMode = "hidden";
     currentContext = undefined;
     state.reset();
     digest.reset();
@@ -435,14 +437,27 @@ export default function progressExtension(pi: ExtensionAPI): void {
     hasRecordedRuntime = false;
   });
 
-  function openHistory(ctx: ExtensionContext): void {
-    if (ctx.mode === "tui") historyVisible = !historyVisible;
-    setProgressHistoryVisible(ctx, INFERENCE_ENTRY, ctx.mode === "tui" ? historyVisible : true);
+  function setHistory(ctx: ExtensionContext, mode: ProgressHistoryMode): void {
+    if (ctx.mode === "tui") historyMode = mode;
+    setProgressHistoryMode(ctx, INFERENCE_ENTRY, ctx.mode === "tui" ? historyMode : mode);
+  }
+
+  function toggleRecentHistory(ctx: ExtensionContext): void {
+    setHistory(ctx, historyMode === "hidden" ? "recent" : "hidden");
+  }
+
+  function toggleAllHistory(ctx: ExtensionContext): void {
+    setHistory(ctx, historyMode === "all" ? "hidden" : "all");
   }
 
   pi.registerShortcut(PROGRESS_HISTORY_SHORTCUT, {
-    description: "Show inferred progress history",
-    handler: openHistory,
+    description: "Toggle recent inferred progress history",
+    handler: toggleRecentHistory,
+  });
+
+  pi.registerShortcut(PROGRESS_HISTORY_ALL_SHORTCUT, {
+    description: "Toggle full inferred progress history",
+    handler: toggleAllHistory,
   });
 
   pi.registerCommand("progress", {
@@ -454,7 +469,9 @@ export default function progressExtension(pi: ExtensionAPI): void {
         ]);
       }
       return completeArguments(prefix, [
-        { value: "steps", label: "steps", description: "Show inferred progress history" },
+        { value: "steps", label: "steps", description: "Toggle recent inferred progress history" },
+        { value: "steps recent", label: "steps recent", description: "Show the latest eight history lines" },
+        { value: "steps all", label: "steps all", description: "Show the full inferred progress history" },
         { value: "status", label: "status", description: "Show inference status and configuration" },
         { value: "model ", label: "model", description: "Show or select the inference model" },
       ]);
@@ -464,7 +481,11 @@ export default function progressExtension(pi: ExtensionAPI): void {
       const [action, ...rest] = input.split(/\s+/).filter(Boolean);
       try {
         if (action === "steps") {
-          openHistory(ctx);
+          const view = rest[0];
+          if (!view) toggleRecentHistory(ctx);
+          else if (view === "recent" && rest.length === 1) setHistory(ctx, "recent");
+          else if (view === "all" && rest.length === 1) setHistory(ctx, "all");
+          else throw new Error("usage: /progress steps [recent|all]");
           return;
         }
 

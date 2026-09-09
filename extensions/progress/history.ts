@@ -4,7 +4,9 @@ import { parseInference } from "./inference.ts";
 import type { SemanticSnapshot } from "./state.ts";
 
 export const PROGRESS_HISTORY_SHORTCUT = "alt+g" as const;
+export const PROGRESS_HISTORY_ALL_SHORTCUT = "alt+shift+g" as const;
 export const PROGRESS_HISTORY_WIDGET_KEY = "pi-progress-history";
+export type ProgressHistoryMode = "hidden" | "recent" | "all";
 const MAX_VISIBLE_HISTORY_LINES = 8;
 
 type BranchEntry = {
@@ -55,10 +57,11 @@ function historyText(lines: readonly ProgressHistoryLine[]): string {
 
 function renderHistory(
   lines: readonly ProgressHistoryLine[],
+  mode: Exclude<ProgressHistoryMode, "hidden">,
   theme: Theme,
   width: number,
 ): string[] {
-  const visible = lines.slice(-MAX_VISIBLE_HISTORY_LINES);
+  const visible = mode === "all" ? lines : lines.slice(-MAX_VISIBLE_HISTORY_LINES);
   const hidden = lines.length - visible.length;
   const body = visible.length > 0
     ? visible.map((line) => {
@@ -68,29 +71,32 @@ function renderHistory(
     })
     : [theme.fg("muted", "No inferred progress history in this branch.")];
   const heading = hidden > 0
-    ? `Progress history · ${hidden} earlier lines hidden`
+    ? `Progress history · ${hidden} earlier lines · /progress steps all or ${PROGRESS_HISTORY_ALL_SHORTCUT}`
     : "Progress history";
+  const closeHint = mode === "all"
+    ? `${PROGRESS_HISTORY_ALL_SHORTCUT} to close · /progress steps recent to collapse`
+    : `${PROGRESS_HISTORY_SHORTCUT} or /progress steps to close`;
   return [
     theme.fg("accent", heading),
     ...body,
-    theme.fg("dim", `${PROGRESS_HISTORY_SHORTCUT} or /progress steps to close`),
+    theme.fg("dim", closeHint),
   ].map((line) => truncateToWidth(line, width));
 }
 
-export function setProgressHistoryVisible(
+export function setProgressHistoryMode(
   ctx: Pick<ExtensionContext, "mode" | "sessionManager" | "ui">,
   inferenceEntryType: string,
-  visible: boolean,
+  mode: ProgressHistoryMode,
 ): void {
   if (ctx.mode !== "tui") {
-    if (visible) {
+    if (mode !== "hidden") {
       const branch = (ctx.sessionManager.getBranch?.() ?? []) as BranchEntry[];
       ctx.ui.notify(historyText(progressHistoryLines(progressHistory(branch, inferenceEntryType))), "info");
     }
     return;
   }
 
-  if (!visible) {
+  if (mode === "hidden") {
     ctx.ui.setWidget(PROGRESS_HISTORY_WIDGET_KEY, undefined);
     return;
   }
@@ -102,6 +108,7 @@ export function setProgressHistoryVisible(
         const branch = (ctx.sessionManager.getBranch?.() ?? []) as BranchEntry[];
         return renderHistory(
           progressHistoryLines(progressHistory(branch, inferenceEntryType)),
+          mode,
           theme,
           width,
         );
