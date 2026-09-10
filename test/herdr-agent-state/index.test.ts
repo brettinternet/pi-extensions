@@ -141,6 +141,34 @@ describe("Herdr Pi agent state integration", () => {
     expect(reports.at(-1)).toMatchObject({ state: "idle" });
   });
 
+  test("reports blocking UI prompts and restores active work", async () => {
+    const reports: Record<string, unknown>[] = [];
+    const { hooks, ctx, bridge } = setup(collectStateReports(reports));
+    await start(hooks, ctx);
+    reports.length = 0;
+
+    hooks.get("agent_start")!({}, ctx);
+    hooks.get("ui_prompt_start")!({ title: "Local stack" }, ctx);
+    await bridge.flush();
+    expect(reports.at(-1)).toMatchObject({ state: "blocked", message: "Local stack" });
+
+    hooks.get("ui_prompt_end")!({}, ctx);
+    await bridge.flush();
+    expect(reports.at(-1)).toMatchObject({ state: "working", message: undefined });
+  });
+
+  test("uses a fallback label for untitled UI prompts", async () => {
+    const reports: Record<string, unknown>[] = [];
+    const { hooks, ctx, bridge } = setup(collectStateReports(reports));
+    await start(hooks, ctx);
+    reports.length = 0;
+
+    hooks.get("ui_prompt_start")!({ kind: "custom" }, ctx);
+    await bridge.flush();
+
+    expect(reports.at(-1)).toMatchObject({ state: "blocked", message: "Waiting for user" });
+  });
+
   test("keeps working when a subagent needs attention", async () => {
     const reports: Record<string, unknown>[] = [];
     const { events, hooks, ctx, bridge } = setup(collectStateReports(reports));

@@ -189,18 +189,32 @@ export function registerHerdrAgentState(
     publish();
   });
 
-  pi.events.on("herdr:blocked", (value) => {
-    if (!isRootBlockedEvent(value)) return;
-    const active = activeValue(value);
-    if (active === undefined) return;
+  const updateBlocked = (active: boolean, label?: string): void => {
     if (active) {
       blockedCount += 1;
-      blockedLabel = labelValue(value) ?? blockedLabel;
+      blockedLabel = label ?? blockedLabel;
     } else {
       blockedCount = Math.max(0, blockedCount - 1);
       if (blockedCount === 0) blockedLabel = undefined;
     }
     publish();
+  };
+
+  pi.events.on("herdr:blocked", (value) => {
+    if (!isRootBlockedEvent(value)) return;
+    const active = activeValue(value);
+    if (active === undefined) return;
+    updateBlocked(active, labelValue(value));
+  });
+
+  pi.on("ui_prompt_start", (event, ctx) => {
+    updateSession(ctx);
+    updateBlocked(true, event.title?.trim() || "Waiting for user");
+  });
+
+  pi.on("ui_prompt_end", (_event, ctx) => {
+    updateSession(ctx);
+    updateBlocked(false);
   });
 
   pi.on("session_start", async (event, ctx) => {
