@@ -12,8 +12,8 @@ herdr integration uninstall pi
 
 ## State precedence
 
-1. **blocked** — the parent is waiting in a Pi UI prompt or an extension-reported root confirmation
-2. **working** — parent or any subagent is working; subagent attention stays working with a warning label
+1. **blocked** — the parent is waiting in a built-in input prompt, an `ask_user_question` questionnaire, or an extension-reported root confirmation
+2. **working** — parent or any subagent is working; subagent attention and generic custom UI such as live inspectors stay working with a warning label
 3. **idle** — everything else
 
 Session identity and restore are preserved by reporting under `herdr:pi` before lifecycle state.

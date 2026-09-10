@@ -207,12 +207,21 @@ export function registerHerdrAgentState(
     updateBlocked(active, labelValue(value));
   });
 
+  pi.events.on("rpiv:ask-user:blocked", (value) => {
+    const active = activeValue(value);
+    if (active === undefined) return;
+    updateBlocked(active, active ? "Waiting for user" : undefined);
+  });
+
   pi.on("ui_prompt_start", (event, ctx) => {
+    // `custom` is also used for live inspectors that do not wait for user input.
+    if (event.kind === "custom") return;
     updateSession(ctx);
     updateBlocked(true, event.title?.trim() || "Waiting for user");
   });
 
-  pi.on("ui_prompt_end", (_event, ctx) => {
+  pi.on("ui_prompt_end", (event, ctx) => {
+    if (event.kind === "custom") return;
     updateSession(ctx);
     updateBlocked(false);
   });
