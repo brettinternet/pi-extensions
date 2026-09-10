@@ -450,6 +450,7 @@ describe("loop lifecycle", () => {
     const harness = createHarness();
     await harness.command.handler("3 retry this", harness.context);
     harness.agentEnd("error");
+    await harness.settle();
     expect(harness.state()).toMatchObject({ status: "paused", currentIteration: 1, remainingBudget: 2 });
 
     const pausedSession = harness.current.getSessionId();
@@ -464,6 +465,7 @@ describe("loop lifecycle", () => {
     const harness = createHarness();
     await harness.command.handler("1 finish this", harness.context);
     harness.agentEnd("error");
+    await harness.settle();
     const pausedSession = harness.current.getSessionId();
 
     await harness.command.handler("next", commandContext(harness));
@@ -489,6 +491,7 @@ describe("loop lifecycle", () => {
     const harness = createHarness();
     await harness.command.handler("2 retry this", harness.context);
     harness.agentEnd("error");
+    await harness.settle();
 
     await harness.command.handler("prompt use the new approach", commandContext(harness));
     expect(harness.state()).toMatchObject({
@@ -541,6 +544,7 @@ describe("loop lifecycle", () => {
     await harness.settle();
 
     harness.agentEnd("aborted");
+    await harness.settle();
     expect(harness.state()).toMatchObject({ status: "paused", currentIteration: 2, remainingBudget: 0 });
   });
 
@@ -593,6 +597,7 @@ describe("loop lifecycle", () => {
     const paused = createHarness();
     await paused.command.handler("2 work", paused.context);
     paused.agentEnd("error");
+    await paused.settle();
     expect(paused.state()?.status).toBe("paused");
     await paused.command.handler("stop", commandContext(paused));
     expect(paused.state()?.status).toBe("stopped");
@@ -618,10 +623,28 @@ describe("loop lifecycle", () => {
     expect(retuned.state()).toMatchObject({ status: "active", currentIteration: 2, remainingBudget: 2 });
   });
 
+  test("does not pause failures recovered before the agent settles", async () => {
+    for (const stopReason of ["error", "aborted"] as const) {
+      const harness = createHarness();
+      await harness.command.handler("2 retry this", harness.context);
+
+      harness.agentEnd(stopReason);
+      expect(harness.state()).toMatchObject({ status: "active", currentIteration: 1 });
+
+      harness.messageEnd("stop");
+      harness.agentEnd("stop");
+      await harness.settle();
+
+      expect(harness.prompts).toEqual(["retry this", "retry this"]);
+      expect(harness.state()).toMatchObject({ status: "active", currentIteration: 2, remainingBudget: 0 });
+    }
+  });
+
   test("pauses on terminal errors and resume continues in the current session", async () => {
     const harness = createHarness();
     await harness.command.handler("2 retry this", harness.context);
     harness.agentEnd("aborted");
+    await harness.settle();
     expect(harness.state()).toMatchObject({ status: "paused", currentIteration: 1, remainingBudget: 1 });
     await harness.settle();
     expect(harness.prompts).toHaveLength(1);

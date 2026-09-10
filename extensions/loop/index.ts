@@ -423,6 +423,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   let continuationWait: ContinuationWait | undefined;
   let activeCommandKey: string | undefined;
   let commandInterruptedKey: string | undefined;
+  let pendingFailureKey: string | undefined;
   let currentSessionManagerRef: unknown;
 
   function stateFrom(ctx: ContextWithSession): LoopState | undefined {
@@ -555,21 +556,22 @@ export default function loopExtension(pi: ExtensionAPI): void {
     }
   }
 
-  function handleFailedAssistant(ctx: ExtensionContext, stopReason: string | undefined): void {
-    if (stopReason !== "aborted" && stopReason !== "error") return;
+  function recordAssistantOutcome(ctx: ExtensionContext, stopReason: string | undefined): void {
     const loaded = currentState(ctx);
     if (!loaded || !statusIsActive(loaded) || transitionInFlight) return;
     const key = stateKey(ctx, loaded);
-    if (stopReason === "aborted" && activeCommandKey === key) {
-      clearContinuationWait();
-      commandInterruptedKey = key;
+    if (stopReason !== "aborted" && stopReason !== "error") {
+      if (pendingFailureKey === key) pendingFailureKey = undefined;
       return;
     }
     clearContinuationWait();
+    if (stopReason === "aborted" && activeCommandKey === key) {
+      pendingFailureKey = undefined;
+      commandInterruptedKey = key;
+      return;
+    }
     clearCommandInterruption();
-    const paused = { ...loaded, status: "paused" as const };
-    persist(pi, paused);
-    renderWidget(ctx, paused);
+    pendingFailureKey = key;
   }
 
   function transferState(state: LoopState, manager: SessionManager): LoopState {
@@ -929,6 +931,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   pi.on("session_start", (event, ctx) => {
     clearContinuationWait();
     clearCommandInterruption();
+    pendingFailureKey = undefined;
     currentSessionManagerRef = ctx.sessionManager;
     transitionInFlight = false;
     handledSettlementKey = undefined;
@@ -957,14 +960,14 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   pi.on("message_end", (event, ctx) => {
     if (event.message.role !== "assistant") return;
-    handleFailedAssistant(ctx, (event.message as { stopReason?: string }).stopReason);
+    recordAssistantOutcome(ctx, (event.message as { stopReason?: string }).stopReason);
   });
 
   pi.on("agent_end", (event, ctx) => {
     const assistant = [...event.messages]
       .reverse()
       .find((message) => message.role === "assistant") as { stopReason?: string } | undefined;
-    handleFailedAssistant(ctx, assistant?.stopReason);
+    recordAssistantOutcome(ctx, assistant?.stopReason);
   });
 
   pi.on("agent_settled", (_event, ctx) => {
@@ -973,11 +976,19 @@ export default function loopExtension(pi: ExtensionAPI): void {
     const key = stateKey(ctx, loaded);
     if (commandInterruptedKey === key && loaded.status === "active") {
       clearCommandInterruption();
+      pendingFailureKey = undefined;
       handledSettlementKey = undefined;
       continueCurrentIteration(ctx, loaded);
       return;
     }
     clearCommandInterruption();
+    if (pendingFailureKey === key) {
+      pendingFailureKey = undefined;
+      const paused = { ...loaded, status: "paused" as const };
+      persist(pi, paused);
+      renderWidget(ctx, paused);
+      return;
+    }
     if (handledSettlementKey === key) return;
     handledSettlementKey = key;
     scheduleContinuation(ctx, loaded);
@@ -986,6 +997,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   pi.on("session_tree", (_event, ctx) => {
     clearContinuationWait();
     clearCommandInterruption();
+    pendingFailureKey = undefined;
     currentSessionManagerRef = ctx.sessionManager;
     handledSettlementKey = undefined;
     const loaded = latestStateFromContext(ctx);
@@ -998,6 +1010,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   pi.on("session_shutdown", (_event, ctx) => {
     clearContinuationWait();
     clearCommandInterruption();
+    pendingFailureKey = undefined;
     const loaded = currentState(ctx);
     if (loaded && statusIsActive(loaded) && !transitionInFlight) {
       try {
