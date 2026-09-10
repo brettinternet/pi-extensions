@@ -420,6 +420,21 @@ describe("automatic title generation", () => {
 });
 
 describe("title completion output", () => {
+  test("reports the provider error from a failed completion", () => {
+    expect(() =>
+      titleFromCompletion(
+        {
+          content: [],
+          stopReason: "error",
+          errorMessage: "deepseek/deepseek-v4.1-flash is temporarily rate-limited upstream",
+        },
+        DEFAULT_CONFIG.maxLength,
+      ),
+    ).toThrow(
+      "title model failed: deepseek/deepseek-v4.1-flash is temporarily rate-limited upstream",
+    );
+  });
+
   test("reports a thinking-only completion instead of claiming the exchange is missing", () => {
     expect(() =>
       titleFromCompletion(

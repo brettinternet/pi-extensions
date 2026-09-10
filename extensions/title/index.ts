@@ -210,9 +210,17 @@ function completionText(content: Array<{ type: string; text?: string }>): string
 }
 
 export function titleFromCompletion(
-  response: { content: Array<{ type: string; text?: string }>; stopReason: string },
+  response: {
+    content: Array<{ type: string; text?: string }>;
+    stopReason: string;
+    errorMessage?: string;
+  },
   maxLength: number,
 ): string {
+  if (response.stopReason === "error" && response.errorMessage) {
+    throw new Error(`title model failed: ${response.errorMessage}`);
+  }
+
   const title = cleanTitle(completionText(response.content), maxLength);
   if (!title) throw new Error(`title model returned no usable text (stop reason: ${response.stopReason})`);
   return title;
