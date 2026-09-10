@@ -51,8 +51,8 @@ Each iteration gets a fresh Pi session. Filesystem changes carry forward; conver
 /loop prompt <text>       Replace the future prompt
 /loop append <text>       Append to the future prompt
 /loop status             Inspect
-/loop                    Request graceful stop
-/loop stop               Request graceful stop
+/loop                    Request graceful end
+/loop end                Request graceful end
 /loop resume             Retry a paused iteration in place
 /loop next               Skip a paused iteration and start the next one
 ```

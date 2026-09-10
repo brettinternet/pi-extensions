@@ -13,15 +13,15 @@
 /loop prompt <text>                          Replace the prompt for future iterations
 /loop append <text>                          Append instructions to the prompt for future iterations
 /loop status                                 Show run, iteration, budget, pending retune, and delay
-/loop                                         Gracefully stop after the active iteration
-/loop stop                                   Gracefully stop, or stop a paused loop immediately
-/loop resume                                 Retry a paused iteration in the same session, or cancel a pending stop
+/loop                                         Gracefully end after the active iteration
+/loop end                                    Gracefully end, or end a paused loop immediately
+/loop resume                                 Retry a paused iteration in the same session, or cancel a pending end
 /loop next                                   Complete a paused iteration and start the next one in a fresh session
 ```
 
-Durations use a number followed by `ms`, `s`, `m`, or `h` (for example `1000ms`, `2s`, or `1m`). Delays must be at least `1s` and no more than `24h`; use `/loop delay off` to remove the delay from a running loop. The delay starts after a settled iteration and never delays the first iteration. While a delay is pending, stop cancels it immediately; prompt, budget, and delay updates are applied to the next iteration safely.
+Durations use a number followed by `ms`, `s`, `m`, or `h` (for example `1000ms`, `2s`, or `1m`). Delays must be at least `1s` and no more than `24h`; use `/loop delay off` to remove the delay from a running loop. The delay starts after a settled iteration and never delays the first iteration. While a delay is pending, ending the loop cancels it immediately; prompt, budget, and delay updates are applied to the next iteration safely.
 
-A retune changes only the next boundary's future budget; it never changes the prompt. Retuning or resuming while a graceful stop is pending cancels the stop and reuses the loop's prompt. A subtraction may reduce that budget to zero, ending the loop after the active iteration. Invalid or ambiguous forms are rejected instead of guessing.
+A retune changes only the next boundary's future budget; it never changes the prompt. Retuning or resuming while a graceful end is pending cancels it and reuses the loop's prompt. A subtraction may reduce that budget to zero, ending the loop after the active iteration. Invalid or ambiguous forms are rejected instead of guessing.
 
 Prompt updates never affect the active iteration or change its budget. `prompt` replaces the complete prompt, including prior appended instructions. `append` adds a blank line and the supplied text. Updates persist across all not-yet-started iterations and may also be made while paused for the retried iteration. Updating a stopping loop preserves the pending stop. Ordinary messages still belong only to the current session; use these commands to configure future fresh sessions.
 

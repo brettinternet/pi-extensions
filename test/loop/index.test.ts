@@ -210,7 +210,9 @@ describe("loop parser and state", () => {
     });
     expect(parseLoopCommand("status")).toEqual({ kind: "status" });
     expect(parseLoopCommand("next")).toEqual({ kind: "next" });
-    expect(parseLoopCommand("")).toEqual({ kind: "stop" });
+    expect(parseLoopCommand("end")).toEqual({ kind: "end" });
+    expect(parseLoopCommand("")).toEqual({ kind: "end" });
+    expect(() => parseLoopCommand("stop")).toThrow("expected a positive count or a loop command");
     expect(() => parseLoopCommand("0 prompt")).toThrow("positive integer");
     expect(() => parseLoopCommand("+0")).toThrow("positive integer");
     expect(() => parseLoopCommand("-2 prompt")).toThrow("adjustment");
@@ -230,8 +232,10 @@ describe("loop parser and state", () => {
     const { command } = createHarness();
     expect(command.getArgumentCompletions?.("st")).toEqual([
       { value: "status", label: "status", description: "Show the current loop state" },
-      { value: "stop", label: "stop", description: "Stop gracefully" },
     ]);
+    expect(command.getArgumentCompletions?.("")).toContainEqual(
+      { value: "end", label: "end", description: "End the loop gracefully" },
+    );
     expect(command.getArgumentCompletions?.("3")).toEqual([
       { value: "3 ", label: "3 <prompt>", description: "Run a prompt three times" },
     ]);
@@ -383,14 +387,14 @@ describe("loop lifecycle", () => {
     const waiting = createHarness();
     await waiting.command.handler("2 --delay 1s work", waiting.context);
     await waiting.settle();
-    await waiting.command.handler("stop", commandContext(waiting));
+    await waiting.command.handler("end", commandContext(waiting));
     expect(waiting.state()?.status).toBe("stopped");
     await new Promise((resolve) => setTimeout(resolve, 1_050));
     expect(waiting.prompts).toHaveLength(1);
 
     const stopping = createHarness();
     await stopping.command.handler("2 --delay 1s work", stopping.context);
-    await stopping.command.handler("stop", commandContext(stopping));
+    await stopping.command.handler("end", commandContext(stopping));
     await stopping.command.handler("delay 2s", commandContext(stopping));
     expect(stopping.state()).toMatchObject({ status: "stopping", delay: 2_000 });
     await stopping.settle();
@@ -551,7 +555,7 @@ describe("loop lifecycle", () => {
   test("prompt updates preserve stopping state and reject terminal runs", async () => {
     const harness = createHarness();
     await harness.command.handler("2 work", harness.context);
-    await harness.command.handler("stop", commandContext(harness));
+    await harness.command.handler("end", commandContext(harness));
     await harness.command.handler("append if resumed, focus on tests", commandContext(harness));
 
     expect(harness.state()).toMatchObject({
@@ -588,7 +592,7 @@ describe("loop lifecycle", () => {
   test("stops gracefully and stops paused runs immediately", async () => {
     const harness = createHarness();
     await harness.command.handler("2 work", harness.context);
-    await harness.command.handler("stop", commandContext(harness));
+    await harness.command.handler("end", commandContext(harness));
     expect(harness.state()?.status).toBe("stopping");
     expect(latestWidgetLines(harness)).toEqual(["loop stopping · work"]);
     await harness.settle();
@@ -599,14 +603,14 @@ describe("loop lifecycle", () => {
     paused.agentEnd("error");
     await paused.settle();
     expect(paused.state()?.status).toBe("paused");
-    await paused.command.handler("stop", commandContext(paused));
+    await paused.command.handler("end", commandContext(paused));
     expect(paused.state()?.status).toBe("stopped");
   });
 
   test("can resume or retune while a graceful stop is pending", async () => {
     const resumed = createHarness();
     await resumed.command.handler("2 work", resumed.context);
-    await resumed.command.handler("stop", commandContext(resumed));
+    await resumed.command.handler("end", commandContext(resumed));
     await resumed.command.handler("resume", commandContext(resumed));
     expect(resumed.state()).toMatchObject({ status: "active", pendingRetune: null });
     expect(resumed.prompts).toHaveLength(1);
@@ -615,7 +619,7 @@ describe("loop lifecycle", () => {
 
     const retuned = createHarness();
     await retuned.command.handler("2 work", retuned.context);
-    await retuned.command.handler("stop", commandContext(retuned));
+    await retuned.command.handler("end", commandContext(retuned));
     await retuned.command.handler("3", commandContext(retuned));
     expect(retuned.state()).toMatchObject({ status: "active", pendingRetune: 3 });
     expect(latestWidgetLines(retuned)).toEqual(["loop active 4/4 · work"]);
