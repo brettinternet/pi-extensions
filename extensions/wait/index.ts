@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 
 export const WAIT_WIDGET_KEY = "pi-wait";
 export const WAIT_USAGE = "usage: /wait <duration> <prompt> | /wait status | /wait cancel";
@@ -244,6 +245,33 @@ export default function waitExtension(pi: ExtensionAPI): void {
       notify(ctx, error instanceof Error ? error.message : String(error), "error");
     }
   }
+
+  pi.registerTool({
+    name: "wait_then_continue",
+    label: "Wait Then Continue",
+    description: "Schedule a prompt after a delay and end the current turn. Use for standalone, same-session polling; do not use during an active /loop, which replaces the session after the agent settles.",
+    executionMode: "sequential",
+    parameters: Type.Object({
+      duration: Type.String({
+        description: "Delay such as 30s, 5m, 1h, or 1d",
+      }),
+      prompt: Type.String({
+        minLength: 1,
+        description: "Prompt to send when the delay expires",
+      }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const delay = parseWaitDuration(params.duration);
+      const prompt = params.prompt.trim();
+      if (!prompt) throw new Error("a continuation prompt is required");
+      schedule(ctx, delay, prompt, true);
+      return {
+        content: [{ type: "text", text: `Continuation scheduled in ${formatRemaining(delay)}.` }],
+        details: { duration: params.duration, delay, prompt },
+        terminate: true,
+      };
+    },
+  });
 
   pi.on("session_start", (_event, ctx) => {
     sessionContext = ctx;

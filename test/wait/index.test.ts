@@ -12,6 +12,7 @@ import waitExtension, {
 
 function createHarness() {
   const handlers = new Map<string, (...args: any[]) => any>();
+  const tools = new Map<string, any>();
   let autocomplete: AutocompleteProvider | undefined;
   const notifications: string[] = [];
   const widgets: Array<{ key: string; value: unknown }> = [];
@@ -42,6 +43,7 @@ function createHarness() {
 
   const pi = {
     on: (name: string, handler: (...args: any[]) => any) => handlers.set(name, handler),
+    registerTool: (tool: any) => tools.set(tool.name, tool),
     sendUserMessage: (
       content: string,
       options?: {
@@ -60,6 +62,7 @@ function createHarness() {
     get autocomplete() { return autocomplete!; },
     context,
     handlers,
+    tools,
     notifications,
     widgets,
     messages,
@@ -180,6 +183,56 @@ describe("wait lifecycle", () => {
       content: "inspect after settling",
       options: { expandPromptTemplates: true },
     }]);
+  });
+
+  test("lets an agent defer same-session continuation and terminates its turn", async () => {
+    const harness = createHarness();
+    const tool = harness.tools.get("wait_then_continue");
+
+    const result = await tool.execute(
+      "call-1",
+      { duration: "10ms", prompt: "  check for review feedback  " },
+      new AbortController().signal,
+      () => {},
+      harness.context,
+    );
+
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Continuation scheduled in 1s." }],
+      details: { duration: "10ms", delay: 10, prompt: "check for review feedback" },
+      terminate: true,
+    });
+    expect(latestWidgetLines(harness)?.[0]).toContain("wait queued");
+    await sleep(15);
+    expect(harness.messages).toEqual([]);
+
+    harness.settle();
+    await sleep(15);
+    expect(harness.messages).toEqual([{
+      content: "check for review feedback",
+      options: { expandPromptTemplates: true },
+    }]);
+  });
+
+  test("rejects invalid agent wait arguments", async () => {
+    const harness = createHarness();
+    const tool = harness.tools.get("wait_then_continue");
+
+    expect(tool.description).toContain("do not use during an active /loop");
+    await expect(tool.execute(
+      "call-1",
+      { duration: "forever", prompt: "continue" },
+      new AbortController().signal,
+      () => {},
+      harness.context,
+    )).rejects.toThrow("duration");
+    await expect(tool.execute(
+      "call-2",
+      { duration: "1m", prompt: "   " },
+      new AbortController().signal,
+      () => {},
+      harness.context,
+    )).rejects.toThrow("continuation prompt");
   });
 
   test("dispatches a queued slash command with skill arguments", async () => {
