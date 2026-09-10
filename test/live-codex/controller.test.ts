@@ -186,6 +186,12 @@ function delegation(id: string, text: string): LiveServerEvent {
 function createHarness(
   connectPromise?: Promise<void> | Promise<void>[],
   now: () => number = Date.now,
+  microphone?: {
+    create(onAudio: (error: Error | null, samples: Float32Array) => void): {
+      stop(): void;
+    };
+    stallTimeoutMs: number;
+  },
 ): Harness {
   const bus = new EventBus();
   const phases: string[] = [];
@@ -239,7 +245,8 @@ function createHarness(
       );
       return transport;
     },
-    createAudioCapture: () => ({ stop: () => {} }),
+    createAudioCapture: microphone?.create ?? (() => ({ stop: () => {} })),
+    microphoneStallTimeoutMs: microphone?.stallTimeoutMs,
     now,
   });
   return {
@@ -555,6 +562,102 @@ test("parking blocks pending confirmations but preserves queued and active work"
 
   harness.session.handleConfirmationRequested(confirmationRequest("handoff-confirmation"));
   assert.match(harness.session.handoffBlockers().join(" "), /pending voice-routed confirmations/);
+  await harness.session.stop();
+});
+
+test("restarts microphone capture when audio callbacks stall", async () => {
+  const callbacks: Array<(error: Error | null, samples: Float32Array) => void> = [];
+  let stops = 0;
+  const harness = createHarness(undefined, Date.now, {
+    create: (onAudio) => {
+      callbacks.push(onAudio);
+      return { stop: () => stops++ };
+    },
+    stallTimeoutMs: 20,
+  });
+  await harness.session.start();
+
+  await new Promise((resolve) => setTimeout(resolve, 35));
+
+  assert.equal(callbacks.length, 2);
+  assert.equal(stops, 1);
+  callbacks[1]!(null, new Float32Array([0.1]));
+  await harness.session.stop();
+});
+
+test("fails clearly when restarted microphone capture also stalls", async () => {
+  const harness = createHarness(undefined, Date.now, {
+    create: () => ({ stop: () => {} }),
+    stallTimeoutMs: 20,
+  });
+  await harness.session.start();
+
+  await new Promise((resolve) => setTimeout(resolve, 60));
+
+  assert.match(
+    harness.terminal[0]?.message ?? "",
+    /Microphone capture stopped responding.*Restart Pi/,
+  );
+  await harness.session.stop();
+});
+
+test("a replacement frame does not permit an unbounded restart loop", async () => {
+  const callbacks: Array<(error: Error | null, samples: Float32Array) => void> = [];
+  const harness = createHarness(undefined, Date.now, {
+    create: (onAudio) => {
+      callbacks.push(onAudio);
+      return { stop: () => {} };
+    },
+    stallTimeoutMs: 20,
+  });
+  await harness.session.start();
+  await new Promise((resolve) => setTimeout(resolve, 35));
+  callbacks[1]!(null, new Float32Array([0.1]));
+
+  await new Promise((resolve) => setTimeout(resolve, 35));
+
+  assert.equal(callbacks.length, 2);
+  assert.match(harness.terminal[0]?.message ?? "", /Restart Pi/);
+  await harness.session.stop();
+});
+
+test("capture startup time is excluded from the stall window", async () => {
+  const callbacks: Array<(error: Error | null, samples: Float32Array) => void> = [];
+  const harness = createHarness(undefined, Date.now, {
+    create: (onAudio) => {
+      const deadline = Date.now() + 30;
+      while (Date.now() < deadline) {}
+      callbacks.push(onAudio);
+      return { stop: () => {} };
+    },
+    stallTimeoutMs: 20,
+  });
+  await harness.session.start();
+  await new Promise((resolve) => setTimeout(resolve, 12));
+
+  assert.equal(callbacks.length, 1);
+  callbacks[0]!(null, new Float32Array([0.1]));
+  await harness.session.stop();
+});
+
+test("a synchronous capture error does not retain the returned recorder", async () => {
+  let captures = 0;
+  let stops = 0;
+  const harness = createHarness(undefined, Date.now, {
+    create: (onAudio) => {
+      captures++;
+      onAudio(new Error("capture failed"), new Float32Array());
+      return { stop: () => stops++ };
+    },
+    stallTimeoutMs: 20,
+  });
+  await harness.session.start();
+  await flush();
+  await new Promise((resolve) => setTimeout(resolve, 25));
+
+  assert.equal(captures, 1);
+  assert.equal(stops, 1);
+  assert.equal(harness.terminal[0]?.message, "capture failed");
   await harness.session.stop();
 });
 

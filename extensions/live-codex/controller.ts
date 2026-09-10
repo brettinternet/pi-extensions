@@ -79,6 +79,7 @@ Treat delegation context as your own internal progress and results. Never mentio
 const CONFIRMATION_CORRECTIVE_COMMENTARY =
   "A confirmation is still pending. The user's last answer was not accepted or executed. Ask the exact question again and tell the user to say only the single word approve or deny. Never resend their answer as ordinary work.";
 const INPUT_CONTINUATION_GRACE_MS = 1_500;
+const DEFAULT_MICROPHONE_STALL_TIMEOUT_MS = 5_000;
 const RESUME_TRANSCRIPT_UTTERANCES = 8;
 const MAX_RESUME_CONTEXT_CHARS = 12_000;
 
@@ -115,6 +116,7 @@ export interface LiveSessionOptions {
   createAudioCapture?: (
     onAudio: (error: Error | null, samples: Float32Array) => void,
   ) => LiveAudioCapture;
+  microphoneStallTimeoutMs?: number;
   now?: () => number;
 }
 
@@ -228,11 +230,15 @@ export class LiveSession {
   readonly #voice: string;
   readonly #createTransport: (options: LiveTransportOptions) => LiveTransport;
   readonly #createAudioCapture: NonNullable<LiveSessionOptions["createAudioCapture"]>;
+  readonly #microphoneStallTimeoutMs: number;
   readonly #now: () => number;
   #transport: LiveTransport | undefined;
   #transportConnected = false;
   #pendingSends: LiveClientMessage[] = [];
   #recorder: LiveAudioCapture | undefined;
+  #microphoneWatchdog: NodeJS.Timeout | undefined;
+  #lastMicrophoneFrameAt = 0;
+  #microphoneRecoveryAttempted = false;
   #sendTail: Promise<void> = Promise.resolve();
   #actionTail: Promise<void> = Promise.resolve();
   #stopPromise: Promise<void> | undefined;
@@ -282,6 +288,8 @@ export class LiveSession {
       ((transportOptions) => new CodexLiveTransport(transportOptions));
     this.#createAudioCapture = options.createAudioCapture ??
       ((onAudio) => new AudioCapture(16_000, onAudio));
+    this.#microphoneStallTimeoutMs = options.microphoneStallTimeoutMs ??
+      DEFAULT_MICROPHONE_STALL_TIMEOUT_MS;
     this.#now = options.now ?? Date.now;
     this.#outputActivity = new OutputActivityLatch((active) => {
       this.#outputActive = active;
@@ -314,11 +322,7 @@ export class LiveSession {
     this.#stopSnapshotDiscovery?.();
     this.#stopSnapshotDiscovery = undefined;
 
-    const recorder = this.#recorder;
-    this.#recorder = undefined;
-    try {
-      recorder?.stop();
-    } catch {}
+    this.#stopMicrophoneCapture();
 
     try {
       await this.#attachmentLoadTail;
@@ -404,13 +408,8 @@ export class LiveSession {
     const pendingSends = this.#pendingSends;
     this.#pendingSends = [];
     for (const message of pendingSends) this.#enqueueConnectedSend(message);
-    this.#recorder = this.#createAudioCapture((error, samples) => {
-      if (error) {
-        this.#fail(error);
-        return;
-      }
-      this.#handleMicrophoneAudio(samples);
-    });
+    this.#microphoneRecoveryAttempted = false;
+    this.#startMicrophoneCapture();
     this.#refreshPhase();
     const stopSnapshotDiscovery = requestBackgroundActivitySnapshot(
       this.#pi,
@@ -671,11 +670,7 @@ export class LiveSession {
     this.#stopSnapshotDiscovery = undefined;
     this.#outputActivity.dispose();
     try {
-      const recorder = this.#recorder;
-      this.#recorder = undefined;
-      try {
-        recorder?.stop();
-      } catch {}
+      this.#stopMicrophoneCapture();
       try {
         await this.#attachmentLoadTail;
         await this.#actionTail;
@@ -1142,6 +1137,69 @@ export class LiveSession {
       .catch((cause) => {
         this.#fail(cause instanceof Error ? cause : new Error(String(cause)));
       });
+  }
+
+  #startMicrophoneCapture(): void {
+    let recorder: LiveAudioCapture | undefined;
+    let synchronousError: Error | undefined;
+    let installed = false;
+    recorder = this.#createAudioCapture((error, samples) => {
+      if (!installed) {
+        synchronousError = error ?? undefined;
+        return;
+      }
+      if (recorder !== this.#recorder || this.#stopped || this.#paused) return;
+      if (error) {
+        this.#fail(error);
+        return;
+      }
+      this.#lastMicrophoneFrameAt = Date.now();
+      this.#handleMicrophoneAudio(samples);
+    });
+    if (synchronousError || this.#stopped || this.#paused) {
+      try {
+        recorder.stop();
+      } catch {}
+      if (synchronousError) this.#fail(synchronousError);
+      return;
+    }
+    this.#recorder = recorder;
+    this.#lastMicrophoneFrameAt = Date.now();
+    installed = true;
+    const checkIntervalMs = Math.min(
+      1_000,
+      Math.max(10, Math.floor(this.#microphoneStallTimeoutMs / 2)),
+    );
+    this.#microphoneWatchdog = setInterval(() => {
+      if (this.#stopped || this.#paused || !this.#recorder) return;
+      if (Date.now() - this.#lastMicrophoneFrameAt < this.#microphoneStallTimeoutMs) return;
+      if (this.#microphoneRecoveryAttempted) {
+        this.#fail(new Error(
+          "Microphone capture stopped responding after automatic recovery. Restart Pi to reset its audio process.",
+        ));
+        return;
+      }
+      this.#microphoneRecoveryAttempted = true;
+      this.#persistActivity("microphone-restarted", undefined, undefined, {
+        reason: "capture-stalled",
+      });
+      this.#stopMicrophoneCapture();
+      try {
+        this.#startMicrophoneCapture();
+      } catch (cause) {
+        this.#fail(cause instanceof Error ? cause : new Error(String(cause)));
+      }
+    }, checkIntervalMs);
+  }
+
+  #stopMicrophoneCapture(): void {
+    clearInterval(this.#microphoneWatchdog);
+    this.#microphoneWatchdog = undefined;
+    const recorder = this.#recorder;
+    this.#recorder = undefined;
+    try {
+      recorder?.stop();
+    } catch {}
   }
 
   #handleMicrophoneAudio(samples: Float32Array): void {
