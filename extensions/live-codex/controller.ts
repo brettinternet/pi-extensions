@@ -54,6 +54,7 @@ const OUTPUT_RELEASE_DELAY_MS = 250;
 const MIN_BARGE_IN_LEVEL = 0.04;
 const OUTPUT_ECHO_RATIO = 0.65;
 const LIVE_DELEGATION_MESSAGE_TYPE = "pi-live-codex-delegation";
+const STATUS_REQUEST = "[[live:status]]";
 const CANCEL_CURRENT_REQUEST = "[[live:cancel-current]]";
 const CANCEL_JOB_REQUEST = /^\[\[live:cancel-job ([A-Za-z0-9-]+)\]\]$/;
 const CANCEL_ACTIVITY_REQUEST = /^\[\[live:cancel-activity (\S+) (\S+)\]\]$/;
@@ -66,6 +67,8 @@ const LIVE_INSTRUCTIONS = `You are the realtime voice surface of one unified cod
 The user speaks to you. Respond directly, briefly, conversationally, and without markdown unless asked for detail. Do not greet, introduce yourself, or speak merely because the session connected, resumed, or received commentary context. Remain silent until the user speaks or you receive explicitly speakable context.
 
 The Pi coding agent is your execution surface with repository context and tools. For coding, investigation, repository changes, commands, or verification, promptly create a client delegation containing the complete request and relevant conversational context. Do not attempt repository work yourself. A new request while work is active must create another client delegation. Independent requests are queued by the client so they remain correctly correlated; do not assume they steer an earlier request.
+
+When the user asks only for the current status or progress of work already in flight, create a client delegation whose entire text is exactly ${STATUS_REQUEST}. Do not say you are checking or promise a later update; wait for the returned status and present it directly. Do not use this control when the user also asks to change, investigate, retry, or add work.
 
 When the user unambiguously asks to stop the foreground operation currently being performed, create a client delegation whose entire text is exactly ${CANCEL_CURRENT_REQUEST}. When session context identifies the exact provider and activity ID for a background activity the user asks to cancel, create a client delegation whose entire text is [[live:cancel-activity PROVIDER ACTIVITY_ID]]. The legacy form [[live:cancel-job JOB_ID]] remains available only when that raw ID identifies exactly one activity. If the target is ambiguous, ask the user instead of guessing.
 
@@ -912,6 +915,13 @@ export class LiveSession {
       }
       return;
     }
+    if (request === STATUS_REQUEST) {
+      this.#appendDelegationContext(
+        event.item.id,
+        `"Agent Final Message":\n\n${this.#workStatusMessage()}`,
+      );
+      return;
+    }
     if (!this.#activities.enqueue(event.item.id, request)) return;
     const claimedNotes = this.#pendingTypedNotes.filter(
       ({ sequence }) => sequence <= typedNoteCutoff,
@@ -932,6 +942,24 @@ export class LiveSession {
       ? this.#now() + INPUT_CONTINUATION_GRACE_MS
       : undefined;
     this.#dispatchNext();
+  }
+
+  #workStatusMessage(): string {
+    const status = this.#activities.status();
+    const active = this.#activities.active();
+    const queued = status.queued === 0
+      ? ""
+      : ` ${status.queued} ${status.queued === 1 ? "request is" : "requests are"} queued behind it.`;
+    if (active) {
+      return `I'm still working on the current request.${queued} I haven't received a final result yet.`;
+    }
+    if (status.active > 0) {
+      return `${status.active} background ${status.active === 1 ? "activity is" : "activities are"} still running.${status.queued > 0 ? ` ${status.queued} ${status.queued === 1 ? "request is" : "requests are"} queued.` : ""}`;
+    }
+    if (status.queued > 0) {
+      return `No request is currently running. ${status.queued} ${status.queued === 1 ? "request is" : "requests are"} queued.`;
+    }
+    return "No work is currently running or queued.";
   }
 
   #dispatchNext(): void {

@@ -286,6 +286,52 @@ test("keeps the voice phase independent while delegated work is active", async (
   await harness.session.stop();
 });
 
+test("spoken status requests report active work immediately instead of queueing", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+  assert.match(harness.transport().options.instructions, /\[\[live:status\]\]/);
+  await activateVoiceDelegation(harness, "active");
+  harness.setIdle(false);
+
+  harness.transport().emit(delegation("queued", "Run another check"));
+  harness.transport().emit(delegation("status", "[[live:status]]"));
+  await flush();
+
+  assert.equal(harness.sentToAgent.length, 0);
+  assert.ok(harness.transport().sent.some((message) =>
+    message.type === "delegation.context.append" &&
+    message.delegation_item_id === "status" &&
+    contextText(message).includes("I'm still working on the current request") &&
+    contextText(message).includes("1 request is queued behind it")
+  ));
+
+  harness.setIdle(true);
+  harness.session.handleAgentSettled();
+  await flush();
+  assert.equal(harness.sentToAgent.length, 1);
+  assert.deepEqual(
+    (harness.sentToAgent[0] as { content: unknown[] }).content,
+    [{ type: "text", text: "Run another check" }],
+  );
+  await harness.session.stop();
+});
+
+test("spoken status requests report idle state without starting Pi", async () => {
+  const harness = createHarness();
+  await harness.session.start();
+
+  harness.transport().emit(delegation("status", "[[live:status]]"));
+  await flush();
+
+  assert.equal(harness.sentToAgent.length, 0);
+  assert.ok(harness.transport().sent.some((message) =>
+    message.type === "delegation.context.append" &&
+    message.delegation_item_id === "status" &&
+    contextText(message).includes("No work is currently running or queued")
+  ));
+  await harness.session.stop();
+});
+
 test("a spoken foreground cancellation aborts immediately instead of queueing", async () => {
   const harness = createHarness();
   await harness.session.start();
