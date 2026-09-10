@@ -33,6 +33,10 @@ function labelValue(value: unknown): string | undefined {
   return value.label;
 }
 
+function isRootBlockedEvent(value: unknown): boolean {
+  return isRecord(value) && value.scope === "root";
+}
+
 function sessionReference(ctx: ExtensionContext): Record<string, string> {
   try {
     const path = ctx.sessionManager.getSessionFile();
@@ -186,6 +190,7 @@ export function registerHerdrAgentState(
   });
 
   pi.events.on("herdr:blocked", (value) => {
+    if (!isRootBlockedEvent(value)) return;
     const active = activeValue(value);
     if (active === undefined) return;
     if (active) {

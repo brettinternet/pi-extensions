@@ -128,17 +128,33 @@ describe("Herdr Pi agent state integration", () => {
     reports.length = 0;
 
     events.emit("herdr:busy", { active: true, label: "subagent" });
-    events.emit("herdr:blocked", { active: true, label: "Approval required" });
+    events.emit("herdr:blocked", { active: true, label: "Approval required", scope: "root" });
     await bridge.flush();
     expect(reports.at(-1)).toMatchObject({ state: "blocked", message: "Approval required" });
 
-    events.emit("herdr:blocked", { active: false });
+    events.emit("herdr:blocked", { active: false, scope: "root" });
     await bridge.flush();
     expect(reports.at(-1)).toMatchObject({ state: "working", message: "subagent" });
 
     events.emit("herdr:busy", { active: false });
     await bridge.flush();
     expect(reports.at(-1)).toMatchObject({ state: "idle" });
+  });
+
+  test("keeps working when a subagent needs attention", async () => {
+    const reports: Record<string, unknown>[] = [];
+    const { events, hooks, ctx, bridge } = setup(collectStateReports(reports));
+    await start(hooks, ctx);
+    reports.length = 0;
+
+    events.emit("herdr:busy", { active: true, label: "⏳ 1 subagent ⚠" });
+    events.emit("herdr:blocked", { active: true, label: "subagent needs attention" });
+    await bridge.flush();
+
+    expect(reports.at(-1)).toMatchObject({
+      state: "working",
+      message: "⏳ 1 subagent ⚠",
+    });
   });
 
   test("does nothing outside Herdr or outside the interactive TUI", async () => {

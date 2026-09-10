@@ -22,8 +22,8 @@ describe("Herdr blocked status", () => {
       .resolves.toBe("approved");
 
     expect(reports).toEqual([
-      { active: true, label: "Approval required" },
-      { active: false },
+      { active: true, label: "Approval required", scope: "root" },
+      { active: false, scope: "root" },
     ]);
   });
 
@@ -35,8 +35,8 @@ describe("Herdr blocked status", () => {
     })).rejects.toThrow("denied");
 
     expect(reports).toEqual([
-      { active: true, label: "Approval required" },
-      { active: false },
+      { active: true, label: "Approval required", scope: "root" },
+      { active: false, scope: "root" },
     ]);
   });
 });

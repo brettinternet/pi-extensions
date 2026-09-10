@@ -12,8 +12,8 @@ herdr integration uninstall pi
 
 ## State precedence
 
-1. **blocked** — any agent is blocked
-2. **working** — parent or any subagent is working
+1. **blocked** — the parent is waiting for user input
+2. **working** — parent or any subagent is working; subagent attention stays working with a warning label
 3. **idle** — everything else
 
 Session identity and restore are preserved by reporting under `herdr:pi` before lifecycle state.

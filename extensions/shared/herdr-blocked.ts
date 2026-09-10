@@ -5,10 +5,10 @@ export async function withHerdrBlocked<T>(
   label: string,
   action: () => Promise<T>,
 ): Promise<T> {
-  pi.events.emit("herdr:blocked", { active: true, label });
+  pi.events.emit("herdr:blocked", { active: true, label, scope: "root" });
   try {
     return await action();
   } finally {
-    pi.events.emit("herdr:blocked", { active: false });
+    pi.events.emit("herdr:blocked", { active: false, scope: "root" });
   }
 }
