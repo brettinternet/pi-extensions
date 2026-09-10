@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AutocompleteProvider } from "@earendil-works/pi-tui";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import waitExtension, {
   WAIT_WIDGET_KEY,
@@ -11,7 +12,7 @@ import waitExtension, {
 
 function createHarness() {
   const handlers = new Map<string, (...args: any[]) => any>();
-  let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+  let autocomplete: AutocompleteProvider | undefined;
   const notifications: string[] = [];
   const widgets: Array<{ key: string; value: unknown }> = [];
   const messages: Array<{
@@ -29,15 +30,18 @@ function createHarness() {
     ui: {
       setWidget: (key: string, value: unknown) => widgets.push({ key, value }),
       notify: (message: string) => notifications.push(message),
+      addAutocompleteProvider: (factory: (current: AutocompleteProvider) => AutocompleteProvider) => {
+        autocomplete = factory({
+          getSuggestions: async () => null,
+          applyCompletion: () => { throw new Error("not used"); },
+        });
+      },
     },
     isIdle: () => idle,
-  } as unknown as ExtensionCommandContext;
+  } as unknown as ExtensionContext;
 
   const pi = {
     on: (name: string, handler: (...args: any[]) => any) => handlers.set(name, handler),
-    registerCommand: (_name: string, value: Parameters<ExtensionAPI["registerCommand"]>[1]) => {
-      command = value;
-    },
     sendUserMessage: (
       content: string,
       options?: {
@@ -53,12 +57,18 @@ function createHarness() {
   handlers.get("session_start")?.({ reason: "startup" }, context);
 
   return {
-    command: command!,
+    get autocomplete() { return autocomplete!; },
     context,
     handlers,
     notifications,
     widgets,
     messages,
+    submit: (args: string, streamingBehavior?: "steer" | "followUp") => handlers.get("input")?.({
+      text: `/wait${args ? ` ${args}` : ""}`,
+      source: "interactive",
+      streamingBehavior,
+    }, context),
+    settle: () => handlers.get("agent_settled")?.({}, context),
     setIdle: (value: boolean) => { idle = value; },
   };
 }
@@ -101,14 +111,25 @@ describe("wait parser and formatting", () => {
     expect(visibleWidth(line)).toBe(36);
   });
 
-  test("completes controls and common durations", () => {
-    const { command } = createHarness();
-    expect(command.getArgumentCompletions?.("ca")).toEqual([
-      { value: "cancel", label: "cancel", description: "Cancel the queued message" },
-    ]);
-    expect(command.getArgumentCompletions?.("5")).toEqual([
-      { value: "5m ", label: "5m <prompt>", description: "Send a message after 5m" },
-    ]);
+  test("completes the command, controls, and common durations", async () => {
+    const { autocomplete } = createHarness();
+    const options = { signal: new AbortController().signal } as any;
+    expect(await autocomplete.getSuggestions(["/wa"], 0, 3, options)).toEqual({
+      prefix: "/wa",
+      items: [{
+        value: "/wait ",
+        label: "/wait",
+        description: "Send a queued message after a timeout",
+      }],
+    });
+    expect(await autocomplete.getSuggestions(["/wait ca"], 0, 8, options)).toEqual({
+      prefix: "ca",
+      items: [{ value: "cancel", label: "cancel", description: "Cancel the queued message" }],
+    });
+    expect(await autocomplete.getSuggestions(["/wait 5"], 0, 7, options)).toEqual({
+      prefix: "5",
+      items: [{ value: "5m ", label: "5m <prompt>", description: "Send a message after 5m" }],
+    });
   });
 });
 
@@ -116,7 +137,7 @@ describe("wait lifecycle", () => {
   test("delivers when idle and clears the widget", async () => {
     const harness = createHarness();
 
-    await harness.command.handler("5ms run the checks", harness.context);
+    await harness.submit("5ms run the checks");
     expect(latestWidgetLines(harness)?.[0]).toContain("/wait cancel");
     await sleep(15);
 
@@ -127,11 +148,11 @@ describe("wait lifecycle", () => {
     expect(harness.widgets.at(-1)).toEqual({ key: WAIT_WIDGET_KEY, value: undefined });
   });
 
-  test("uses follow-up delivery when busy", async () => {
+  test("starts an Enter-steered timer immediately while busy", async () => {
     const harness = createHarness();
     harness.setIdle(false);
 
-    await harness.command.handler("5ms inspect the result", harness.context);
+    await harness.submit("5ms inspect the result", "steer");
     await sleep(15);
 
     expect(harness.messages).toEqual([
@@ -142,10 +163,29 @@ describe("wait lifecycle", () => {
     ]);
   });
 
+  test("does not start a queued follow-up timer until the agent settles", async () => {
+    const harness = createHarness();
+    harness.setIdle(false);
+
+    await harness.submit("10ms inspect after settling", "followUp");
+    expect(latestWidgetLines(harness)?.[0]).toContain("wait queued");
+    await sleep(15);
+    expect(harness.messages).toEqual([]);
+
+    harness.setIdle(true);
+    harness.settle();
+    await sleep(15);
+
+    expect(harness.messages).toEqual([{
+      content: "inspect after settling",
+      options: { expandPromptTemplates: true },
+    }]);
+  });
+
   test("dispatches a queued slash command with skill arguments", async () => {
     const harness = createHarness();
 
-    await harness.command.handler("5ms /skill:myskill skill argument here", harness.context);
+    await harness.submit("5ms /skill:myskill skill argument here");
     await sleep(15);
 
     expect(harness.messages).toEqual([{
@@ -157,10 +197,10 @@ describe("wait lifecycle", () => {
   test("cancels and replaces queued messages", async () => {
     const harness = createHarness();
 
-    await harness.command.handler("10ms first", harness.context);
-    await harness.command.handler("15ms second", harness.context);
+    await harness.submit("10ms first");
+    await harness.submit("15ms second");
     expect(harness.notifications.at(-1)).toContain("replaced queued message");
-    await harness.command.handler("cancel", harness.context);
+    await harness.submit("cancel");
     await sleep(25);
 
     expect(harness.messages).toEqual([]);
@@ -170,7 +210,7 @@ describe("wait lifecycle", () => {
   test("cancels pending delivery on session shutdown", async () => {
     const harness = createHarness();
 
-    await harness.command.handler("5ms should not send", harness.context);
+    await harness.submit("5ms should not send");
     harness.handlers.get("session_shutdown")?.({ reason: "quit" }, harness.context);
     await sleep(15);
 

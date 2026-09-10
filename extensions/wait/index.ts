@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 
 export const WAIT_WIDGET_KEY = "pi-wait";
@@ -19,10 +20,9 @@ export type ParsedWaitCommand =
   | { kind: "status" }
   | { kind: "cancel" };
 
-export interface PendingWait {
-  prompt: string;
-  dueAt: number;
-}
+export type PendingWait =
+  | { prompt: string; dueAt: number }
+  | { prompt: string; delay: number; dueAt?: undefined };
 
 type ArgumentCompletion = { value: string; label: string; description?: string };
 
@@ -70,8 +70,9 @@ export function formatRemaining(milliseconds: number): string {
 
 export function formatWaitWidget(wait: PendingWait, width: number, now = Date.now()): string {
   const prompt = wait.prompt.replace(/\s+/g, " ").trim();
+  const state = wait.dueAt === undefined ? "queued" : formatRemaining(wait.dueAt - now);
   return truncateToWidth(
-    `wait ${formatRemaining(wait.dueAt - now)} · /wait cancel · ${prompt}`,
+    `wait ${state} · /wait cancel · ${prompt}`,
     width,
     "…",
   );
@@ -90,6 +91,43 @@ function completeWaitArguments(prefix: string): ArgumentCompletion[] | null {
   ];
   const matches = candidates.filter(({ value }) => value.toLowerCase().startsWith(query));
   return matches.length > 0 ? matches : null;
+}
+
+function createWaitAutocompleteProvider(current: AutocompleteProvider): AutocompleteProvider {
+  return {
+    async getSuggestions(lines, cursorLine, cursorCol, options): Promise<AutocompleteSuggestions | null> {
+      const beforeCursor = (lines[cursorLine] ?? "").slice(0, cursorCol);
+      const commandMatch = /^\/(\w*)$/.exec(beforeCursor);
+      if (commandMatch && "wait".startsWith(commandMatch[1].toLowerCase())) {
+        const existing = await current.getSuggestions(lines, cursorLine, cursorCol, options);
+        const wait = {
+          value: "/wait ",
+          label: "/wait",
+          description: "Send a queued message after a timeout",
+        };
+        if (existing?.prefix === commandMatch[0]) {
+          return {
+            ...existing,
+            items: [wait, ...existing.items.filter(({ value }) => value !== wait.value)],
+          };
+        }
+        return { prefix: commandMatch[0], items: [wait] };
+      }
+
+      const argumentMatch = /^\/wait\s+(\S*)$/.exec(beforeCursor);
+      if (argumentMatch) {
+        const items = completeWaitArguments(argumentMatch[1]);
+        if (items) return { prefix: argumentMatch[1], items };
+      }
+      return current.getSuggestions(lines, cursorLine, cursorCol, options);
+    },
+    applyCompletion(lines, cursorLine, cursorCol, item, prefix) {
+      return current.applyCompletion(lines, cursorLine, cursorCol, item, prefix);
+    },
+    shouldTriggerFileCompletion(lines, cursorLine, cursorCol) {
+      return current.shouldTriggerFileCompletion?.(lines, cursorLine, cursorCol) ?? true;
+    },
+  };
 }
 
 export default function waitExtension(pi: ExtensionAPI): void {
@@ -162,17 +200,49 @@ export default function waitExtension(pi: ExtensionAPI): void {
     }
   }
 
-  function schedule(ctx: ExtensionContext, delay: number, prompt: string): void {
-    const replaced = cancel(ctx, false);
-    const wait: PendingWait = { prompt, dueAt: Date.now() + delay };
-    pending = wait;
-    deliveryTimer = setTimeout(() => deliver(ctx, wait), delay);
+  function arm(ctx: ExtensionContext, wait: PendingWait, delay: number): void {
+    const armed: PendingWait = { prompt: wait.prompt, dueAt: Date.now() + delay };
+    pending = armed;
+    deliveryTimer = setTimeout(() => deliver(ctx, armed), delay);
     countdownTimer = setInterval(() => renderWidget(ctx), 1_000);
     renderWidget(ctx);
+  }
+
+  function schedule(ctx: ExtensionContext, delay: number, prompt: string, afterAgent: boolean): void {
+    const replaced = cancel(ctx, false);
+    if (afterAgent) {
+      pending = { prompt, delay };
+      renderWidget(ctx);
+      notify(ctx, replaced
+        ? "replaced queued message; timer starts after the agent settles"
+        : "wait queued; timer starts after the agent settles");
+      return;
+    }
+
+    arm(ctx, { prompt, delay }, delay);
     const message = replaced
       ? `replaced queued message; waiting ${formatRemaining(delay)}`
       : `waiting ${formatRemaining(delay)}`;
     notify(ctx, message);
+  }
+
+  function handleCommand(args: string, ctx: ExtensionContext, afterAgent: boolean): void {
+    try {
+      const command = parseWaitCommand(args);
+      if (command.kind === "cancel") {
+        cancel(ctx, true);
+        return;
+      }
+      if (command.kind === "status") {
+        if (!pending) notify(ctx, "wait: no queued message");
+        else if (pending.dueAt === undefined) notify(ctx, `wait: timer starts after the agent settles\n${pending.prompt}`);
+        else notify(ctx, `wait: ${formatRemaining(pending.dueAt - Date.now())}\n${pending.prompt}`);
+        return;
+      }
+      schedule(ctx, command.delay, command.prompt, afterAgent);
+    } catch (error) {
+      notify(ctx, error instanceof Error ? error.message : String(error), "error");
+    }
   }
 
   pi.on("session_start", (_event, ctx) => {
@@ -180,32 +250,28 @@ export default function waitExtension(pi: ExtensionAPI): void {
     pending = undefined;
     clearTimers();
     clearWidget(ctx);
+    if (ctx.hasUI) ctx.ui.addAutocompleteProvider((current) => createWaitAutocompleteProvider(current));
+  });
+
+  pi.on("agent_settled", (_event, ctx) => {
+    if (!pending || pending.dueAt !== undefined) return;
+    const wait = pending;
+    arm(ctx, wait, wait.delay);
+    notify(ctx, `waiting ${formatRemaining(wait.delay)}`);
+  });
+
+  // Registered extension commands execute immediately and do not receive the
+  // selected streaming behavior. Handle /wait as input so follow-ups can defer
+  // the timer while steering submissions still start it immediately.
+  pi.on("input", (event, ctx) => {
+    const match = /^\/wait(?:\s+(.*))?$/s.exec(event.text.trim());
+    if (!match) return { action: "continue" };
+    handleCommand(match[1] ?? "", ctx, event.streamingBehavior === "followUp");
+    return { action: "handled" };
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
     cancel(ctx, false);
     sessionContext = undefined;
-  });
-
-  pi.registerCommand("wait", {
-    description: "<duration> <prompt> | status | cancel — Send a queued message after a timeout",
-    getArgumentCompletions: (prefix) => completeWaitArguments(prefix),
-    handler: async (args, ctx) => {
-      try {
-        const command = parseWaitCommand(args);
-        if (command.kind === "cancel") {
-          cancel(ctx, true);
-          return;
-        }
-        if (command.kind === "status") {
-          if (!pending) notify(ctx, "wait: no queued message");
-          else notify(ctx, `wait: ${formatRemaining(pending.dueAt - Date.now())}\n${pending.prompt}`);
-          return;
-        }
-        schedule(ctx, command.delay, command.prompt);
-      } catch (error) {
-        notify(ctx, error instanceof Error ? error.message : String(error), "error");
-      }
-    },
   });
 }
