@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import loopExtension, {
+  DEFAULT_LOOP_RETRIES,
   LOOP_STATE_ENTRY,
   formatLoopStatus,
   formatLoopWidget,
@@ -156,10 +157,22 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
     },
     agentStart: () => handlers.get("before_agent_start")?.({ prompt: prompts.at(-1) ?? "" }, activeContext),
     setIdle: (value: boolean) => { idle = value; },
-    messageEnd: (stopReason: "stop" | "error" | "aborted") =>
-      handlers.get("message_end")?.({ message: { role: "assistant", stopReason } }, activeContext),
-    agentEnd: (stopReason: "stop" | "error" | "aborted") =>
-      handlers.get("agent_end")?.({ messages: [{ role: "assistant", stopReason }] }, activeContext),
+    messageEnd: (stopReason: "stop" | "error" | "aborted", errorMessage?: string) =>
+      handlers.get("message_end")?.({ message: { role: "assistant", stopReason, errorMessage } }, activeContext),
+    agentEnd: (stopReason: "stop" | "error" | "aborted", errorMessage?: string) =>
+      handlers.get("agent_end")?.({ messages: [{ role: "assistant", stopReason, errorMessage }] }, activeContext),
+    sessionStart: async (reason: "startup" | "reload" | "resume") => {
+      handlers.get("session_start")?.({ reason }, activeContext);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    },
+    sessionShutdown: (reason: "quit" | "reload") => {
+      handlers.get("session_shutdown")?.({ reason }, activeContext);
+    },
+    setState: (patch: Partial<LoopState>) => {
+      const state = stateOf(current);
+      if (!state) throw new Error("loop state is unavailable");
+      current.appendCustomEntry(LOOP_STATE_ENTRY, { ...state, ...patch });
+    },
     commandContext: () => activeContext,
     state: () => stateOf(current),
   };
@@ -302,6 +315,9 @@ describe("loop parser and state", () => {
     expect(formatLoopWidget({ ...state, delay: 2_000 }, 80)).toBe(
       "loop active 4/4 · delay 2s · inspect the repository and fix the failing tests",
     );
+    expect(formatLoopWidget({ ...state, retryCount: 2 }, 80)).toBe(
+      "loop active 4/4 · retry 2/3 · inspect the repository and fix the failing tests",
+    );
   });
 
   test("defaults delay to zero when loading an older persisted state", () => {
@@ -317,7 +333,7 @@ describe("loop parser and state", () => {
         pendingRetune: null,
         status: "completed",
       },
-    }])).toMatchObject({ delay: 0 });
+    }])).toMatchObject({ delay: 0, retryCount: 0, phase: "running" });
   });
 });
 
@@ -453,6 +469,7 @@ describe("loop lifecycle", () => {
   test("advances a paused iteration with next into a fresh session", async () => {
     const harness = createHarness();
     await harness.command.handler("3 retry this", harness.context);
+    harness.setState({ retryCount: DEFAULT_LOOP_RETRIES });
     harness.agentEnd("error");
     await harness.settle();
     expect(harness.state()).toMatchObject({ status: "paused", currentIteration: 1, remainingBudget: 2 });
@@ -468,6 +485,7 @@ describe("loop lifecycle", () => {
   test("completes a paused final iteration with next without creating a session", async () => {
     const harness = createHarness();
     await harness.command.handler("1 finish this", harness.context);
+    harness.setState({ retryCount: DEFAULT_LOOP_RETRIES });
     harness.agentEnd("error");
     await harness.settle();
     const pausedSession = harness.current.getSessionId();
@@ -494,6 +512,7 @@ describe("loop lifecycle", () => {
   test("updates the prompt while paused and uses it on resume", async () => {
     const harness = createHarness();
     await harness.command.handler("2 retry this", harness.context);
+    harness.setState({ retryCount: DEFAULT_LOOP_RETRIES });
     harness.agentEnd("error");
     await harness.settle();
 
@@ -600,6 +619,7 @@ describe("loop lifecycle", () => {
 
     const paused = createHarness();
     await paused.command.handler("2 work", paused.context);
+    paused.setState({ retryCount: DEFAULT_LOOP_RETRIES });
     paused.agentEnd("error");
     await paused.settle();
     expect(paused.state()?.status).toBe("paused");
@@ -627,6 +647,122 @@ describe("loop lifecycle", () => {
     expect(retuned.state()).toMatchObject({ status: "active", currentIteration: 2, remainingBudget: 2 });
   });
 
+  test("retries settled provider errors with bounded exponential backoff", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 retry this", harness.context);
+
+    harness.agentEnd("error", "WebSocket error");
+    await harness.settle();
+
+    expect(harness.state()).toMatchObject({
+      status: "active",
+      currentIteration: 1,
+      retryCount: 1,
+    });
+    expect(harness.notifications.at(-1)).toContain(
+      "retrying iteration 1 in 30s after WebSocket error (1/3)",
+    );
+    expect(formatLoopStatus(harness.state())).toContain("retries: 1/3");
+
+    await harness.command.handler("end", commandContext(harness));
+    expect(harness.state()?.status).toBe("stopped");
+  });
+
+  test("pauses with diagnostics after retries are exhausted", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 retry this", harness.context);
+    harness.setState({ retryCount: DEFAULT_LOOP_RETRIES });
+
+    harness.agentEnd("error", "servers overloaded");
+    await harness.settle();
+
+    expect(harness.state()).toMatchObject({
+      status: "paused",
+      retryCount: DEFAULT_LOOP_RETRIES,
+      pauseReason: "servers overloaded",
+    });
+    expect(harness.state()?.pausedAt).toBeNumber();
+    expect(formatLoopStatus(harness.state())).toContain("pause reason: servers overloaded");
+  });
+
+  test("recovers persisted active iterations after startup and reload", async () => {
+    const startup = createHarness();
+    await startup.command.handler("2 keep working", startup.context);
+    await startup.sessionStart("startup");
+    expect(startup.prompts.at(-1)).toContain(
+      "Continue the current loop iteration from where you left off",
+    );
+    expect(startup.notifications.at(-2)).toBe("loop recovering interrupted iteration 1");
+
+    const reload = createHarness();
+    await reload.command.handler("2 keep working", reload.context);
+    reload.sessionShutdown("reload");
+    expect(reload.state()?.status).toBe("active");
+    await reload.sessionStart("reload");
+    expect(reload.prompts.at(-1)).toContain(
+      "Continue the current loop iteration from where you left off",
+    );
+  });
+
+  test("restores pending boundary and retry timers without repeating completed work", async () => {
+    const boundary = createHarness();
+    await boundary.command.handler("2 --delay 1s next task", boundary.context);
+    await boundary.settle();
+    boundary.setState({ phase: "waiting", nextActionAt: Date.now() - 1 });
+
+    await boundary.sessionStart("startup");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(boundary.prompts).toEqual(["next task", "next task"]);
+    expect(boundary.state()).toMatchObject({ currentIteration: 2, phase: "running" });
+
+    const retry = createHarness();
+    await retry.command.handler("2 retry task", retry.context);
+    retry.setState({ retryCount: 2, phase: "retrying", nextActionAt: Date.now() - 1 });
+
+    await retry.sessionStart("startup");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(retry.prompts.at(-1)).toContain(
+      "Continue the current loop iteration from where you left off",
+    );
+    expect(retry.state()).toMatchObject({ currentIteration: 1, retryCount: 2, phase: "running" });
+  });
+
+  test("updates a restored boundary deadline before recovery dispatches", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 --delay 1s keep working", harness.context);
+    await harness.settle();
+    const originalDeadline = Date.now() + 10_000;
+    harness.setState({ phase: "waiting", nextActionAt: originalDeadline });
+
+    const startup = harness.sessionStart("startup");
+    await harness.command.handler("delay 2s", commandContext(harness));
+    expect(harness.state()?.nextActionAt).toBe(originalDeadline + 1_000);
+    await harness.command.handler("end", commandContext(harness));
+    await startup;
+  });
+
+  test("end cancels startup recovery before it can dispatch", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 keep working", harness.context);
+
+    const startup = harness.sessionStart("startup");
+    await harness.command.handler("end", commandContext(harness));
+    await startup;
+
+    expect(harness.state()?.status).toBe("stopped");
+    expect(harness.prompts).toEqual(["keep working"]);
+  });
+
+  test("does not recover a loop after an intentional process exit", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 keep working", harness.context);
+    harness.sessionShutdown("quit");
+    expect(harness.state()?.status).toBe("inactive");
+
+    await harness.sessionStart("startup");
+    expect(harness.prompts).toEqual(["keep working"]);
+  });
+
   test("does not pause failures recovered before the agent settles", async () => {
     for (const stopReason of ["error", "aborted"] as const) {
       const harness = createHarness();
@@ -649,7 +785,12 @@ describe("loop lifecycle", () => {
     await harness.command.handler("2 retry this", harness.context);
     harness.agentEnd("aborted");
     await harness.settle();
-    expect(harness.state()).toMatchObject({ status: "paused", currentIteration: 1, remainingBudget: 1 });
+    expect(harness.state()).toMatchObject({
+      status: "paused",
+      currentIteration: 1,
+      remainingBudget: 1,
+      pauseReason: "assistant aborted",
+    });
     await harness.settle();
     expect(harness.prompts).toHaveLength(1);
     await harness.command.handler("resume", commandContext(harness));

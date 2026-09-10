@@ -15,11 +15,14 @@ export const LOOP_USAGE =
 
 export const MIN_LOOP_DELAY_MS = 1_000;
 export const MAX_LOOP_DELAY_MS = 24 * 60 * 60 * 1_000;
+export const DEFAULT_LOOP_RETRIES = 3;
+export const DEFAULT_LOOP_RETRY_DELAY_MS = 30_000;
 
 const LOOP_CONTINUATION_PROMPT =
   "Continue the current loop iteration from where you left off without repeating completed work.";
 
 export type LoopStatus = "active" | "stopping" | "paused" | "completed" | "stopped" | "inactive";
+export type LoopPhase = "running" | "waiting" | "retrying";
 
 export interface LoopState {
   version: 1;
@@ -30,6 +33,11 @@ export interface LoopState {
   pendingRetune: number | null;
   delay: number;
   status: LoopStatus;
+  retryCount?: number;
+  phase?: LoopPhase;
+  nextActionAt?: number;
+  pauseReason?: string;
+  pausedAt?: number;
   ownerSessionId?: string;
   ownerSessionFile?: string;
 }
@@ -285,10 +293,20 @@ export function parseLoopState(value: unknown): LoopState | undefined {
     !isPositiveInteger(value.currentIteration) ||
     !isNonNegativeInteger(value.remainingBudget) ||
     (value.pendingRetune !== null && !isNonNegativeInteger(value.pendingRetune)) ||
-    !isValidLoopDelay(delay)
+    !isValidLoopDelay(delay) ||
+    (value.retryCount !== undefined && !isNonNegativeInteger(value.retryCount))
   ) {
     return undefined;
   }
+  if (
+    value.phase !== undefined &&
+    value.phase !== "running" &&
+    value.phase !== "waiting" &&
+    value.phase !== "retrying"
+  ) return undefined;
+  if (value.nextActionAt !== undefined && !isNonNegativeInteger(value.nextActionAt)) return undefined;
+  if (value.pauseReason !== undefined && typeof value.pauseReason !== "string") return undefined;
+  if (value.pausedAt !== undefined && !isNonNegativeInteger(value.pausedAt)) return undefined;
   if (value.ownerSessionId !== undefined && typeof value.ownerSessionId !== "string") return undefined;
   if (value.ownerSessionFile !== undefined && typeof value.ownerSessionFile !== "string") return undefined;
 
@@ -301,6 +319,11 @@ export function parseLoopState(value: unknown): LoopState | undefined {
     pendingRetune: value.pendingRetune,
     delay,
     status,
+    retryCount: value.retryCount ?? 0,
+    phase: value.phase ?? "running",
+    ...(value.nextActionAt !== undefined ? { nextActionAt: value.nextActionAt } : {}),
+    ...(value.pauseReason ? { pauseReason: value.pauseReason } : {}),
+    ...(value.pausedAt !== undefined ? { pausedAt: value.pausedAt } : {}),
     ...(value.ownerSessionId ? { ownerSessionId: value.ownerSessionId } : {}),
     ...(value.ownerSessionFile ? { ownerSessionFile: value.ownerSessionFile } : {}),
   };
@@ -316,6 +339,11 @@ export function formatLoopStatus(state: LoopState | undefined): string {
     `remaining: ${state.remainingBudget}`,
     `pending retune: ${pending}`,
     `delay: ${formatLoopDelay(state.delay ?? 0)}`,
+    `retries: ${state.retryCount ?? 0}/${DEFAULT_LOOP_RETRIES}`,
+    `phase: ${state.phase ?? "running"}`,
+    ...(state.nextActionAt ? [`next action: ${new Date(state.nextActionAt).toISOString()}`] : []),
+    ...(state.pauseReason ? [`pause reason: ${state.pauseReason}`] : []),
+    ...(state.pausedAt ? [`paused at: ${new Date(state.pausedAt).toISOString()}`] : []),
   ].join("\n");
 }
 
@@ -397,14 +425,17 @@ function isTerminal(state: LoopState | undefined): boolean {
 export function formatLoopWidget(state: LoopState, width: number): string {
   const prompt = state.prompt.replace(/\s+/g, " ").trim();
   const delay = state.delay > 0 ? ` · delay ${formatLoopDelay(state.delay)}` : "";
+  const retries = (state.retryCount ?? 0) > 0
+    ? ` · retry ${state.retryCount}/${DEFAULT_LOOP_RETRIES}`
+    : "";
   if (state.status === "stopping") {
-    return truncateToWidth(`loop stopping${delay} · ${prompt}`, width, "…");
+    return truncateToWidth(`loop stopping${delay}${retries} · ${prompt}`, width, "…");
   }
   const futureIterations = state.pendingRetune ?? state.remainingBudget;
   const remainingIterations = futureIterations + 1;
   const totalIterations = state.currentIteration + futureIterations;
   return truncateToWidth(
-    `loop ${state.status} ${remainingIterations}/${totalIterations}${delay} · ${prompt}`,
+    `loop ${state.status} ${remainingIterations}/${totalIterations}${delay}${retries} · ${prompt}`,
     width,
     "…",
   );
@@ -416,14 +447,28 @@ type ContinuationWait = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+type RetryWait = {
+  key: string;
+  retryCount: number;
+  timer: ReturnType<typeof setTimeout>;
+};
+
+type PendingFailure = {
+  key: string;
+  stopReason: "aborted" | "error";
+  reason: string;
+};
+
 export default function loopExtension(pi: ExtensionAPI): void {
   let runState: LoopState | undefined;
   let transitionInFlight = false;
   let handledSettlementKey: string | undefined;
   let continuationWait: ContinuationWait | undefined;
+  let retryWait: RetryWait | undefined;
+  let recoveryTimer: ReturnType<typeof setTimeout> | undefined;
   let activeCommandKey: string | undefined;
   let commandInterruptedKey: string | undefined;
-  let pendingFailureKey: string | undefined;
+  let pendingFailure: PendingFailure | undefined;
   let currentSessionManagerRef: unknown;
 
   function stateFrom(ctx: ContextWithSession): LoopState | undefined {
@@ -494,6 +539,33 @@ export default function loopExtension(pi: ExtensionAPI): void {
     continuationWait = undefined;
   }
 
+  function clearRetryWait(): void {
+    if (!retryWait) return;
+    clearTimeout(retryWait.timer);
+    retryWait = undefined;
+  }
+
+  function clearRecoveryTimer(): void {
+    if (!recoveryTimer) return;
+    clearTimeout(recoveryTimer);
+    recoveryTimer = undefined;
+  }
+
+  function pauseLoop(ctx: ExtensionContext, state: LoopState, reason: string): void {
+    clearContinuationWait();
+    clearRetryWait();
+    const { nextActionAt: _nextActionAt, ...withoutSchedule } = state;
+    const paused = {
+      ...withoutSchedule,
+      status: "paused" as const,
+      phase: "running" as const,
+      pauseReason: reason,
+      pausedAt: Date.now(),
+    };
+    persist(pi, paused);
+    renderWidget(ctx, paused);
+  }
+
   function scheduleContinuation(
     ctx: ExtensionContext,
     state: LoopState,
@@ -510,9 +582,13 @@ export default function loopExtension(pi: ExtensionAPI): void {
     const key = stateKey(ctx, state);
     if (continuationWait?.key === key) return;
     clearContinuationWait();
-    const waitMs = Math.max(0, settledAt + state.delay - Date.now());
+    const nextActionAt = settledAt + state.delay;
+    const waiting: LoopState = { ...state, phase: "waiting", nextActionAt };
+    persist(pi, waiting);
+    renderWidget(ctx, waiting);
+    const waitMs = Math.max(0, nextActionAt - Date.now());
     if (waitMs === 0) {
-      dispatchContinuation(ctx, state);
+      dispatchContinuation(ctx, waiting);
       return;
     }
 
@@ -521,7 +597,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
       continuationWait = undefined;
       const latest = currentState(ctx);
       if (!latest || latest.runId !== state.runId || latest.currentIteration !== state.currentIteration) return;
-      if (!statusIsActive(latest)) return;
+      if (!statusIsActive(latest) || latest.phase !== "waiting") return;
       dispatchContinuation(ctx, latest);
     }, waitMs);
     continuationWait = { key, settledAt, timer };
@@ -535,7 +611,8 @@ export default function loopExtension(pi: ExtensionAPI): void {
   }
 
   function isWaitingForContinuation(ctx: ContextWithSession, state: LoopState): boolean {
-    return continuationWait?.key === stateKey(ctx, state);
+    const key = stateKey(ctx, state);
+    return continuationWait?.key === key || retryWait?.key === key || recoveryTimer !== undefined;
   }
 
   function clearCommandInterruption(): void {
@@ -546,32 +623,108 @@ export default function loopExtension(pi: ExtensionAPI): void {
   function continueCurrentIteration(ctx: ExtensionContext, state: LoopState): void {
     const content = `${LOOP_CONTINUATION_PROMPT}\n\nCurrent loop instructions:\n${state.prompt}`;
     try {
-      pi.sendUserMessage(content);
+      pi.sendUserMessage(content, ctx.isIdle() ? undefined : { deliverAs: "followUp" });
       notify(ctx, "loop continuing the current iteration", "info");
     } catch (error) {
-      const paused = { ...state, status: "paused" as const };
-      persist(pi, paused);
-      renderWidget(ctx, paused);
-      notify(ctx, `loop paused: ${error instanceof Error ? error.message : String(error)}`, "error");
+      const reason = error instanceof Error ? error.message : String(error);
+      pauseLoop(ctx, state, reason);
+      notify(ctx, `loop paused: ${reason}`, "error");
     }
   }
 
-  function recordAssistantOutcome(ctx: ExtensionContext, stopReason: string | undefined): void {
+  function recordAssistantOutcome(
+    ctx: ExtensionContext,
+    assistant: { stopReason?: string; errorMessage?: string } | undefined,
+  ): void {
     const loaded = currentState(ctx);
     if (!loaded || !statusIsActive(loaded) || transitionInFlight) return;
     const key = stateKey(ctx, loaded);
+    const stopReason = assistant?.stopReason;
     if (stopReason !== "aborted" && stopReason !== "error") {
-      if (pendingFailureKey === key) pendingFailureKey = undefined;
+      if (pendingFailure?.key === key) pendingFailure = undefined;
       return;
     }
     clearContinuationWait();
     if (stopReason === "aborted" && activeCommandKey === key) {
-      pendingFailureKey = undefined;
+      pendingFailure = undefined;
       commandInterruptedKey = key;
       return;
     }
     clearCommandInterruption();
-    pendingFailureKey = key;
+    pendingFailure = {
+      key,
+      stopReason,
+      reason: stopReason === "error"
+        ? assistant?.errorMessage?.trim() || "assistant error"
+        : "assistant aborted",
+    };
+  }
+
+  function armRetry(ctx: ExtensionContext, state: LoopState, waitMs: number): void {
+    clearRetryWait();
+    const key = stateKey(ctx, state);
+    const retryCount = state.retryCount ?? 0;
+    const timer = setTimeout(() => {
+      if (!retryWait || retryWait.timer !== timer || retryWait.key !== key) return;
+      retryWait = undefined;
+      const latest = currentState(ctx);
+      if (!latest || !statusIsActive(latest) || stateKey(ctx, latest) !== key) return;
+      if ((latest.retryCount ?? 0) !== retryCount || latest.phase !== "retrying") return;
+      const { nextActionAt: _nextActionAt, ...withoutSchedule } = latest;
+      const running: LoopState = { ...withoutSchedule, phase: "running" };
+      persist(pi, running);
+      renderWidget(ctx, running);
+      handledSettlementKey = undefined;
+      continueCurrentIteration(ctx, running);
+    }, waitMs);
+    retryWait = { key, retryCount, timer };
+  }
+
+  function scheduleRetry(ctx: ExtensionContext, state: LoopState, failure: PendingFailure): void {
+    const previousRetryCount = state.retryCount ?? 0;
+    const retryCount = previousRetryCount + 1;
+    const delay = DEFAULT_LOOP_RETRY_DELAY_MS * 2 ** previousRetryCount;
+    const nextActionAt = Date.now() + delay;
+    const { pauseReason: _pauseReason, pausedAt: _pausedAt, ...withoutPause } = state;
+    const retrying: LoopState = {
+      ...withoutPause,
+      retryCount,
+      status: "active",
+      phase: "retrying",
+      nextActionAt,
+    };
+    persist(pi, retrying);
+    renderWidget(ctx, retrying);
+    handledSettlementKey = stateKey(ctx, retrying);
+    notify(
+      ctx,
+      `loop retrying iteration ${retrying.currentIteration} in ${formatLoopDelay(delay)} after ${failure.reason} (${retryCount}/${DEFAULT_LOOP_RETRIES})`,
+      "warning",
+    );
+    armRetry(ctx, retrying, delay);
+  }
+
+  function scheduleStartupRecovery(ctx: ExtensionContext, state: LoopState): void {
+    clearRecoveryTimer();
+    const key = stateKey(ctx, state);
+    recoveryTimer = setTimeout(() => {
+      recoveryTimer = undefined;
+      const latest = currentState(ctx);
+      if (!latest || !statusIsActive(latest) || stateKey(ctx, latest) !== key) return;
+      handledSettlementKey = undefined;
+      if (latest.phase === "waiting") {
+        const settledAt = (latest.nextActionAt ?? Date.now()) - latest.delay;
+        scheduleContinuation(ctx, latest, settledAt);
+        return;
+      }
+      if (latest.phase === "retrying") {
+        const waitMs = Math.max(0, (latest.nextActionAt ?? Date.now()) - Date.now());
+        armRetry(ctx, latest, waitMs);
+        return;
+      }
+      notify(ctx, `loop recovering interrupted iteration ${latest.currentIteration}`, "warning");
+      continueCurrentIteration(ctx, latest);
+    }, 0);
   }
 
   function transferState(state: LoopState, manager: SessionManager): LoopState {
@@ -593,6 +746,8 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   async function replaceForIteration(ctx: ExtensionCommandContext, next: LoopState): Promise<void> {
     clearContinuationWait();
+    clearRetryWait();
+    clearRecoveryTimer();
     const sourceIdentity = contextIdentity(ctx);
     const parentSession = sourceIdentity.file;
     const inactive = {
@@ -646,6 +801,8 @@ export default function loopExtension(pi: ExtensionAPI): void {
         const paused: LoopState = {
           ...next,
           status: "paused",
+          pauseReason: "session replacement was cancelled",
+          pausedAt: Date.now(),
           ...(sourceIdentity.id ? { ownerSessionId: sourceIdentity.id } : {}),
           ...(sourceIdentity.file ? { ownerSessionFile: sourceIdentity.file } : {}),
         };
@@ -659,16 +816,19 @@ export default function loopExtension(pi: ExtensionAPI): void {
       // A replacement can invalidate ctx before throwing. In that case the
       // inactive marker remains authoritative and a later resume is required.
       try {
+        const reason = error instanceof Error ? error.message : String(error);
         const paused: LoopState = {
           ...next,
           status: "paused",
+          pauseReason: reason,
+          pausedAt: Date.now(),
           ...(sourceIdentity.id ? { ownerSessionId: sourceIdentity.id } : {}),
           ...(sourceIdentity.file ? { ownerSessionFile: sourceIdentity.file } : {}),
         };
         persist(pi, paused);
         runState = paused;
         renderWidget(ctx, paused);
-        notify(ctx, `loop paused: ${error instanceof Error ? error.message : String(error)}`, "error");
+        notify(ctx, `loop paused: ${reason}`, "error");
       } catch {
         console.error(`[pi-loop] session replacement failed: ${error instanceof Error ? error.message : String(error)}`);
       }
@@ -686,6 +846,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     const canAdvance = ACTIVE_STATUSES.has(state.status) || (allowPaused && state.status === "paused");
     if (!canAdvance || transitionInFlight) return;
     clearContinuationWait();
+    clearRetryWait();
 
     if (state.status === "stopping") {
       const stopped = { ...state, status: "stopped" as const };
@@ -706,11 +867,19 @@ export default function loopExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    const {
+      pauseReason: _pauseReason,
+      pausedAt: _pausedAt,
+      nextActionAt: _nextActionAt,
+      ...withoutPause
+    } = state;
     const next: LoopState = {
-      ...state,
+      ...withoutPause,
       currentIteration: state.currentIteration + 1,
       remainingBudget: nextBudget - 1,
       pendingRetune: null,
+      retryCount: 0,
+      phase: "running",
       status: "active",
     };
     await replaceForIteration(ctx, next);
@@ -727,27 +896,25 @@ export default function loopExtension(pi: ExtensionAPI): void {
         void (result as Promise<unknown>).catch((error) => {
           const latest = currentState(ctx);
           if (!latest || latest.runId !== state.runId || latest.currentIteration !== state.currentIteration) return;
-          const paused = { ...latest, status: "paused" as const };
+          const reason = error instanceof Error ? error.message : String(error);
           try {
-            persist(pi, paused);
-            renderWidget(ctx, paused);
+            pauseLoop(ctx, latest, reason);
           } catch {
             // The runtime may already have replaced this session.
           }
-          console.error(`[pi-loop] continuation failed: ${error instanceof Error ? error.message : String(error)}`);
+          console.error(`[pi-loop] continuation failed: ${reason}`);
         });
       }
     } catch (error) {
       const latest = currentState(ctx);
       if (!latest || latest.runId !== state.runId || latest.currentIteration !== state.currentIteration) return;
-      const paused = { ...latest, status: "paused" as const };
+      const reason = error instanceof Error ? error.message : String(error);
       try {
-        persist(pi, paused);
-        renderWidget(ctx, paused);
+        pauseLoop(ctx, latest, reason);
       } catch {
         // The runtime may already have replaced this session.
       }
-      notify(ctx, `loop paused: ${error instanceof Error ? error.message : String(error)}`, "error");
+      notify(ctx, `loop paused: ${reason}`, "error");
     }
   }
 
@@ -762,10 +929,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     if (parsed.kind === "pause") {
       const state = currentState(ctx);
       if (!state || state.runId !== parsed.runId || state.currentIteration !== parsed.iteration || !statusIsActive(state)) return;
-      clearContinuationWait();
-      const paused = { ...state, status: "paused" as const };
-      persist(pi, paused);
-      renderWidget(ctx, paused);
+      pauseLoop(ctx, state, "iteration prompt failed to start");
       return;
     }
 
@@ -784,7 +948,14 @@ export default function loopExtension(pi: ExtensionAPI): void {
         notify(ctx, "a loop must be active, stopping, or paused to update its delay", "error");
         return;
       }
-      const updated = { ...state, delay: parsed.delay };
+      const nextActionAt = state.phase === "waiting" && state.nextActionAt !== undefined
+        ? state.nextActionAt - state.delay + parsed.delay
+        : state.nextActionAt;
+      const updated = {
+        ...state,
+        delay: parsed.delay,
+        ...(nextActionAt !== undefined ? { nextActionAt } : {}),
+      };
       persist(pi, updated);
       renderWidget(ctx, updated);
       if (state.status === "active") rescheduleContinuation(ctx, updated);
@@ -806,6 +977,8 @@ export default function loopExtension(pi: ExtensionAPI): void {
       }
       if (isWaitingForContinuation(ctx, state)) {
         clearContinuationWait();
+        clearRetryWait();
+        clearRecoveryTimer();
         const stopped = { ...state, status: "stopped" as const };
         persist(pi, stopped);
         clearWidget(ctx);
@@ -844,7 +1017,18 @@ export default function loopExtension(pi: ExtensionAPI): void {
         notify(ctx, state && statusIsActive(state) ? "loop is already active" : "loop is not paused", "error");
         return;
       }
-      const resumed = { ...state, status: "active" as const };
+      const {
+        pauseReason: _pauseReason,
+        pausedAt: _pausedAt,
+        nextActionAt: _nextActionAt,
+        ...withoutPause
+      } = state;
+      const resumed: LoopState = {
+        ...withoutPause,
+        status: "active",
+        retryCount: 0,
+        phase: "running",
+      };
       persist(pi, resumed);
       renderWidget(ctx, resumed);
       handledSettlementKey = undefined;
@@ -922,6 +1106,8 @@ export default function loopExtension(pi: ExtensionAPI): void {
       pendingRetune: null,
       delay: parsed.delay,
       status: "active",
+      retryCount: 0,
+      phase: "running",
       ...(contextIdentity(ctx).id ? { ownerSessionId: contextIdentity(ctx).id } : {}),
       ...(contextIdentity(ctx).file ? { ownerSessionFile: contextIdentity(ctx).file } : {}),
     };
@@ -930,8 +1116,10 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   pi.on("session_start", (event, ctx) => {
     clearContinuationWait();
+    clearRetryWait();
+    clearRecoveryTimer();
     clearCommandInterruption();
-    pendingFailureKey = undefined;
+    pendingFailure = undefined;
     currentSessionManagerRef = ctx.sessionManager;
     transitionInFlight = false;
     handledSettlementKey = undefined;
@@ -940,13 +1128,15 @@ export default function loopExtension(pi: ExtensionAPI): void {
     runState = owned;
     if (!owned || owned.status === "inactive") clearWidget(ctx);
     else renderWidget(ctx, owned);
-    // `event` is intentionally accepted so this handler is safe for all
-    // startup/new/resume reasons. New-session setup writes the transferred
-    // state just after this event; before_agent_start restores it lazily.
-    void event;
+    // New-session setup writes transferred state after this event and starts
+    // its prompt explicitly. Existing active owners represent interrupted work.
+    if (owned && statusIsActive(owned) && event.reason !== "new" && event.reason !== "fork") {
+      scheduleStartupRecovery(ctx, owned);
+    }
   });
 
   pi.on("before_agent_start", (_event, ctx) => {
+    clearRecoveryTimer();
     const loaded = currentState(ctx);
     if (!loaded || !statusIsActive(loaded)) return;
     transitionInFlight = false;
@@ -960,14 +1150,17 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   pi.on("message_end", (event, ctx) => {
     if (event.message.role !== "assistant") return;
-    recordAssistantOutcome(ctx, (event.message as { stopReason?: string }).stopReason);
+    recordAssistantOutcome(ctx, event.message as { stopReason?: string; errorMessage?: string });
   });
 
   pi.on("agent_end", (event, ctx) => {
     const assistant = [...event.messages]
       .reverse()
-      .find((message) => message.role === "assistant") as { stopReason?: string } | undefined;
-    recordAssistantOutcome(ctx, assistant?.stopReason);
+      .find((message) => message.role === "assistant") as {
+        stopReason?: string;
+        errorMessage?: string;
+      } | undefined;
+    recordAssistantOutcome(ctx, assistant);
   });
 
   pi.on("agent_settled", (_event, ctx) => {
@@ -976,17 +1169,21 @@ export default function loopExtension(pi: ExtensionAPI): void {
     const key = stateKey(ctx, loaded);
     if (commandInterruptedKey === key && loaded.status === "active") {
       clearCommandInterruption();
-      pendingFailureKey = undefined;
+      pendingFailure = undefined;
       handledSettlementKey = undefined;
       continueCurrentIteration(ctx, loaded);
       return;
     }
     clearCommandInterruption();
-    if (pendingFailureKey === key) {
-      pendingFailureKey = undefined;
-      const paused = { ...loaded, status: "paused" as const };
-      persist(pi, paused);
-      renderWidget(ctx, paused);
+    if (pendingFailure?.key === key) {
+      const failure = pendingFailure;
+      pendingFailure = undefined;
+      if (failure.stopReason === "error" && (loaded.retryCount ?? 0) < DEFAULT_LOOP_RETRIES) {
+        scheduleRetry(ctx, loaded, failure);
+      } else {
+        pauseLoop(ctx, loaded, failure.reason);
+        notify(ctx, `loop paused: ${failure.reason}`, "error");
+      }
       return;
     }
     if (handledSettlementKey === key) return;
@@ -996,8 +1193,10 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   pi.on("session_tree", (_event, ctx) => {
     clearContinuationWait();
+    clearRetryWait();
+    clearRecoveryTimer();
     clearCommandInterruption();
-    pendingFailureKey = undefined;
+    pendingFailure = undefined;
     currentSessionManagerRef = ctx.sessionManager;
     handledSettlementKey = undefined;
     const loaded = latestStateFromContext(ctx);
@@ -1005,14 +1204,17 @@ export default function loopExtension(pi: ExtensionAPI): void {
     runState = owned;
     if (!owned || owned.status === "inactive") clearWidget(ctx);
     else renderWidget(ctx, owned);
+    if (owned && statusIsActive(owned)) scheduleStartupRecovery(ctx, owned);
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
+  pi.on("session_shutdown", (event, ctx) => {
     clearContinuationWait();
+    clearRetryWait();
+    clearRecoveryTimer();
     clearCommandInterruption();
-    pendingFailureKey = undefined;
+    pendingFailure = undefined;
     const loaded = currentState(ctx);
-    if (loaded && statusIsActive(loaded) && !transitionInFlight) {
+    if (event.reason !== "reload" && loaded && statusIsActive(loaded) && !transitionInFlight) {
       try {
         persist(pi, { ...loaded, status: "inactive" });
       } catch {
