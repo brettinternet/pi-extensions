@@ -27,7 +27,6 @@ const THINKING_TOKEN_BUDGETS: Record<Exclude<ThinkingLevel, "off">, number> = {
   max: 16_384,
 };
 
-const OUTPUT_KEYS = new Set(["phase", "current", "completed", "blocked", "confidence"]);
 export const MIN_CONFIDENCE = 0.5;
 export const INFERENCE_SYSTEM_PROMPT = [
   "Classify the observed coding activity into a compact progress snapshot.",
@@ -128,17 +127,20 @@ function oneLine(value: unknown, name: string, maxLength: number, optional = fal
   if (/\bverified\b/i.test(normalized)) {
     throw new Error(`inference field "${name}" cannot claim verification`);
   }
-  if ((!optional && !normalized) || normalized.length > maxLength) {
-    throw new Error(`inference field "${name}" must contain ${optional ? "0" : "1"}-${maxLength} characters`);
+  if (!optional && !normalized) {
+    throw new Error(`inference field "${name}" must not be empty`);
   }
-  return normalized;
+  return normalized.slice(0, maxLength);
 }
 
 function labels(value: unknown, name: string): string[] {
-  if (!Array.isArray(value) || value.length > 3) {
-    throw new Error(`inference field "${name}" must be an array of at most three labels`);
+  if (!Array.isArray(value)) {
+    throw new Error(`inference field "${name}" must be an array`);
   }
-  return value.map((label) => oneLine(label, name, 96));
+  return value
+    .slice(0, 3)
+    .map((label) => oneLine(label, name, 96, true))
+    .filter(Boolean);
 }
 
 export function parseInference(value: unknown): SemanticSnapshot {
@@ -146,20 +148,16 @@ export function parseInference(value: unknown): SemanticSnapshot {
     throw new Error("inference output must be a JSON object");
   }
   const input = value as Record<string, unknown>;
-  const keys = Object.keys(input);
-  if (keys.some((key) => !OUTPUT_KEYS.has(key)) || keys.length !== OUTPUT_KEYS.size) {
-    throw new Error("inference output has missing or unknown fields");
-  }
   if (typeof input.confidence !== "number" || !Number.isFinite(input.confidence) || input.confidence < 0 || input.confidence > 1) {
     throw new Error('inference field "confidence" must be a number from 0 to 1');
   }
   if (input.confidence < MIN_CONFIDENCE) throw new Error("inference confidence is too low");
 
   return {
-    phase: oneLine(input.phase, "phase", 48),
-    current: oneLine(input.current, "current", 96, true),
-    completed: labels(input.completed, "completed"),
-    blocked: labels(input.blocked, "blocked"),
+    phase: (input.phase === undefined ? "" : oneLine(input.phase, "phase", 48, true)) || "Progress",
+    current: input.current === undefined ? "" : oneLine(input.current, "current", 96, true),
+    completed: input.completed === undefined ? [] : labels(input.completed, "completed"),
+    blocked: input.blocked === undefined ? [] : labels(input.blocked, "blocked"),
     confidence: input.confidence,
   };
 }

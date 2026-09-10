@@ -78,18 +78,26 @@ describe("progress inference contract", () => {
     expect(INFERENCE_SYSTEM_PROMPT).toContain("arrays of at most three 1-96 character labels");
   });
 
-  test("normalizes a valid bounded object", () => {
+  test("normalizes and bounds recoverable output", () => {
     expect(parseInference({ ...valid, phase: " Verification\n" })).toEqual(valid);
     expect(parseInference({ ...valid, current: "" })).toEqual({ ...valid, current: "" });
+    expect(parseInference({ ...valid, phase: "x".repeat(49) }).phase).toBe("x".repeat(48));
+    expect(parseInference({ ...valid, current: "x".repeat(97) }).current).toBe("x".repeat(96));
+    expect(parseInference({ ...valid, completed: ["a", "b", "c", "d"] }).completed).toEqual(["a", "b", "c"]);
+    expect(parseInference({ ...valid, completed: ["", "a"] }).completed).toEqual(["a"]);
+    expect(parseInference({ confidence: 0.9, extra: true })).toEqual({
+      phase: "Progress",
+      current: "",
+      completed: [],
+      blocked: [],
+      confidence: 0.9,
+    });
+    expect(parseInference({ ...valid, phase: "   " }).phase).toBe("Progress");
     expect(inferenceFromCompletion({ content: [{ type: "text", text: `\`\`\`json\n${JSON.stringify(valid)}\n\`\`\`` }], stopReason: "stop" })).toEqual(valid);
   });
 
-  test("rejects unknown, missing, oversized, low-confidence, and invalid output", () => {
-    expect(() => parseInference({ ...valid, verified: true })).toThrow("missing or unknown");
-    const { blocked: _blocked, ...missing } = valid;
-    expect(() => parseInference(missing)).toThrow("missing or unknown");
-    expect(() => parseInference({ ...valid, completed: ["a", "b", "c", "d"] })).toThrow("at most three");
-    expect(() => parseInference({ ...valid, phase: "x".repeat(49) })).toThrow("1-48");
+  test("rejects low-confidence and unsafe or malformed output", () => {
+    expect(() => parseInference({ ...valid, completed: "Configured FleetView" })).toThrow("must be an array");
     expect(() => parseInference({ ...valid, confidence: 0.2 })).toThrow("too low");
     expect(() => parseInference({ ...valid, phase: "Verified" })).toThrow("cannot claim verification");
     expect(() => parseInference({ ...valid, phase: "\u001b[2JVerification" })).toThrow("terminal control");
