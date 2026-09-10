@@ -8,6 +8,7 @@ import loopExtension, {
   formatLoopWidget,
   parseLoopCommand,
   parseLoopDuration,
+  parseLoopTimeframe,
   readLoopState,
   type LoopState,
 } from "../../extensions/loop/index.ts";
@@ -43,9 +44,13 @@ function stateOf(value: Manager): LoopState | undefined {
   return readLoopState(value.entries);
 }
 
-function createHarness(options: { cancelReplacement?: boolean } = {}) {
+function createHarness(options: {
+  cancelReplacement?: boolean;
+  beforeWithSession?: (manager: Manager, replacementNumber: number) => void;
+} = {}) {
   const handlers = new Map<string, (...args: any[]) => any>();
   let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
+  let tool: Parameters<ExtensionAPI["registerTool"]>[0] | undefined;
   const notifications: string[] = [];
   const widgets: Array<{ key: string; value: unknown }> = [];
   const prompts: string[] = [];
@@ -56,6 +61,7 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
   ]);
   let replacementNumber = 0;
   let idle = true;
+  let abortCount = 0;
   let activeContext: ExtensionCommandContext;
 
   const ui = {
@@ -76,7 +82,7 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
     isIdle: () => idle,
     isProjectTrusted: () => true,
     signal: undefined,
-    abort: () => {},
+    abort: () => { abortCount += 1; },
     hasPendingMessages: () => false,
     shutdown: () => {},
     getContextUsage: () => undefined,
@@ -87,6 +93,10 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
       content: string,
       options?: { expandPromptTemplates?: boolean },
     ) => {
+      if (options?.expandPromptTemplates && content.startsWith("/loop ")) {
+        await command?.handler(content.slice("/loop ".length), activeContext);
+        return;
+      }
       prompts.push(content);
       promptOptions.push(options);
     },
@@ -102,6 +112,9 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
     on: (name: string, handler: (...args: any[]) => any) => handlers.set(name, handler),
     registerCommand: (_name: string, value: Parameters<ExtensionAPI["registerCommand"]>[1]) => {
       command = value;
+    },
+    registerTool: (value: Parameters<ExtensionAPI["registerTool"]>[0]) => {
+      tool = value;
     },
     appendEntry: (customType: string, data: unknown) => current.entries.push({ type: "custom", customType, data }),
     sendUserMessage: (content: string, opts?: { expandPromptTemplates?: boolean }) => {
@@ -129,6 +142,7 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
     activeContext = nextContext;
     handlers.get("session_start")?.({ reason: "new" }, nextContext);
     await opts?.setup?.(next);
+    options.beforeWithSession?.(next, replacementNumber);
     await opts?.withSession?.(nextContext);
     return { cancelled: false };
   };
@@ -141,6 +155,7 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
   return {
     handlers,
     command: command!,
+    tool: tool!,
     context: initialContext,
     get current() {
       return current;
@@ -150,12 +165,19 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
     prompts,
     promptOptions,
     parents,
+    get abortCount() {
+      return abortCount;
+    },
     settle: async () => {
       handlers.get("agent_settled")?.({}, activeContext);
       await new Promise((resolve) => setTimeout(resolve, 0));
       await new Promise((resolve) => setTimeout(resolve, 0));
     },
-    agentStart: () => handlers.get("before_agent_start")?.({ prompt: prompts.at(-1) ?? "" }, activeContext),
+    agentStart: () => handlers.get("before_agent_start")?.({
+      prompt: prompts.at(-1) ?? "",
+      systemPrompt: "base prompt",
+      systemPromptOptions: {},
+    }, activeContext),
     setIdle: (value: boolean) => { idle = value; },
     messageEnd: (stopReason: "stop" | "error" | "aborted", errorMessage?: string) =>
       handlers.get("message_end")?.({ message: { role: "assistant", stopReason, errorMessage } }, activeContext),
@@ -206,10 +228,17 @@ describe("loop parser and state", () => {
       delay: 2_000,
       prompt: "fix the failing tests",
     });
+    expect(parseLoopCommand("for 4h --delay 5m watch the queue")).toEqual({
+      kind: "startTimed",
+      duration: 4 * 60 * 60 * 1_000,
+      delay: 5 * 60 * 1_000,
+      prompt: "watch the queue",
+    });
     expect(parseLoopCommand("delay 1m")).toEqual({ kind: "delay", delay: 60_000 });
     expect(parseLoopCommand("delay off")).toEqual({ kind: "delay", delay: 0 });
     expect(parseLoopDuration("1000ms")).toBe(1_000);
     expect(parseLoopDuration("1.5s")).toBe(1_500);
+    expect(parseLoopTimeframe("2d")).toBe(2 * 24 * 60 * 60 * 1_000);
     expect(parseLoopCommand("4")).toEqual({ kind: "retune", count: 4 });
     expect(parseLoopCommand("+2")).toEqual({ kind: "adjust", delta: 2 });
     expect(parseLoopCommand("-1")).toEqual({ kind: "adjust", delta: -1 });
@@ -239,6 +268,9 @@ describe("loop parser and state", () => {
     expect(() => parseLoopCommand("delay 25h")).toThrow("24h");
     expect(() => parseLoopCommand("3 --delay nope fix")).toThrow("duration");
     expect(() => parseLoopCommand("3 --delay 1s")).toThrow("prompt");
+    expect(() => parseLoopCommand("for 4h watch the queue")).toThrow("timed loops require");
+    expect(() => parseLoopCommand("for 4h --delay off watch the queue")).toThrow("non-zero");
+    expect(() => parseLoopCommand("for 31d --delay 1h watch the queue")).toThrow("30d");
   });
 
   test("completes public controls and common iteration counts", () => {
@@ -269,6 +301,29 @@ describe("loop parser and state", () => {
     expect(command.getArgumentCompletions?.("3 --delay ")).toContainEqual({
       value: "3 --delay 1s",
       label: "3 --delay 1s",
+      description: "Set the delay between settled iterations",
+    });
+    expect(command.getArgumentCompletions?.("fo")).toContainEqual({
+      value: "for ",
+      label: "for <duration> --delay <duration> <prompt>",
+      description: "Run until a wall-clock deadline",
+    });
+    expect(command.getArgumentCompletions?.("for 4h ")).toEqual([{
+      value: "for 4h --delay ",
+      label: "for 4h --delay <duration> <prompt>",
+      description: "Run until 4h elapses",
+    }]);
+    expect(command.getArgumentCompletions?.("for 4h --delay ")).toContainEqual({
+      value: "for 4h --delay 5m",
+      label: "for 4h --delay 5m",
+      description: "Set the delay between settled iterations",
+    });
+    expect(command.getArgumentCompletions?.("for 4h --delay ")).not.toContainEqual(
+      expect.objectContaining({ value: "for 4h --delay off" }),
+    );
+    expect(command.getArgumentCompletions?.("for 4h --delay=")).toContainEqual({
+      value: "for 4h --delay=5m",
+      label: "for 4h --delay=5m",
       description: "Set the delay between settled iterations",
     });
     expect(command.getArgumentCompletions?.("__")).toBeNull();
@@ -348,6 +403,95 @@ describe("loop lifecycle", () => {
     expect(harness.current.entries.every((entry) => entry.customType === LOOP_STATE_ENTRY)).toBeTrue();
     expect(stateOf(harness.current)).toMatchObject({ currentIteration: 1, remainingBudget: 1, status: "active" });
     expect(latestWidgetLines(harness)).toEqual(["loop active 2/2 · inspect the repository"]);
+  });
+
+  test("runs timed loops until their persisted deadline", async () => {
+    const harness = createHarness();
+    await harness.command.handler("for 4h --delay 5m watch the queue", harness.context);
+
+    expect(harness.state()).toMatchObject({
+      currentIteration: 1,
+      remainingBudget: 0,
+      delay: 5 * 60 * 1_000,
+      status: "active",
+    });
+    expect(harness.state()?.endsAt).toBeGreaterThan(Date.now() + 3 * 60 * 60 * 1_000);
+    expect(formatLoopStatus(harness.state())).toContain("ends at:");
+    expect(formatLoopWidget(harness.state()!, 100, harness.state()!.endsAt! - 4 * 60 * 60 * 1_000)).toBe(
+      "loop active · 4h left · delay 5m · watch the queue",
+    );
+
+    const first = harness.state()!;
+    await harness.command.handler(`__continue ${first.runId} 1`, harness.commandContext());
+    expect(harness.state()).toMatchObject({ status: "active", currentIteration: 2, remainingBudget: 0 });
+
+    harness.setState({ endsAt: Date.now() - 1 });
+    await harness.settle();
+    expect(harness.state()).toMatchObject({ status: "completed", currentIteration: 2 });
+    expect(harness.prompts).toEqual(["watch the queue", "watch the queue"]);
+  });
+
+  test("does not dispatch an iteration whose deadline expires during session replacement", async () => {
+    const harness = createHarness({
+      beforeWithSession: (replacement) => {
+        const entry = replacement.entries.at(-1);
+        if (entry?.customType === LOOP_STATE_ENTRY) {
+          (entry.data as LoopState).endsAt = Date.now() - 1;
+        }
+      },
+    });
+
+    await harness.command.handler("for 1s --delay 1s watch the queue", harness.context);
+
+    expect(harness.state()).toMatchObject({ status: "completed", currentIteration: 1 });
+    expect(harness.prompts).toEqual([]);
+  });
+
+  test("makes active loop sessions aware of semantic pause without cache-varying iteration data", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 perform unattended work", harness.context);
+
+    const promptResult = harness.agentStart() as { systemPrompt?: string };
+    expect(promptResult.systemPrompt).toContain("active unattended loop");
+    expect(promptResult.systemPrompt).toContain("loop_pause");
+    expect(promptResult.systemPrompt).not.toContain("iteration 1");
+
+    const result = await (harness.tool.execute as any)(
+      "tool-1",
+      { reason: "deployment credentials are required" },
+      undefined,
+      undefined,
+      harness.commandContext(),
+    );
+    expect(result.terminate).toBeTrue();
+    expect(harness.tool.executionMode).toBe("sequential");
+    expect(harness.abortCount).toBe(1);
+    expect(harness.state()).toMatchObject({
+      status: "paused",
+      pauseReason: "deployment credentials are required",
+      currentIteration: 1,
+      remainingBudget: 1,
+    });
+    await harness.settle();
+    expect(harness.prompts).toEqual(["perform unattended work"]);
+  });
+
+  test("completes an expired timed loop instead of resuming blocked work", async () => {
+    const harness = createHarness();
+    await harness.command.handler("for 4h --delay 5m watch the queue", harness.context);
+    await (harness.tool.execute as any)(
+      "tool-1",
+      { reason: "human approval is required" },
+      undefined,
+      undefined,
+      harness.commandContext(),
+    );
+    harness.setState({ endsAt: Date.now() - 1 });
+
+    await harness.command.handler("resume", harness.commandContext());
+
+    expect(harness.state()).toMatchObject({ status: "completed", currentIteration: 1 });
+    expect(harness.prompts).toEqual(["watch the queue"]);
   });
 
   test("dispatches a nested slash command on every iteration", async () => {
@@ -708,7 +852,7 @@ describe("loop lifecycle", () => {
     const boundary = createHarness();
     await boundary.command.handler("2 --delay 1s next task", boundary.context);
     await boundary.settle();
-    boundary.setState({ phase: "waiting", nextActionAt: Date.now() - 1 });
+    boundary.setState({ phase: "waiting", nextActionAt: Date.now() - 1, settledAt: undefined });
 
     await boundary.sessionStart("startup");
     await new Promise((resolve) => setTimeout(resolve, 0));
@@ -731,12 +875,13 @@ describe("loop lifecycle", () => {
     const harness = createHarness();
     await harness.command.handler("2 --delay 1s keep working", harness.context);
     await harness.settle();
+    const settledAt = Date.now() - 2_000;
     const originalDeadline = Date.now() + 10_000;
-    harness.setState({ phase: "waiting", nextActionAt: originalDeadline });
+    harness.setState({ phase: "waiting", settledAt, nextActionAt: originalDeadline });
 
     const startup = harness.sessionStart("startup");
     await harness.command.handler("delay 2s", commandContext(harness));
-    expect(harness.state()?.nextActionAt).toBe(originalDeadline + 1_000);
+    expect(harness.state()?.nextActionAt).toBe(settledAt + 2_000);
     await harness.command.handler("end", commandContext(harness));
     await startup;
   });

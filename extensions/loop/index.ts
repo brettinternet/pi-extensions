@@ -7,19 +7,24 @@ import type {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
+import { Type } from "typebox";
 
 export const LOOP_STATE_ENTRY = "pi-loop-state-v1";
 export const LOOP_WIDGET_KEY = "pi-loop";
 export const LOOP_USAGE =
-  "usage: /loop <positive-count> [--delay <duration>] <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop delay <duration> | /loop prompt <text> | /loop append <text> | /loop status | /loop resume | /loop next | /loop end";
+  "usage: /loop <positive-count> [--delay <duration>] <prompt> | /loop for <duration> --delay <duration> <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop delay <duration> | /loop prompt <text> | /loop append <text> | /loop status | /loop resume | /loop next | /loop end";
 
 export const MIN_LOOP_DELAY_MS = 1_000;
 export const MAX_LOOP_DELAY_MS = 24 * 60 * 60 * 1_000;
+export const MAX_LOOP_TIMEFRAME_MS = 30 * 24 * 60 * 60 * 1_000;
 export const DEFAULT_LOOP_RETRIES = 3;
 export const DEFAULT_LOOP_RETRY_DELAY_MS = 30_000;
 
 const LOOP_CONTINUATION_PROMPT =
   "Continue the current loop iteration from where you left off without repeating completed work.";
+const LOOP_AGENT_GUIDANCE = `## Active Loop
+
+This session is part of an active unattended loop. If no useful work can continue without human input, credentials, permissions, or another non-transient external dependency, call loop_pause with the blocker. Do not pause for a temporary condition expected to resolve in a later iteration.`;
 
 export type LoopStatus = "active" | "stopping" | "paused" | "completed" | "stopped" | "inactive";
 export type LoopPhase = "running" | "waiting" | "retrying";
@@ -36,6 +41,8 @@ export interface LoopState {
   retryCount?: number;
   phase?: LoopPhase;
   nextActionAt?: number;
+  settledAt?: number;
+  endsAt?: number;
   pauseReason?: string;
   pausedAt?: number;
   ownerSessionId?: string;
@@ -44,6 +51,7 @@ export interface LoopState {
 
 export type ParsedLoopCommand =
   | { kind: "start"; count: number; delay: number; prompt: string }
+  | { kind: "startTimed"; duration: number; delay: number; prompt: string }
   | { kind: "retune"; count: number }
   | { kind: "adjust"; delta: number }
   | { kind: "delay"; delay: number }
@@ -72,11 +80,17 @@ function completeArguments(
 }
 
 const COMMON_LOOP_DELAYS = ["off", "1s", "5s", "10s", "30s", "1m", "5m", "1h", "24h"] as const;
+const COMMON_LOOP_TIMEFRAMES = ["1h", "4h", "8h", "12h", "24h", "2d", "7d"] as const;
 
-function delayCompletions(prefix: string, command: string): ArgumentCompletion[] | null {
-  return completeArguments(prefix, COMMON_LOOP_DELAYS.map((value) => ({
-    value: `${command} ${value}`,
-    label: `${command} ${value}`,
+function delayCompletions(
+  prefix: string,
+  command: string,
+  values: readonly string[] = COMMON_LOOP_DELAYS,
+  separator = " ",
+): ArgumentCompletion[] | null {
+  return completeArguments(prefix, values.map((value) => ({
+    value: `${command}${separator}${value}`,
+    label: `${command}${separator}${value}`,
     description: "Set the delay between settled iterations",
   })));
 }
@@ -86,24 +100,66 @@ function completeLoopArguments(prefix: string): ArgumentCompletion[] | null {
   const delayCommand = /^(delay|--delay)(?:\s+(.*))?$/.exec(input);
   if (delayCommand?.[2] !== undefined) return delayCompletions(prefix, delayCommand[1]);
 
-  const countDelay = /^(\d+)\s+--delay(?:\s+(.*))?$/.exec(input);
+  const timedDelay = /^for\s+(\S+)\s+--delay(=|\s+)?(.*)$/.exec(input);
+  if (timedDelay) {
+    if (timedDelay[2] !== undefined) {
+      const equals = timedDelay[2] === "=";
+      return delayCompletions(
+        prefix,
+        `for ${timedDelay[1]} --delay${equals ? "=" : ""}`,
+        COMMON_LOOP_DELAYS.filter((value) => value !== "off"),
+        equals ? "" : " ",
+      );
+    }
+    return [{
+      value: `for ${timedDelay[1]} --delay `,
+      label: `for ${timedDelay[1]} --delay <duration>`,
+      description: "Set the required delay between timed-loop iterations",
+    }];
+  }
+
+  const timedPrefix = /^for(?:\s+(.*))?$/.exec(input);
+  if (timedPrefix) {
+    const durationPrefix = timedPrefix[1] ?? "";
+    const exactDuration = COMMON_LOOP_TIMEFRAMES.find((value) => durationPrefix.trim() === value);
+    if (exactDuration && /\s$/.test(durationPrefix)) {
+      return [{
+        value: `for ${exactDuration} --delay `,
+        label: `for ${exactDuration} --delay <duration> <prompt>`,
+        description: `Run until ${exactDuration} elapses`,
+      }];
+    }
+    return completeArguments(durationPrefix, COMMON_LOOP_TIMEFRAMES.map((value) => ({
+      value: `for ${value} `,
+      label: `for ${value} --delay <duration> <prompt>`,
+      description: `Run until ${value} elapses`,
+    })));
+  }
+
+  const countDelay = /^(\d+)\s+--delay(=|\s+)?(.*)$/.exec(input);
   if (countDelay) {
     if (countDelay[2] !== undefined) {
-      return delayCompletions(prefix, `${countDelay[1]} --delay`);
+      const equals = countDelay[2] === "=";
+      return delayCompletions(
+        prefix,
+        `${countDelay[1]} --delay${equals ? "=" : ""}`,
+        COMMON_LOOP_DELAYS,
+        equals ? "" : " ",
+      );
     }
-    return completeArguments(prefix, [{
+    return [{
       value: `${countDelay[1]} --delay `,
       label: `${countDelay[1]} --delay <duration>`,
       description: "Set the delay between settled iterations for this loop",
-    }]);
+    }];
   }
 
   const countPrefix = /^(\d+)\s+$/.exec(input);
   if (countPrefix) {
-    return completeArguments(prefix, [
+    return [
       { value: `${countPrefix[1]} `, label: `${countPrefix[1]} <prompt>`, description: `Run a prompt ${countPrefix[1]} time${countPrefix[1] === "1" ? "" : "s"}` },
       { value: `${countPrefix[1]} --delay `, label: `${countPrefix[1]} --delay <duration>`, description: "Set the delay between settled iterations for this loop" },
-    ]);
+    ];
   }
 
   return completeArguments(prefix, [
@@ -112,9 +168,9 @@ function completeLoopArguments(prefix: string): ArgumentCompletion[] | null {
     { value: "next", label: "next", description: "Skip a paused iteration and start the next one" },
     { value: "end", label: "end", description: "End the loop gracefully" },
     { value: "delay ", label: "delay <duration>", description: "Set the delay between settled iterations" },
-    { value: "--delay ", label: "--delay <duration>", description: "Set the delay when starting a loop" },
     { value: "prompt ", label: "prompt <text>", description: "Replace the future loop prompt" },
     { value: "append ", label: "append <text>", description: "Append to the future loop prompt" },
+    { value: "for ", label: "for <duration> --delay <duration> <prompt>", description: "Run until a wall-clock deadline" },
     { value: "+1", label: "+1", description: "Add one future iteration" },
     { value: "-1", label: "-1", description: "Remove one future iteration" },
     { value: "1 ", label: "1 <prompt>", description: "Run a prompt once" },
@@ -140,33 +196,42 @@ function isValidLoopDelay(value: unknown): value is number {
     (value === 0 || (value >= MIN_LOOP_DELAY_MS && value <= MAX_LOOP_DELAY_MS));
 }
 
-const LOOP_DURATION_PATTERN = /^(\d+(?:\.\d+)?|\.\d+)(ms|s|m|h)$/;
+const LOOP_DURATION_PATTERN = /^(\d+(?:\.\d+)?|\.\d+)(ms|s|m|h|d)$/;
 const LOOP_DURATION_MULTIPLIERS: Record<string, number> = {
   ms: 1,
   s: 1_000,
   m: 60_000,
   h: 3_600_000,
+  d: 24 * 3_600_000,
 };
 
-export function parseLoopDuration(value: string): number {
-  const input = value.trim();
-  if (input === "off") return 0;
-  const match = LOOP_DURATION_PATTERN.exec(input);
+function parseDuration(value: string, label: string, maximum: number, maximumLabel: string): number {
+  const match = LOOP_DURATION_PATTERN.exec(value.trim());
   if (!match) {
-    throw new Error("delay must be a duration such as 1s, 5000ms, 1m, or 1h");
+    throw new Error(`${label} must be a duration such as 1s, 5m, 4h, or 1d`);
   }
   const milliseconds = Number(match[1]) * LOOP_DURATION_MULTIPLIERS[match[2]];
   if (!Number.isFinite(milliseconds) || milliseconds < MIN_LOOP_DELAY_MS) {
-    throw new Error("delay must be at least 1s");
+    throw new Error(`${label} must be at least 1s`);
   }
-  if (milliseconds > MAX_LOOP_DELAY_MS) {
-    throw new Error("delay must not exceed 24h");
+  if (milliseconds > maximum) {
+    throw new Error(`${label} must not exceed ${maximumLabel}`);
   }
   return Math.round(milliseconds);
 }
 
+export function parseLoopDuration(value: string): number {
+  if (value.trim() === "off") return 0;
+  return parseDuration(value, "delay", MAX_LOOP_DELAY_MS, "24h");
+}
+
+export function parseLoopTimeframe(value: string): number {
+  return parseDuration(value, "timeframe", MAX_LOOP_TIMEFRAME_MS, "30d");
+}
+
 export function formatLoopDelay(delay: number): string {
   if (delay === 0) return "off";
+  if (delay % (24 * 3_600_000) === 0) return `${delay / (24 * 3_600_000)}d`;
   if (delay % 3_600_000 === 0) return `${delay / 3_600_000}h`;
   if (delay % 60_000 === 0) return `${delay / 60_000}m`;
   if (delay % 1_000 === 0) return `${delay / 1_000}s`;
@@ -208,6 +273,18 @@ export function parseLoopCommand(args: string): ParsedLoopCommand {
     return first === "prompt"
       ? { kind: "replacePrompt", prompt: rest }
       : { kind: "appendPrompt", prompt: rest };
+  }
+  if (first === "for") {
+    const timed = /^(\S+)\s+--delay(?:=|\s+)(\S+)(?:\s+([\s\S]+))?$/.exec(rest);
+    if (!timed) {
+      throw new Error(`timed loops require: for <duration> --delay <duration> <prompt>; ${LOOP_USAGE}`);
+    }
+    const duration = parseLoopTimeframe(timed[1]);
+    const delay = parseLoopDuration(timed[2]);
+    const prompt = timed[3]?.trim() ?? "";
+    if (delay === 0) throw new Error(`timed loops require a non-zero --delay; ${LOOP_USAGE}`);
+    if (!prompt) throw new Error(`a prompt is required after --delay; ${LOOP_USAGE}`);
+    return { kind: "startTimed", duration, delay, prompt };
   }
 
   // These commands are only emitted by the extension itself. Keeping them in
@@ -305,6 +382,8 @@ export function parseLoopState(value: unknown): LoopState | undefined {
     value.phase !== "retrying"
   ) return undefined;
   if (value.nextActionAt !== undefined && !isNonNegativeInteger(value.nextActionAt)) return undefined;
+  if (value.settledAt !== undefined && !isNonNegativeInteger(value.settledAt)) return undefined;
+  if (value.endsAt !== undefined && (!isNonNegativeInteger(value.endsAt) || delay === 0)) return undefined;
   if (value.pauseReason !== undefined && typeof value.pauseReason !== "string") return undefined;
   if (value.pausedAt !== undefined && !isNonNegativeInteger(value.pausedAt)) return undefined;
   if (value.ownerSessionId !== undefined && typeof value.ownerSessionId !== "string") return undefined;
@@ -322,6 +401,8 @@ export function parseLoopState(value: unknown): LoopState | undefined {
     retryCount: value.retryCount ?? 0,
     phase: value.phase ?? "running",
     ...(value.nextActionAt !== undefined ? { nextActionAt: value.nextActionAt } : {}),
+    ...(value.settledAt !== undefined ? { settledAt: value.settledAt } : {}),
+    ...(value.endsAt !== undefined ? { endsAt: value.endsAt } : {}),
     ...(value.pauseReason ? { pauseReason: value.pauseReason } : {}),
     ...(value.pausedAt !== undefined ? { pausedAt: value.pausedAt } : {}),
     ...(value.ownerSessionId ? { ownerSessionId: value.ownerSessionId } : {}),
@@ -336,8 +417,9 @@ export function formatLoopStatus(state: LoopState | undefined): string {
     `loop: ${state.status}`,
     `run: ${state.runId}`,
     `iteration: ${state.currentIteration}`,
-    `remaining: ${state.remainingBudget}`,
-    `pending retune: ${pending}`,
+    ...(state.endsAt !== undefined
+      ? [`ends at: ${new Date(state.endsAt).toISOString()}`]
+      : [`remaining: ${state.remainingBudget}`, `pending retune: ${pending}`]),
     `delay: ${formatLoopDelay(state.delay ?? 0)}`,
     `retries: ${state.retryCount ?? 0}/${DEFAULT_LOOP_RETRIES}`,
     `phase: ${state.phase ?? "running"}`,
@@ -422,14 +504,34 @@ function isTerminal(state: LoopState | undefined): boolean {
   return Boolean(state && TERMINAL_STATUSES.has(state.status));
 }
 
-export function formatLoopWidget(state: LoopState, width: number): string {
+function formatTimeRemaining(milliseconds: number): string {
+  const seconds = Math.max(1, Math.ceil(milliseconds / 1_000));
+  if (seconds >= 24 * 60 * 60) return `${Math.ceil(seconds / (24 * 60 * 60))}d`;
+  if (seconds >= 60 * 60) return `${Math.ceil(seconds / (60 * 60))}h`;
+  if (seconds >= 60) return `${Math.ceil(seconds / 60)}m`;
+  return `${seconds}s`;
+}
+
+export function formatLoopWidget(state: LoopState, width: number, now = Date.now()): string {
   const prompt = state.prompt.replace(/\s+/g, " ").trim();
   const delay = state.delay > 0 ? ` · delay ${formatLoopDelay(state.delay)}` : "";
+  const timeframe = state.endsAt === undefined
+    ? ""
+    : state.endsAt <= now
+      ? " · deadline reached"
+      : ` · ${formatTimeRemaining(state.endsAt - now)} left`;
   const retries = (state.retryCount ?? 0) > 0
     ? ` · retry ${state.retryCount}/${DEFAULT_LOOP_RETRIES}`
     : "";
   if (state.status === "stopping") {
-    return truncateToWidth(`loop stopping${delay}${retries} · ${prompt}`, width, "…");
+    return truncateToWidth(`loop stopping${timeframe}${delay}${retries} · ${prompt}`, width, "…");
+  }
+  if (state.endsAt !== undefined) {
+    return truncateToWidth(
+      `loop ${state.status}${timeframe}${delay}${retries} · ${prompt}`,
+      width,
+      "…",
+    );
   }
   const futureIterations = state.pendingRetune ?? state.remainingBudget;
   const remainingIterations = futureIterations + 1;
@@ -554,7 +656,11 @@ export default function loopExtension(pi: ExtensionAPI): void {
   function pauseLoop(ctx: ExtensionContext, state: LoopState, reason: string): void {
     clearContinuationWait();
     clearRetryWait();
-    const { nextActionAt: _nextActionAt, ...withoutSchedule } = state;
+    const {
+      nextActionAt: _nextActionAt,
+      settledAt: _settledAt,
+      ...withoutSchedule
+    } = state;
     const paused = {
       ...withoutSchedule,
       status: "paused" as const,
@@ -573,7 +679,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   ): void {
     if (!statusIsActive(state) || transitionInFlight) return;
     const nextBudget = state.pendingRetune ?? state.remainingBudget;
-    if (state.status === "stopping" || nextBudget <= 0 || state.delay === 0) {
+    if (state.status === "stopping" || (state.endsAt === undefined && nextBudget <= 0) || state.delay === 0) {
       clearContinuationWait();
       dispatchContinuation(ctx, state);
       return;
@@ -582,8 +688,10 @@ export default function loopExtension(pi: ExtensionAPI): void {
     const key = stateKey(ctx, state);
     if (continuationWait?.key === key) return;
     clearContinuationWait();
-    const nextActionAt = settledAt + state.delay;
-    const waiting: LoopState = { ...state, phase: "waiting", nextActionAt };
+    const nextActionAt = state.endsAt !== undefined
+      ? Math.min(settledAt + state.delay, state.endsAt)
+      : settledAt + state.delay;
+    const waiting: LoopState = { ...state, phase: "waiting", nextActionAt, settledAt };
     persist(pi, waiting);
     renderWidget(ctx, waiting);
     const waitMs = Math.max(0, nextActionAt - Date.now());
@@ -621,6 +729,10 @@ export default function loopExtension(pi: ExtensionAPI): void {
   }
 
   function continueCurrentIteration(ctx: ExtensionContext, state: LoopState): void {
+    if (state.endsAt !== undefined && Date.now() >= state.endsAt) {
+      dispatchContinuation(ctx, state);
+      return;
+    }
     const content = `${LOOP_CONTINUATION_PROMPT}\n\nCurrent loop instructions:\n${state.prompt}`;
     try {
       pi.sendUserMessage(content, ctx.isIdle() ? undefined : { deliverAs: "followUp" });
@@ -670,7 +782,11 @@ export default function loopExtension(pi: ExtensionAPI): void {
       const latest = currentState(ctx);
       if (!latest || !statusIsActive(latest) || stateKey(ctx, latest) !== key) return;
       if ((latest.retryCount ?? 0) !== retryCount || latest.phase !== "retrying") return;
-      const { nextActionAt: _nextActionAt, ...withoutSchedule } = latest;
+      const {
+        nextActionAt: _nextActionAt,
+        settledAt: _settledAt,
+        ...withoutSchedule
+      } = latest;
       const running: LoopState = { ...withoutSchedule, phase: "running" };
       persist(pi, running);
       renderWidget(ctx, running);
@@ -713,7 +829,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
       if (!latest || !statusIsActive(latest) || stateKey(ctx, latest) !== key) return;
       handledSettlementKey = undefined;
       if (latest.phase === "waiting") {
-        const settledAt = (latest.nextActionAt ?? Date.now()) - latest.delay;
+        const settledAt = latest.settledAt ?? (latest.nextActionAt ?? Date.now()) - latest.delay;
         scheduleContinuation(ctx, latest, settledAt);
         return;
       }
@@ -741,6 +857,13 @@ export default function loopExtension(pi: ExtensionAPI): void {
     // This callback still owns the command context, so it is the safe place to
     // start the turn after the replacement is complete.
     if (replacement.hasUI) showWidget(replacement, state);
+    if (state.endsAt !== undefined && Date.now() >= state.endsAt) {
+      await replacement.sendUserMessage(
+        `/loop __continue ${state.runId} ${state.currentIteration}`,
+        { expandPromptTemplates: true },
+      );
+      return;
+    }
     await replacement.sendUserMessage(state.prompt, { expandPromptTemplates: true });
   }
 
@@ -858,7 +981,15 @@ export default function loopExtension(pi: ExtensionAPI): void {
     }
 
     const nextBudget = state.pendingRetune ?? state.remainingBudget;
-    if (nextBudget <= 0) {
+    if (state.endsAt !== undefined && Date.now() >= state.endsAt) {
+      const completed = { ...state, status: "completed" as const, pendingRetune: null };
+      persist(pi, completed);
+      clearWidget(ctx);
+      runState = completed;
+      notify(ctx, `loop completed at its deadline after ${state.currentIteration} iteration${state.currentIteration === 1 ? "" : "s"}`, "info");
+      return;
+    }
+    if (state.endsAt === undefined && nextBudget <= 0) {
       const completed = { ...state, status: "completed" as const, pendingRetune: null };
       persist(pi, completed);
       clearWidget(ctx);
@@ -871,12 +1002,13 @@ export default function loopExtension(pi: ExtensionAPI): void {
       pauseReason: _pauseReason,
       pausedAt: _pausedAt,
       nextActionAt: _nextActionAt,
+      settledAt: _settledAt,
       ...withoutPause
     } = state;
     const next: LoopState = {
       ...withoutPause,
       currentIteration: state.currentIteration + 1,
-      remainingBudget: nextBudget - 1,
+      remainingBudget: state.endsAt === undefined ? nextBudget - 1 : 0,
       pendingRetune: null,
       retryCount: 0,
       phase: "running",
@@ -948,8 +1080,15 @@ export default function loopExtension(pi: ExtensionAPI): void {
         notify(ctx, "a loop must be active, stopping, or paused to update its delay", "error");
         return;
       }
+      if (state.endsAt !== undefined && parsed.delay === 0) {
+        notify(ctx, "timed loops require a non-zero delay", "error");
+        return;
+      }
       const nextActionAt = state.phase === "waiting" && state.nextActionAt !== undefined
-        ? state.nextActionAt - state.delay + parsed.delay
+        ? Math.min(
+            (state.settledAt ?? state.nextActionAt - state.delay) + parsed.delay,
+            state.endsAt ?? Number.MAX_SAFE_INTEGER,
+          )
         : state.nextActionAt;
       const updated = {
         ...state,
@@ -1017,10 +1156,15 @@ export default function loopExtension(pi: ExtensionAPI): void {
         notify(ctx, state && statusIsActive(state) ? "loop is already active" : "loop is not paused", "error");
         return;
       }
+      if (state.endsAt !== undefined && Date.now() >= state.endsAt) {
+        await advanceAtBoundary(ctx, state.runId, state.currentIteration, true);
+        return;
+      }
       const {
         pauseReason: _pauseReason,
         pausedAt: _pausedAt,
         nextActionAt: _nextActionAt,
+        settledAt: _settledAt,
         ...withoutPause
       } = state;
       const resumed: LoopState = {
@@ -1061,7 +1205,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
         notify(ctx, `loop prompt ${action}; resume will use it`, "info");
       } else if (state.status === "stopping") {
         notify(ctx, `loop prompt ${action}; loop is still stopping`, "info");
-      } else if ((state.pendingRetune ?? state.remainingBudget) === 0) {
+      } else if (state.endsAt === undefined && (state.pendingRetune ?? state.remainingBudget) === 0) {
         notify(ctx, `future loop prompt ${action}; no future iteration is scheduled`, "info");
       } else {
         notify(ctx, `future loop prompt ${action}; active iteration unchanged`, "info");
@@ -1072,6 +1216,10 @@ export default function loopExtension(pi: ExtensionAPI): void {
     if (parsed.kind === "retune" || parsed.kind === "adjust") {
       if (!state || (state.status !== "active" && state.status !== "stopping")) {
         notify(ctx, "a loop must be active to retune its remaining budget", "error");
+        return;
+      }
+      if (state.endsAt !== undefined) {
+        notify(ctx, "a timed loop has no iteration budget to retune", "error");
         return;
       }
       const currentBudget = state.pendingRetune ?? state.remainingBudget;
@@ -1097,22 +1245,57 @@ export default function loopExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    const timed = parsed.kind === "startTimed";
     const initial: LoopState = {
       version: 1,
       runId: randomUUID(),
       prompt: parsed.prompt,
       currentIteration: 1,
-      remainingBudget: parsed.count - 1,
+      remainingBudget: timed ? 0 : parsed.count - 1,
       pendingRetune: null,
       delay: parsed.delay,
       status: "active",
       retryCount: 0,
       phase: "running",
+      ...(timed ? { endsAt: Date.now() + parsed.duration } : {}),
       ...(contextIdentity(ctx).id ? { ownerSessionId: contextIdentity(ctx).id } : {}),
       ...(contextIdentity(ctx).file ? { ownerSessionFile: contextIdentity(ctx).file } : {}),
     };
     await replaceForIteration(ctx, initial);
   }
+
+  pi.registerTool({
+    name: "loop_pause",
+    label: "Pause Loop",
+    description: "Pause the active /loop when useful work cannot continue because of a non-transient external blocker. Use only when the system prompt says this session is in an active loop.",
+    executionMode: "sequential",
+    parameters: Type.Object({
+      reason: Type.String({
+        minLength: 1,
+        maxLength: 500,
+        description: "Specific human input, credential, permission, or external dependency required to continue",
+      }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const state = currentState(ctx);
+      if (!state || state.status !== "active") {
+        return {
+          content: [{ type: "text", text: "No active loop can be paused." }],
+          details: { paused: false },
+        };
+      }
+      const reason = params.reason.trim();
+      if (!reason) throw new Error("A specific blocker reason is required");
+      pauseLoop(ctx, state, reason);
+      notify(ctx, `loop paused by agent: ${reason}`, "warning");
+      ctx.abort();
+      return {
+        content: [{ type: "text", text: `Loop paused: ${reason}` }],
+        details: { paused: true, reason },
+        terminate: true,
+      };
+    },
+  });
 
   pi.on("session_start", (event, ctx) => {
     clearContinuationWait();
@@ -1135,12 +1318,14 @@ export default function loopExtension(pi: ExtensionAPI): void {
     }
   });
 
-  pi.on("before_agent_start", (_event, ctx) => {
+  pi.on("before_agent_start", (event, ctx) => {
     clearRecoveryTimer();
     const loaded = currentState(ctx);
     if (!loaded || !statusIsActive(loaded)) return;
     transitionInFlight = false;
     renderWidget(ctx, loaded);
+    if (loaded.status !== "active") return;
+    return { systemPrompt: `${event.systemPrompt}\n\n${LOOP_AGENT_GUIDANCE}` };
   });
 
   pi.on("agent_start", (_event, ctx) => {
@@ -1226,7 +1411,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("loop", {
-    description: "<count> [--delay <duration>] <prompt> | <count> | ±<count> | delay | prompt | append | status | resume | next | end — Run a bounded fresh-session loop",
+    description: "<count> [--delay <duration>] <prompt> | for <duration> --delay <duration> <prompt> | controls — Run a bounded fresh-session loop",
     getArgumentCompletions: (prefix) => completeLoopArguments(prefix),
     handler: async (args, ctx) => {
       try {
