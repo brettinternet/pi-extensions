@@ -12,6 +12,7 @@ Slash-command descriptions show each command's argument shape. Press `Tab` to co
 | **Copy Prompt** | Copies the current prompt editor text to the system clipboard with `Alt+C`. | [`README`](extensions/copy-prompt/README.md) |
 | **Live Codex** | Realtime `gpt-live-1-codex` voice mode for Pi. | [`docs`](extensions/live-codex/global-voice-broker.md) |
 | **Loop** | Runs a prompt a bounded number of times in fresh Pi sessions. | [`README`](extensions/loop/README.md) |
+| **Wait** | Sends a queued message after a cancellable timeout. | [`README`](extensions/wait/README.md) |
 | **Herdr Agent State** | Reports aggregate Pi lifecycle state to Herdr and keeps the pane working while async subagents run. | [`README`](extensions/herdr-agent-state/README.md) |
 | **Herdr Workbench** | Provides visible Neovim, LazyGit, and foreground-job panes. | [`README`](extensions/workbench/README.md) |
 | **Progress** | Shows compact, passive main-agent activity below the editor. | [`README`](extensions/progress/README.md) |
@@ -57,6 +58,18 @@ Each iteration gets a fresh Pi session. Filesystem changes carry forward; conver
 ```
 
 Aborted or failed output pauses the run. State and session ownership are persisted in custom entries, with a compact active/paused widget.
+
+### Wait
+
+Queue one message with a countdown above the prompt input:
+
+```text
+/wait 5m check the deployment
+/wait status
+/wait cancel
+```
+
+A new wait replaces the existing one. If Pi is working when the timeout expires, the message is delivered as a follow-up after the current run settles.
 
 ### Herdr Workbench
 
@@ -132,6 +145,7 @@ pi install npm:@brettinternet/pi-copy-prompt
 pi install npm:pi-live-codex
 pi install npm:@brettinternet/pi-progress
 pi install npm:@brettinternet/pi-loop
+pi install npm:@brettinternet/pi-wait
 pi install npm:pi-title
 pi install npm:pi-herdr-workbench
 ```

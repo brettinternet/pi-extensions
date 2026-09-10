@@ -42,6 +42,7 @@
       "./extensions/copy-prompt/index.ts",
       "./extensions/live-codex/index.ts",
       "./extensions/loop/index.ts",
+      "./extensions/wait/index.ts",
       "./extensions/progress/index.ts",
       "./extensions/title/index.ts",
       "./extensions/workbench/index.ts",

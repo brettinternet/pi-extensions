@@ -1,0 +1,41 @@
+{
+  "name": "@brettinternet/pi-wait",
+  "version": "0.1.0",
+  "description": "Send a queued Pi message after a timeout",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brettinternet/pi-extensions.git",
+    "directory": "extensions/wait"
+  },
+  "homepage": "https://github.com/brettinternet/pi-extensions#wait",
+  "bugs": {
+    "url": "https://github.com/brettinternet/pi-extensions/issues"
+  },
+  "files": [
+    "*.ts",
+    "README.md"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "pi-package",
+    "pi-extension",
+    "wait",
+    "timer"
+  ],
+  "engines": {
+    "node": ">=22.19.0"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": "*",
+    "@earendil-works/pi-tui": "*"
+  },
+  "pi": {
+    "extensions": [
+      "./index.ts"
+    ]
+  }
+}
