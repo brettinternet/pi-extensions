@@ -14,7 +14,13 @@ function createHarness() {
   let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
   const notifications: string[] = [];
   const widgets: Array<{ key: string; value: unknown }> = [];
-  const messages: Array<{ content: string; options?: { deliverAs?: "steer" | "followUp" } }> = [];
+  const messages: Array<{
+    content: string;
+    options?: {
+      deliverAs?: "steer" | "followUp";
+      expandPromptTemplates?: boolean;
+    };
+  }> = [];
   let idle = true;
 
   const context = {
@@ -32,7 +38,13 @@ function createHarness() {
     registerCommand: (_name: string, value: Parameters<ExtensionAPI["registerCommand"]>[1]) => {
       command = value;
     },
-    sendUserMessage: (content: string, options?: { deliverAs?: "steer" | "followUp" }) => {
+    sendUserMessage: (
+      content: string,
+      options?: {
+        deliverAs?: "steer" | "followUp";
+        expandPromptTemplates?: boolean;
+      },
+    ) => {
       messages.push({ content, options });
     },
   } as unknown as ExtensionAPI;
@@ -108,7 +120,10 @@ describe("wait lifecycle", () => {
     expect(latestWidgetLines(harness)?.[0]).toContain("/wait cancel");
     await sleep(15);
 
-    expect(harness.messages).toEqual([{ content: "run the checks", options: undefined }]);
+    expect(harness.messages).toEqual([{
+      content: "run the checks",
+      options: { expandPromptTemplates: true },
+    }]);
     expect(harness.widgets.at(-1)).toEqual({ key: WAIT_WIDGET_KEY, value: undefined });
   });
 
@@ -120,8 +135,23 @@ describe("wait lifecycle", () => {
     await sleep(15);
 
     expect(harness.messages).toEqual([
-      { content: "inspect the result", options: { deliverAs: "followUp" } },
+      {
+        content: "inspect the result",
+        options: { deliverAs: "followUp", expandPromptTemplates: true },
+      },
     ]);
+  });
+
+  test("dispatches a queued slash command with skill arguments", async () => {
+    const harness = createHarness();
+
+    await harness.command.handler("5ms /skill:myskill skill argument here", harness.context);
+    await sleep(15);
+
+    expect(harness.messages).toEqual([{
+      content: "/skill:myskill skill argument here",
+      options: { expandPromptTemplates: true },
+    }]);
   });
 
   test("cancels and replaces queued messages", async () => {

@@ -48,6 +48,7 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
   const notifications: string[] = [];
   const widgets: Array<{ key: string; value: unknown }> = [];
   const prompts: string[] = [];
+  const promptOptions: Array<{ expandPromptTemplates?: boolean } | undefined> = [];
   const parents: Array<string | undefined> = [];
   let current = manager("session-0", "/tmp/session-0.jsonl", [
     { type: "custom", customType: "unrelated", data: { keep: true } },
@@ -81,7 +82,13 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
     compact: () => {},
     getSystemPrompt: () => "",
     getSystemPromptOptions: () => ({ cwd: "/repo" }),
-    sendUserMessage: async (content: string) => prompts.push(content),
+    sendUserMessage: async (
+      content: string,
+      options?: { expandPromptTemplates?: boolean },
+    ) => {
+      prompts.push(content);
+      promptOptions.push(options);
+    },
     waitForIdle: async () => {},
     newSession: async () => ({ cancelled: false }),
     fork: async () => ({ cancelled: false }),
@@ -102,6 +109,7 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
         void command?.handler(args.join(" "), activeContext);
       } else {
         prompts.push(content);
+        promptOptions.push(opts);
       }
     },
   } as unknown as ExtensionAPI;
@@ -139,6 +147,7 @@ function createHarness(options: { cancelReplacement?: boolean } = {}) {
     notifications,
     widgets,
     prompts,
+    promptOptions,
     parents,
     settle: async () => {
       handlers.get("agent_settled")?.({}, activeContext);
@@ -315,9 +324,28 @@ describe("loop lifecycle", () => {
     expect(harness.current.getSessionId()).toBe("session-1");
     expect(harness.parents).toEqual(["/tmp/session-0.jsonl"]);
     expect(harness.prompts).toEqual(["inspect the repository"]);
+    expect(harness.promptOptions).toEqual([{ expandPromptTemplates: true }]);
     expect(harness.current.entries.every((entry) => entry.customType === LOOP_STATE_ENTRY)).toBeTrue();
     expect(stateOf(harness.current)).toMatchObject({ currentIteration: 1, remainingBudget: 1, status: "active" });
     expect(latestWidgetLines(harness)).toEqual(["loop active 2/2 · inspect the repository"]);
+  });
+
+  test("dispatches a nested slash command on every iteration", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 /wait 10m /skill:myskill skill argument here", harness.context);
+
+    expect(harness.prompts).toEqual(["/wait 10m /skill:myskill skill argument here"]);
+    expect(harness.promptOptions).toEqual([{ expandPromptTemplates: true }]);
+
+    await harness.settle();
+    expect(harness.prompts).toEqual([
+      "/wait 10m /skill:myskill skill argument here",
+      "/wait 10m /skill:myskill skill argument here",
+    ]);
+    expect(harness.promptOptions).toEqual([
+      { expandPromptTemplates: true },
+      { expandPromptTemplates: true },
+    ]);
   });
 
   test("continues exactly once at the settled boundary", async () => {

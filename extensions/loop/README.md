@@ -27,6 +27,14 @@ Prompt updates never affect the active iteration or change its budget. `prompt` 
 
 Loops continue only after `agent_settled`. Aborted or error assistant output pauses the loop without consuming an iteration. If a mid-run `/loop` command interrupts the assistant, the extension continues that iteration in the same session so completed work and conversation context are preserved. `/loop resume` continues a paused iteration in place; `/loop next` treats it as complete and advances to the next iteration in a fresh session. Only the boundary between completed iterations creates a fresh session. State is stored in custom session entries, and each replacement records its parent session while keeping conversational messages out of the new session. The compact status widget is shown only while a loop is active, stopping, or paused. It counts down (`loop active 4/4`, then `3/4`), shows the configured delay, and shows the prompt after a middle dot, truncated to one line at the current terminal width.
 
+Prompts that begin with an extension command, skill command, or prompt template are dispatched on every iteration. This allows chains such as:
+
+```text
+/loop 10 /wait 10m /skill:myskill skill argument here
+```
+
+Here `/loop` dispatches `/wait` for each iteration, and `/wait` dispatches `/skill:myskill` after the timeout. Built-in interactive commands such as `/model` and `/settings` cannot be chained because Pi does not expose them through programmatic prompt dispatch.
+
 The extension does not use dialogs and is safe to load in print, JSON, and RPC modes.
 
 Install it with:

@@ -586,7 +586,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     // This callback still owns the command context, so it is the safe place to
     // start the turn after the replacement is complete.
     if (replacement.hasUI) showWidget(replacement, state);
-    await replacement.sendUserMessage(state.prompt);
+    await replacement.sendUserMessage(state.prompt, { expandPromptTemplates: true });
   }
 
   async function replaceForIteration(ctx: ExtensionCommandContext, next: LoopState): Promise<void> {

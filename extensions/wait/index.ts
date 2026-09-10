@@ -150,8 +150,13 @@ export default function waitExtension(pi: ExtensionAPI): void {
     clearTimers();
     clearWidget(ctx);
     try {
-      if (ctx.isIdle()) pi.sendUserMessage(expected.prompt);
-      else pi.sendUserMessage(expected.prompt, { deliverAs: "followUp" });
+      if (ctx.isIdle()) pi.sendUserMessage(expected.prompt, { expandPromptTemplates: true });
+      else {
+        pi.sendUserMessage(expected.prompt, {
+          deliverAs: "followUp",
+          expandPromptTemplates: true,
+        });
+      }
     } catch (error) {
       notify(ctx, `could not send queued message: ${error instanceof Error ? error.message : String(error)}`, "error");
     }
