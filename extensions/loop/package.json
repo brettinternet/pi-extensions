@@ -1,6 +1,6 @@
 {
   "name": "@brettinternet/pi-loop",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Run a prompt repeatedly in fresh Pi sessions",
   "type": "module",
   "license": "MIT",

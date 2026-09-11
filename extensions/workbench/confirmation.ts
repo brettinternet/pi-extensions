@@ -1,6 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
-import { withHerdrBlocked } from "../shared/herdr-blocked.ts";
 import type { WorkbenchInput } from "./client.ts";
 import type { CommandRisk } from "./command-policy.ts";
 
@@ -401,7 +400,12 @@ export class ConfirmationBroker {
     this.#pending.set(request.requestId, controller);
     this.#pendingOperationIds.add(request.operationId);
     try {
-      await withHerdrBlocked(this.#pi, request.title, async () => {
+      this.#pi.events.emit("herdr:blocked", {
+        active: true,
+        label: request.title,
+        scope: "root",
+      });
+      try {
         const outcome = waitForConfirmation(this.#pi, request, combined);
         this.#pi.events.emit(CONFIRMATION_REQUESTED_EVENT, request);
         const result = await outcome;
@@ -421,7 +425,9 @@ export class ConfirmationBroker {
           this.#pi.events.emit(CONFIRMATION_CANCELLED_EVENT, request);
         } catch {}
         await this.#confirmInTui(request, reason, ctx, combined);
-      });
+      } finally {
+        this.#pi.events.emit("herdr:blocked", { active: false, scope: "root" });
+      }
     } catch (cause) {
       if (generation === this.#runGeneration) {
         this.#blockedOperationIds.add(request.operationId);

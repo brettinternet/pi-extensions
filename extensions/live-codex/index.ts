@@ -10,7 +10,6 @@ import type {
   EditorTheme,
   TUI,
 } from "@earendil-works/pi-tui";
-import { withHerdrBlocked } from "../shared/herdr-blocked.ts";
 import {
   BACKGROUND_ACTIVITY_FINISHED_EVENT,
   BACKGROUND_ACTIVITY_STARTED_EVENT,
@@ -158,14 +157,20 @@ class LiveExtensionRuntime {
       } catch (error) {
         if (!(error instanceof VoiceLockHeldError) || !error.owner) throw error;
         const owner = error.owner;
-        const moveVoice = await withHerdrBlocked(
-          this.#pi,
-          "Voice handoff approval required",
-          () => context.ui.confirm(
+        this.#pi.events.emit("herdr:blocked", {
+          active: true,
+          label: "Voice handoff approval required",
+          scope: "root",
+        });
+        let moveVoice: boolean;
+        try {
+          moveVoice = await context.ui.confirm(
             "Activate voice here?",
             `Another Pi session currently owns live voice (PID ${owner.pid}, session ${owner.sessionId}). Pause voice there and activate it here? Its transcript, drafts, and running work will remain in that session.`,
-          ),
-        );
+          );
+        } finally {
+          this.#pi.events.emit("herdr:blocked", { active: false, scope: "root" });
+        }
         if (!moveVoice) {
           context.ui.notify(
             "Voice remains active in the other Pi session.",
