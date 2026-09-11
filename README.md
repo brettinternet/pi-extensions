@@ -147,7 +147,6 @@ pi install npm:@brettinternet/pi-progress
 pi install npm:@brettinternet/pi-loop
 pi install npm:pi-wait
 pi install npm:pi-title
-pi install npm:pi-herdr-workbench
 ```
 
 Installed extensions are loaded from their package metadata.

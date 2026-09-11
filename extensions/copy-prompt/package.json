@@ -1,6 +1,6 @@
 {
   "name": "@brettinternet/pi-copy-prompt",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Copy the current Pi prompt editor text to the system clipboard",
   "type": "module",
   "license": "MIT",

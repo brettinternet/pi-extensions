@@ -1,24 +1,18 @@
 # pi-title
 
-[![npm version](https://img.shields.io/npm/v/pi-title)](https://www.npmjs.com/package/pi-title) [![CI](https://github.com/brettinternet/pi-extensions/actions/workflows/ci.yml/badge.svg)](https://github.com/brettinternet/pi-extensions/actions/workflows/ci.yml)
+Give the session a useful title automatically.
 
-Automatic session titles for the [Pi coding agent](https://pi.dev).
-
-A concise title is generated from the first request as soon as the agent starts, concurrently with the main agent work. It is persisted as the Pi session name and used as the terminal title. In the TUI footer, the title uses the theme's `accent` color to distinguish it from the dimmed path and session details. Existing and manually named sessions are left unchanged.
-
-## Install
-
-```sh
+```bash
 pi install npm:pi-title
 ```
 
-## Configure
+The first request generates a persisted title. Manual titles are respected.
 
-Global configuration lives at `~/.pi/agent/pi-title.jsonc` (or under `PI_CODING_AGENT_DIR`):
+Optional configuration:
 
 ```jsonc
+// ~/.pi/agent/pi-title.jsonc
 {
-  // Generate titles automatically.
   "enabled": true,
   "model": null,
   "maxTokens": 30,
@@ -26,20 +20,16 @@ Global configuration lives at `~/.pi/agent/pi-title.jsonc` (or under `PI_CODING_
 }
 ```
 
-Comments and trailing commas are supported. The legacy `pi-title.json` path is still read when no `.jsonc` file exists; `.jsonc` takes precedence when both exist. Configuration changed through `/title` preserves existing comments.
-
-By default, an omitted or `null` model uses the active session model. Set `"model": "auto"` to use an available lightweight model, or set an explicit `provider/model[:effort]` reference.
-
-Commands:
+`null` uses the active session model. `auto` uses a lightweight model. An explicit `provider/model[:effort]` can be selected.
 
 ```text
-/title                                   Show the current title, status, and config path
-/title My custom title                   Set a custom title
-/title set status                        Set a custom title that matches a subcommand
-/title on                                Enable automatic titles
-/title off                               Disable automatic titles
-/title model openai/gpt-5-nano           Select a dedicated title model
-/title model auto                        Use the lightweight-model fallback
-/title model active                      Use the active session model
-/title regenerate                        Replace the current title automatically
+/title
+/title My custom title
+/title set status
+/title on
+/title off
+/title model openai/gpt-5-nano
+/title model auto
+/title model active
+/title regenerate
 ```

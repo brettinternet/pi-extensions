@@ -1,26 +1,32 @@
-# Pi Wait
+# pi-wait
 
-`pi-wait` queues one prompt and sends it after a timeout. It also provides agents with a `wait_then_continue` tool for ending the current turn and scheduling a same-session continuation.
+Continue a prompt after a delay.
 
-```text
-/wait <duration> <prompt>  Queue a message, replacing any existing queued message
-/wait status               Show the queued message and remaining time
-/wait cancel               Cancel the queued message
-/wait                      Show status
+```bash
+pi install npm:pi-wait
 ```
 
-Durations use `ms`, `s`, `m`, `h`, or `d`, such as `500ms`, `30s`, `5m`, `1h`, or `1d`. The maximum is 24 days.
+```text
+/wait <duration> <prompt>
+/wait status
+/wait cancel
+/wait
+```
 
-While a message is queued, a widget above the prompt editor shows its state, text, and the cancellation command. Submitting `/wait` as a follow-up with Pi's queue key (for example, `Ctrl+Q` when configured) waits for the current agent to settle before starting the timer. Submitting it as an Enter steering message starts the timer immediately. If Pi is working when an active timer expires, the message is queued as a follow-up and runs after the current agent settles.
+Durations use `ms`, `s`, `m`, `h`, or `d`, up to 24 days. Press `Enter` to start the wait immediately.
 
-Delivered prompts dispatch extension commands, skill commands, and prompt templates, so `/wait 10m /skill:myskill skill argument here` works as a command chain. Built-in interactive commands such as `/model` and `/settings` cannot be chained because Pi does not expose them through programmatic prompt dispatch.
+Follow-up prompts queue after current work settles. If the timer expires while Pi is busy, the prompt waits in the queue.
 
-Agents can call `wait_then_continue` with a duration and continuation prompt. The tool queues the timer to start after the current turn settles, then terminates that turn so long waits do not occupy a shell or tool call. It is intended for standalone, same-session polling such as waiting for review feedback. It must not be used during an active `/loop`: loop settlement replaces the current session and cancels its wait.
+`wait_then_continue` ends the current turn, then starts its timer after the turn settles. Do not use it during an active `/loop`.
 
-Waits are session-scoped and are cancelled when the session shuts down or extensions reload.
+Example:
 
-Install it with:
+```text
+/wait 10m Check whether the deployment completed
+```
 
-```sh
-pi install npm:pi-wait
+Chain it with a loop:
+
+```text
+/loop 10 /wait 10m Check the deployment again
 ```

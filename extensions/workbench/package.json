@@ -1,6 +1,7 @@
 {
   "name": "pi-herdr-workbench",
   "version": "0.1.0",
+  "private": true,
   "description": "Typed Pi tools for the Herdr agent workbench plugin",
   "type": "module",
   "license": "MIT",
@@ -17,9 +18,6 @@
     "*.ts",
     "README.md"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
   "keywords": [
     "pi-package",
     "pi-extension",

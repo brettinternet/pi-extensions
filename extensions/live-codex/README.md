@@ -1,50 +1,26 @@
 # pi-live-codex
 
-Realtime `gpt-live-1-codex` voice mode for the [Pi coding agent](https://pi.dev). Speak naturally; repository work is delegated to the active Pi session and results are read back.
+Talk to OpenAI Codex from Pi.
 
-## Install
-
-```sh
+```bash
 pi install npm:pi-live-codex
 ```
 
-Requires Node.js 22.19+, microphone access, and an OpenAI Codex login (`/login openai-codex`).
+Requires Node 22.19+ and a microphone. Sign in with:
 
-## Use
+```text
+/login openai-codex
+```
 
-Start Pi in its interactive TUI, then run:
+Use voice mode with:
 
 ```text
 /live
+/live <voice>
 ```
 
-Use `/live <voice>` to select a voice. Press `Tab` after `/live ` to choose a known Realtime voice; custom voice names remain accepted. The transcript keeps the latest four utterances; start Pi with `--live-transcript-limit <n>` to choose a different positive-integer limit. `Ctrl+L` toggles voice mode and `Esc` ends the voice session. While live, typing any printable non-whitespace character immediately opens the Pi editor; bare `Space` mutes only while that editor is empty, and inserts a space otherwise. If another Pi session activates voice, this surface pauses without losing its transcript, drafts, attachments, or work state; press bare `Space` here to resume and pause the other session. Press `Enter` with nonblank editor text to stage a verbatim typed note (bounded to 4,000 characters) for the next ordinary spoken request. It is sent as a separate text block alongside any images and never starts a standalone Pi turn. Drop image files into the terminal while live to attach them to that request; a valid image drop also reveals the editor.
+Press `Ctrl+L` to toggle live mode. Press `Esc` to end voice mode. When the editor is empty, press `Space` to mute or resume, or type a note and press `Enter`. You can also drop images into the session.
 
-You can make additional requests while work is running. Independent requests are dispatched to Pi in order, while a request for only the current status is answered immediately from live work state instead of waiting in that queue. Background activities continue concurrently. If microphone callbacks stop, Live Codex restarts capture once so a recovered or newly selected default input can be picked up. If the replacement capture also stalls, voice mode ends with a request to restart Pi because its process-level audio state could not recover. The footer reports voice state (`listening`, `speaking`, or `muted`) separately from active and queued delegated work. Their completion is correlated with the request that launched them and announced through the live session. A clear request to stop the current foreground operation aborts that Pi turn. A request to cancel an unambiguous background activity is routed only to its provider. Staged typed notes wait through confirmation and cancellation controls, block voice handoff, and are restored to the normal Pi editor when live mode is stopped. Existing subagent lifecycle events and stop RPC remain supported.
+Concurrent requests are queued, with immediate status updates and cancellation. Audio has one owner at a time, with retained-state handoff when ownership changes.
 
-Only one Pi session owns active audio at a time. If another session owns it, `/live` asks whether to activate voice here. Confirming sends an authenticated local request; the old session closes its audio transport, releases ownership, and remains visibly paused with its transcript and local state intact. Its foreground/background Pi work and queued voice requests continue there. Pressing `Space` in a paused surface performs the same cooperative transfer without another prompt, reconnects with bounded transcript and paused-work context, and leaves the other surface paused. Handoff is refused only while the old voice session has pending voice-routed confirmations; resolve those there first. See [`global-voice-broker.md`](global-voice-broker.md) for the future broker design.
-
-## Background activity wire contract
-
-Separately installed extensions integrate through `pi.events`; no package imports are required. Live Codex keeps its own structural validation and types in `background-activity.ts`.
-
-- `pi:background-activity:v1:started`: `{ version: 1, provider, activityId, kind, sessionId, sessionFile?, workspaceId?, originId?, label, cancellable, resumed? }`. Fresh activities require `originId`, which is the originating Pi tool-call ID. Only snapshot/replayed activities may set `resumed: true` and omit it.
-- `pi:background-activity:v1:finished`: `{ version: 1, provider, activityId, kind, sessionId, sessionFile?, workspaceId?, outcome, exitCode?, summary }`, where outcome is `succeeded`, `failed`, or `cancelled`.
-- `pi:background-activity:v1:cancel`: `{ version: 1, requestId, provider, activityId, sessionId, sessionFile?, workspaceId? }`. Reply on `pi:background-activity:v1:cancel-reply:<requestId>` with `{ version: 1, requestId, success, error? }`. Success means accepted; `finished` remains the terminal signal.
-- `pi:background-activity:v1:snapshot`: `{ version: 1, requestId, sessionId, sessionFile?, limit }`. Each producer may reply on `pi:background-activity:v1:snapshot-reply:<requestId>` with `{ version: 1, requestId, provider, activities }`; entries use the started schema with `resumed: true`. Discovery accepts at most 100 entries during a 250 ms window.
-
-Identity is always `(provider, activityId)`. `sessionId` must exactly match the active Pi session; a supplied session file and workspace are retained and must also match across start/finish/cancel events.
-
-## Confirmation wire contract
-
-Separately installed extensions can request one-operation authorization through a second versioned `pi.events` contract. Request and resolution text and pending counts are bounded; requests expire and are never persisted.
-
-- `pi:confirmation:v1:requested`: `{ version: 1, requestId, sessionId, sessionFile?, provider, operationId, riskCategory, title, summary, expiresAt }`
-- `pi:confirmation:v1:acknowledged:<requestId>`: echoes `{ version, requestId, sessionId, sessionFile?, provider, operationId }`
-- `pi:confirmation:v1:resolved:<requestId>`: echoes that identity and adds `decision: "approved" | "denied"`
-- `pi:confirmation:v1:released:<requestId>`: echoes the exact identity without a decision when voice ownership ends
-- `pi:confirmation:v1:cancelled`: echoes the original request when the requester falls back to another confirmation surface
-
-While `/live` is active, Live Codex acknowledges a structurally valid request for the exact active Pi session. It first describes the action and risk, then asks the question, and ends by requesting the exact one-word answer `approve` or `deny`. Only that finalized transcript resolves the current request; ambiguous phrasing is re-prompted, and concurrent requests are serialized. Wrong-session, expired, duplicate, unknown, and mismatched-operation controls are ignored. Manual voice stop and transport failure release pending requests after the editor is restored; Workbench then continues the same request through its serialized TUI prompt. Session shutdown releases no interactive handoff and remains fail closed.
-
-Only one Pi process can own active live audio at a time; other live surfaces may remain paused.
+Background activity and confirmation events are integrated into the live experience.

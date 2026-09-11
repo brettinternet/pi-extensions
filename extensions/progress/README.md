@@ -1,77 +1,41 @@
 # pi-progress
 
-Compact, passive activity progress for the [Pi coding agent](https://pi.dev).
-
-The extension observes Pi's lifecycle events and renders at most two truncated lines below the editor. Active tool and check labels are independently bounded so long commands do not hide newer progress items. After the first prompt, the first line includes cumulative agent working time as one compact unit (`<1m`, `25m`, `1h`, or `2d`). Time before the first prompt, between settled runs, and in blocking UI prompts is excluded. The total is stored in session metadata and restored when the session or a branch is resumed. Inferred progress uses the theme's `warning` color so it stands out from both observed details and the footer title. Settled progress remains visible until the next user-initiated run begins.
-
 ```text
 progress 25m · current: Updating the implementation inferred · ● edit src/index.ts · ✓ bun test
  touched src/index.ts · test/index.test.ts
 ```
 
-## Observed state
+```bash
+pi install npm:@brettinternet/pi-progress
+```
 
-- Current main-agent tools, correlated by tool-call ID
-- The two most recent recognized check commands and Pi's success/error result
-- Up to eight successful `edit` and `write` targets from the current run
-- Thinking and settled lifecycle states
+It shows observed tools, checks, successful edit-write paths, and work time. These signals describe activity, not semantic proof that the result is correct.
 
-Touched paths mean only that Pi reported a successful `edit` or `write` call. They are not an exhaustive Git diff and do not prove that file bytes changed. Check marks report tool success, not semantic correctness.
+Optional configuration:
 
-Delegated work remains available through [`pi-subagents`](https://github.com/nicobailon/pi-subagents) FleetView rather than being duplicated here.
-
-## Optional inference
-
-Inference is disabled unless an explicit model is configured in `~/.pi/agent/pi-progress.jsonc` (or `$PI_CODING_AGENT_DIR/pi-progress.jsonc`):
-
-```json
+```jsonc
+// ~/.pi/agent/pi-progress.jsonc
 {
-  "model": "openai/gpt-5-nano",
+  "model": "provider/model",
   "maxInputChars": 12000,
   "maxTokens": 180,
   "timeoutMs": 15000
 }
 ```
 
-The configuration accepts JSON with comments and trailing commas. A legacy `pi-progress.json` file is used only when `pi-progress.jsonc` is absent. The model reference must resolve exactly and have configured authentication. The optional thinking suffix supports `:off`, `:minimal`, `:low`, `:medium`, `:high`, `:xhigh`, and `:max`, subject to the selected model's capabilities; reasoning defaults to off. There is no automatic model selection or fallback to the active session model.
-
-Inference receives only a bounded, redacted activity digest: a truncated user request and final response excerpt, previous inference, compact tool names/arguments/outcomes/durations, edit/write paths, and recognized check commands. It does not receive system prompts, reasoning, tool output, file contents, diffs, environment variables, credentials, or the full transcript. Paths, commands, and request/response excerpts are disclosed to the configured model provider. Requests use fresh IDs with prompt-cache retention disabled.
-
-Inference is advisory UI metadata. During an active run, a meaningful edit/write, recognized check, or delegated-tool batch is coalesced and inferred after a short 500 ms quiet period, with at most four active requests per run; newer activity cancels or supersedes that request. When the run settles, one inference starts immediately after the final assistant content is available. Active inference is shown as an inferred current activity but is not written to session history. Only settled inference metadata is persisted and restored.
-
-When newer activity invalidates a displayed active inference, the widget retains it dimmed with `updating…` until its replacement arrives instead of briefly removing it. The widget prefers an inferred current activity while active, or an inferred blocker/completed item after settlement; a generic phase is only a fallback. Inferred text is explicitly marked `inferred`, remains bounded to the compact two-line widget, and is omitted before observed tools, checks, and touched paths when width is constrained. Inference is advisory UI metadata: it does not alter model context, register an LLM-callable tool, control execution, or provide semantic verification evidence. Overlong display labels are truncated, empty optional labels are omitted, missing display fields receive safe defaults, and excess completed or blocked labels are capped at three so recoverable responses remain usable. Low-confidence, unsafe, malformed, failed, timed-out, cancelled, and stale responses are discarded.
-
-Settled inference summaries from the current session branch can be toggled in a full-width widget directly above the prompt with `/progress steps` or `Alt+G`. The widget initially shows the latest eight summary lines. Use `/progress steps all` or `Alt+Shift+G` to show the full history, and `/progress steps recent` to collapse it again. The widget reads existing session metadata and does not make another model request.
+The bounded, redacted advisory digest excludes reasoning, tool output, file contents, diffs, environment data, credentials, and the full transcript.
 
 ```text
-/progress steps                               Toggle recent inferred progress history
-/progress steps recent                        Show the latest eight history lines
-/progress steps all                           Show the full inferred progress history
-/progress status                              Show configuration and the last error
-/progress model                               Show the configured inference model
-/progress model openai/gpt-5-nano:low         Set the inference model and thinking level
-/progress model off                           Disable inference
+/progress steps
+/progress steps recent
+/progress steps all
+/progress status
+/progress model
+/progress model <provider/model[:effort]>
+/progress model off
 ```
 
-Input, token, and timeout limits remain file-only safeguards.
-
-## Install
-
-Install the full personal extension package:
-
-```sh
-pi install git:github.com/brettinternet/pi-extensions
-```
-
-Or load this extension directly during development:
-
-```sh
-pi -e ./extensions/progress/index.ts
-```
-
-## Development
-
-```sh
-bun run check
-bun test test/progress
+```text
+Alt+G          recent toggle
+Alt+Shift+G    full history
 ```
