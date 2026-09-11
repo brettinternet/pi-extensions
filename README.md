@@ -65,11 +65,13 @@ Queue one message with a countdown above the prompt input:
 
 ```text
 /wait 5m check the deployment
+/wait 10s
+/wait now
 /wait status
 /wait cancel
 ```
 
-A new wait replaces the existing one. If Pi is working when the timeout expires, the message is delivered as a follow-up after the current run settles.
+A duration alone resets the queued message's timeout; including a prompt replaces both. `/wait now` sends the queued message immediately. If Pi is working when the timeout expires, the message is delivered as a follow-up after the current run settles.
 
 ### Herdr Workbench
 

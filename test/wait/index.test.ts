@@ -98,12 +98,13 @@ describe("wait parser and formatting", () => {
       delay: 300_000,
       prompt: "check the deployment",
     });
+    expect(parseWaitCommand("5m")).toEqual({ kind: "schedule", delay: 300_000 });
+    expect(parseWaitCommand("now")).toEqual({ kind: "now" });
     expect(parseWaitCommand("status")).toEqual({ kind: "status" });
     expect(parseWaitCommand("")).toEqual({ kind: "status" });
     expect(parseWaitCommand("cancel")).toEqual({ kind: "cancel" });
     expect(() => parseWaitDuration("5")).toThrow("duration");
     expect(() => parseWaitDuration("25d")).toThrow("24d");
-    expect(() => parseWaitCommand("5m")).toThrow("prompt");
   });
 
   test("formats the countdown and truncates the queued prompt", () => {
@@ -128,6 +129,10 @@ describe("wait parser and formatting", () => {
     expect(await autocomplete.getSuggestions(["/wait ca"], 0, 8, options)).toEqual({
       prefix: "ca",
       items: [{ value: "cancel", label: "cancel", description: "Cancel the queued message" }],
+    });
+    expect(await autocomplete.getSuggestions(["/wait no"], 0, 8, options)).toEqual({
+      prefix: "no",
+      items: [{ value: "now", label: "now", description: "Send the queued message now" }],
     });
     expect(await autocomplete.getSuggestions(["/wait 5"], 0, 7, options)).toEqual({
       prefix: "5",
@@ -247,10 +252,64 @@ describe("wait lifecycle", () => {
     }]);
   });
 
+  test("resets a queued message timeout without replacing its prompt", async () => {
+    const harness = createHarness();
+
+    await harness.submit("100ms original prompt");
+    await harness.submit("5ms");
+    expect(harness.notifications.at(-1)).toBe("updated wait; waiting 1s");
+    await sleep(15);
+
+    expect(harness.messages).toEqual([{
+      content: "original prompt",
+      options: { expandPromptTemplates: true },
+    }]);
+  });
+
+  test("keeps a deferred timer deferred when updating its timeout", async () => {
+    const harness = createHarness();
+    harness.setIdle(false);
+
+    await harness.submit("100ms after settling", "followUp");
+    await harness.submit("5ms", "followUp");
+    expect(harness.notifications.at(-1)).toBe("updated queued message; timer starts after the agent settles");
+    await sleep(15);
+    expect(harness.messages).toEqual([]);
+
+    harness.setIdle(true);
+    harness.settle();
+    await sleep(15);
+    expect(harness.messages[0]?.content).toBe("after settling");
+  });
+
+  test("sends the queued message now", async () => {
+    const harness = createHarness();
+    harness.setIdle(false);
+
+    await harness.submit("100ms send me");
+    await harness.submit("now", "followUp");
+
+    expect(harness.messages).toEqual([{
+      content: "send me",
+      options: { deliverAs: "followUp", expandPromptTemplates: true },
+    }]);
+    await sleep(110);
+    expect(harness.messages).toHaveLength(1);
+  });
+
+  test("reports duration-only and now commands when no message is queued", async () => {
+    const harness = createHarness();
+
+    await harness.submit("10ms");
+    expect(harness.notifications.at(-1)).toBe("wait: no queued message; provide a prompt");
+    await harness.submit("now");
+    expect(harness.notifications.at(-1)).toBe("wait: no queued message");
+  });
+
   test("cancels and replaces queued messages", async () => {
     const harness = createHarness();
 
-    await harness.submit("10ms first");
+    await harness.submit("100ms first");
     await harness.submit("15ms second");
     expect(harness.notifications.at(-1)).toContain("replaced queued message");
     await harness.submit("cancel");

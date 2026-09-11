@@ -4,7 +4,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 export const WAIT_WIDGET_KEY = "pi-wait";
-export const WAIT_USAGE = "usage: /wait <duration> <prompt> | /wait status | /wait cancel";
+export const WAIT_USAGE = "usage: /wait <duration> [prompt] | /wait now | /wait status | /wait cancel";
 export const MAX_WAIT_MS = 24 * 24 * 60 * 60 * 1_000;
 
 const DURATION_PATTERN = /^(\d+(?:\.\d+)?|\.\d+)(ms|s|m|h|d)$/;
@@ -17,7 +17,8 @@ const DURATION_MULTIPLIERS: Record<string, number> = {
 };
 
 export type ParsedWaitCommand =
-  | { kind: "schedule"; delay: number; prompt: string }
+  | { kind: "schedule"; delay: number; prompt?: string }
+  | { kind: "now" }
   | { kind: "status" }
   | { kind: "cancel" };
 
@@ -45,14 +46,14 @@ export function parseWaitCommand(args: string): ParsedWaitCommand {
   const input = args.trim();
   if (!input || input === "status") return { kind: "status" };
   if (input === "cancel") return { kind: "cancel" };
+  if (input === "now") return { kind: "now" };
 
   const separator = input.search(/\s/);
-  if (separator < 0) throw new Error(`a prompt is required; ${WAIT_USAGE}`);
+  if (separator < 0) return { kind: "schedule", delay: parseWaitDuration(input) };
 
   const delay = parseWaitDuration(input.slice(0, separator));
   const prompt = input.slice(separator).trim();
-  if (!prompt) throw new Error(`a prompt is required; ${WAIT_USAGE}`);
-  return { kind: "schedule", delay, prompt };
+  return { kind: "schedule", delay, ...(prompt ? { prompt } : {}) };
 }
 
 export function formatRemaining(milliseconds: number): string {
@@ -82,6 +83,7 @@ export function formatWaitWidget(wait: PendingWait, width: number, now = Date.no
 function completeWaitArguments(prefix: string): ArgumentCompletion[] | null {
   const query = prefix.trimStart().toLowerCase();
   const candidates: ArgumentCompletion[] = [
+    { value: "now", label: "now", description: "Send the queued message now" },
     { value: "cancel", label: "cancel", description: "Cancel the queued message" },
     { value: "status", label: "status", description: "Show the queued message and remaining time" },
     ...["30s", "1m", "5m", "15m", "1h"].map((duration) => ({
@@ -227,11 +229,35 @@ export default function waitExtension(pi: ExtensionAPI): void {
     notify(ctx, message);
   }
 
+  function reschedule(ctx: ExtensionContext, delay: number): void {
+    if (!pending) {
+      notify(ctx, "wait: no queued message; provide a prompt", "error");
+      return;
+    }
+
+    const wait = pending;
+    clearTimers();
+    if (wait.dueAt === undefined) {
+      pending = { prompt: wait.prompt, delay };
+      renderWidget(ctx);
+      notify(ctx, "updated queued message; timer starts after the agent settles");
+      return;
+    }
+
+    arm(ctx, wait, delay);
+    notify(ctx, `updated wait; waiting ${formatRemaining(delay)}`);
+  }
+
   function handleCommand(args: string, ctx: ExtensionContext, afterAgent: boolean): void {
     try {
       const command = parseWaitCommand(args);
       if (command.kind === "cancel") {
         cancel(ctx, true);
+        return;
+      }
+      if (command.kind === "now") {
+        if (!pending) notify(ctx, "wait: no queued message");
+        else deliver(ctx, pending);
         return;
       }
       if (command.kind === "status") {
@@ -240,7 +266,8 @@ export default function waitExtension(pi: ExtensionAPI): void {
         else notify(ctx, `wait: ${formatRemaining(pending.dueAt - Date.now())}\n${pending.prompt}`);
         return;
       }
-      schedule(ctx, command.delay, command.prompt, afterAgent);
+      if (command.prompt === undefined) reschedule(ctx, command.delay);
+      else schedule(ctx, command.delay, command.prompt, afterAgent);
     } catch (error) {
       notify(ctx, error instanceof Error ? error.message : String(error), "error");
     }
