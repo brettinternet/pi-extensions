@@ -1,6 +1,6 @@
 # Pi Wait
 
-`@brettinternet/pi-wait` queues one prompt and sends it after a timeout. It also provides agents with a `wait_then_continue` tool for ending the current turn and scheduling a same-session continuation.
+`pi-wait` queues one prompt and sends it after a timeout. It also provides agents with a `wait_then_continue` tool for ending the current turn and scheduling a same-session continuation.
 
 ```text
 /wait <duration> <prompt>  Queue a message, replacing any existing queued message
@@ -22,5 +22,5 @@ Waits are session-scoped and are cancelled when the session shuts down or extens
 Install it with:
 
 ```sh
-pi install npm:@brettinternet/pi-wait
+pi install npm:pi-wait
 ```

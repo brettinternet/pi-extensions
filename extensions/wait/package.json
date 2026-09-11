@@ -1,5 +1,5 @@
 {
-  "name": "@brettinternet/pi-wait",
+  "name": "pi-wait",
   "version": "0.1.0",
   "description": "Send a queued Pi message after a timeout",
   "type": "module",

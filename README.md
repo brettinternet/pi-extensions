@@ -145,7 +145,7 @@ pi install npm:@brettinternet/pi-copy-prompt
 pi install npm:pi-live-codex
 pi install npm:@brettinternet/pi-progress
 pi install npm:@brettinternet/pi-loop
-pi install npm:@brettinternet/pi-wait
+pi install npm:pi-wait
 pi install npm:pi-title
 pi install npm:pi-herdr-workbench
 ```
