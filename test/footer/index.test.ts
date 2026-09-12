@@ -159,20 +159,22 @@ describe("footer rendering", () => {
     },
   };
 
-  test("renders Nerd Font context, branch, git, usage, and model details", () => {
+  test("renders restrained Git icons, context, usage, and model details", () => {
     const lines = renderFooter(snapshot, 180, theme);
     expect(lines).toHaveLength(2);
-    expect(lines[0]).toContain("󰉋 ~/dev/project");
+    expect(lines[0]).toContain("~/dev/project");
     expect(lines[0]).toContain(" feature/footer");
     expect(lines[0]).toContain("+18");
     expect(lines[0]).toContain(" +1");
     expect(lines[0]).toContain("Polish footer");
-    expect(lines[1]).toContain("󰘦");
-    expect(lines[1]).toContain("42k/114k 37%");
-    expect(lines[1]).toContain("󰍉 86k");
-    expect(lines[1]).toContain("󰆼 $0.124");
-    expect(lines[1]).toContain("󰚩 openai/gpt-5.4");
-    expect(lines[1]).toContain(" high");
+    const plainUsageLine = lines[1]!.replace(/\x1b\[[0-9;A-Za-z]*m/g, "");
+    expect(plainUsageLine).toContain("━━━━──────");
+    expect(plainUsageLine).toContain("42k/114k 37%");
+    expect(plainUsageLine).toContain("↑86k");
+    expect(plainUsageLine).toContain("$0.124");
+    expect(plainUsageLine).toContain("openai/gpt-5.4");
+    expect(plainUsageLine).toContain("high");
+    expect(lines.join("\n")).not.toMatch(/[󰉋󰘦󰍉󰍌󰒍󰆼󰚩]/u);
     expect(visibleWidth(lines[0]!)).toBeLessThanOrEqual(180);
     expect(visibleWidth(lines[1]!)).toBeLessThanOrEqual(180);
   });

@@ -183,7 +183,7 @@ function contextGauge(percent: number | null, theme: FooterTheme): string {
   const severity: ThemeColor = percent !== null && percent >= 90
     ? "error"
     : percent !== null && percent >= 70 ? "warning" : "accent";
-  return color(theme, severity, "█".repeat(filled)) + color(theme, "dim", "░".repeat(cells - filled));
+  return color(theme, severity, "━".repeat(filled)) + color(theme, "dim", "─".repeat(cells - filled));
 }
 
 function gitParts(git: GitState, theme: FooterTheme): string[] {
@@ -204,9 +204,9 @@ function gitParts(git: GitState, theme: FooterTheme): string[] {
 
 export function renderFooter(snapshot: FooterSnapshot, width: number, theme: FooterTheme): string[] {
   const locationText = sanitizeFooterText(formatFooterCwd(snapshot.cwd, snapshot.home));
-  const location = color(theme, "dim", `󰉋 ${locationText}`);
+  const location = color(theme, "dim", locationText);
   const branchText = snapshot.branch ? sanitizeFooterText(snapshot.branch) : "";
-  const branch = branchText ? color(theme, "accent", ` ${branchText}`) : "";
+  const branch = branchText ? color(theme, "border", ` ${branchText}`) : "";
   const changes = gitParts(snapshot.git, theme).join(" ");
   const leftTop = [location, branch, changes].filter(Boolean).join("  ");
   const title = snapshot.title ? sanitizeFooterText(snapshot.title) : "";
@@ -220,14 +220,14 @@ export function renderFooter(snapshot: FooterSnapshot, width: number, theme: Foo
   const contextText = context
     ? `${context.tokens === null ? "?" : formatCount(context.tokens)}/${formatCount(context.contextWindow)} ${contextPercent === null ? "?" : `${contextPercent.toFixed(0)}%`}`
     : "context unavailable";
-  const leftBottom = `${color(theme, "accent", "󰘦")} ${contextGauge(contextPercent, theme)} ${color(theme, contextColor, contextText)}`;
+  const leftBottom = `${contextGauge(contextPercent, theme)} ${color(theme, contextColor, contextText)}`;
 
   const usage = snapshot.usage;
   const rightParts: StyledPart[] = [
-    { text: color(theme, "muted", `󰍉 ${formatCount(usage.input)}`), priority: 9 },
-    { text: color(theme, "muted", `󰍌 ${formatCount(usage.output)}`), priority: 9 },
+    { text: color(theme, "muted", `↑${formatCount(usage.input)}`), priority: 9 },
+    { text: color(theme, "muted", `↓${formatCount(usage.output)}`), priority: 9 },
     ...(usage.cacheRead > 0
-      ? [{ text: color(theme, "dim", `󰒍 R${formatCount(usage.cacheRead)}`), priority: 3 }]
+      ? [{ text: color(theme, "dim", `R${formatCount(usage.cacheRead)}`), priority: 3 }]
       : []),
     ...(usage.cacheWrite > 0
       ? [{ text: color(theme, "dim", `W${formatCount(usage.cacheWrite)}`), priority: 1 }]
@@ -236,14 +236,14 @@ export function renderFooter(snapshot: FooterSnapshot, width: number, theme: Foo
       ? [{ text: color(theme, "dim", `${usage.latestCacheHitRate.toFixed(0)}% hit`), priority: 2 }]
       : []),
     ...(usage.cost > 0
-      ? [{ text: color(theme, "success", `󰆼 $${usage.cost.toFixed(3)}`), priority: 8 }]
+      ? [{ text: color(theme, "success", `$${usage.cost.toFixed(3)}`), priority: 8 }]
       : []),
     ...(snapshot.model
       ? [{
           text: color(
             theme,
             "dim",
-            `󰚩 ${sanitizeFooterText(snapshot.model.provider)}/${sanitizeFooterText(snapshot.model.id)}`,
+            `${sanitizeFooterText(snapshot.model.provider)}/${sanitizeFooterText(snapshot.model.id)}`,
           ),
           priority: 7,
         }]
@@ -253,7 +253,7 @@ export function renderFooter(snapshot: FooterSnapshot, width: number, theme: Foo
           text: color(
             theme,
             (`thinking${(snapshot.thinkingLevel ?? "off").replace(/^./, (letter) => letter.toUpperCase())}` as ThemeColor),
-            ` ${sanitizeFooterText(snapshot.thinkingLevel ?? "off")}`,
+            sanitizeFooterText(snapshot.thinkingLevel ?? "off"),
           ),
           priority: 6,
         }]
