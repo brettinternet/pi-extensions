@@ -575,6 +575,16 @@ export default function loopExtension(pi: ExtensionAPI): void {
   let widgetState: LoopState | undefined;
   let widgetTui: { requestRender(): void } | undefined;
   let widgetMounted = false;
+  let herdrBlocked = false;
+
+  function reportHerdrBlocked(state: LoopState | undefined): void {
+    const blocked = state?.status === "paused";
+    if (blocked === herdrBlocked) return;
+    herdrBlocked = blocked;
+    pi.events.emit("herdr:blocked", blocked
+      ? { active: true, label: `Loop paused: ${state.pauseReason ?? "human input required"}`, scope: "root" }
+      : { active: false, scope: "root" });
+  }
 
   function stateFrom(ctx: ContextWithSession): LoopState | undefined {
     runState = latestStateFromContext(ctx);
@@ -584,6 +594,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   function persist(ctx: Pick<ExtensionAPI, "appendEntry">, state: LoopState): void {
     ctx.appendEntry(LOOP_STATE_ENTRY, state);
     runState = state;
+    reportHerdrBlocked(state);
   }
 
   function notify(ctx: ExtensionContext, message: string, type: "info" | "warning" | "error" = "info"): void {
@@ -640,8 +651,11 @@ export default function loopExtension(pi: ExtensionAPI): void {
     }
     if (currentSessionManagerRef !== undefined && sessionManager !== currentSessionManagerRef) return undefined;
     const loaded = stateFrom(ctx);
-    if (!loaded) return undefined;
-    if (!stateBelongsToContext(loaded, ctx)) return undefined;
+    if (!loaded || !stateBelongsToContext(loaded, ctx)) {
+      reportHerdrBlocked(undefined);
+      return undefined;
+    }
+    reportHerdrBlocked(loaded);
     return loaded;
   }
 
@@ -1324,6 +1338,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     const loaded = latestStateFromContext(ctx);
     const owned = loaded && stateBelongsToContext(loaded, ctx) ? loaded : undefined;
     runState = owned;
+    reportHerdrBlocked(owned);
     if (!owned || owned.status === "inactive") clearWidget(ctx);
     else renderWidget(ctx, owned);
     // New-session setup writes transferred state after this event and starts
@@ -1402,6 +1417,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     const loaded = latestStateFromContext(ctx);
     const owned = loaded && stateBelongsToContext(loaded, ctx) ? loaded : undefined;
     runState = owned;
+    reportHerdrBlocked(owned);
     if (!owned || owned.status === "inactive") clearWidget(ctx);
     else renderWidget(ctx, owned);
     if (owned && statusIsActive(owned)) scheduleStartupRecovery(ctx, owned);
@@ -1421,6 +1437,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
         // Shutdown may already have detached the runtime's append action.
       }
     }
+    reportHerdrBlocked(undefined);
     clearWidget(ctx);
     currentSessionManagerRef = undefined;
   });

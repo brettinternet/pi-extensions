@@ -56,6 +56,7 @@ function createHarness(options: {
   const prompts: string[] = [];
   const promptOptions: Array<{ expandPromptTemplates?: boolean } | undefined> = [];
   const parents: Array<string | undefined> = [];
+  const herdrEvents: unknown[] = [];
   let current = manager("session-0", "/tmp/session-0.jsonl", [
     { type: "custom", customType: "unrelated", data: { keep: true } },
   ]);
@@ -111,6 +112,11 @@ function createHarness(options: {
 
   const pi = {
     on: (name: string, handler: (...args: any[]) => any) => handlers.set(name, handler),
+    events: {
+      emit: (name: string, value: unknown) => {
+        if (name === "herdr:blocked") herdrEvents.push(value);
+      },
+    },
     registerCommand: (_name: string, value: Parameters<ExtensionAPI["registerCommand"]>[1]) => {
       command = value;
     },
@@ -166,6 +172,7 @@ function createHarness(options: {
     prompts,
     promptOptions,
     parents,
+    herdrEvents,
     get abortCount() {
       return abortCount;
     },
@@ -477,6 +484,11 @@ describe("loop lifecycle", () => {
       currentIteration: 1,
       remainingBudget: 1,
     });
+    expect(harness.herdrEvents).toEqual([{
+      active: true,
+      label: "Loop paused: deployment credentials are required",
+      scope: "root",
+    }]);
     await harness.settle();
     expect(harness.prompts).toEqual(["perform unattended work"]);
   });
@@ -497,6 +509,7 @@ describe("loop lifecycle", () => {
 
     expect(harness.state()).toMatchObject({ status: "completed", currentIteration: 1 });
     expect(harness.prompts).toEqual(["watch the queue"]);
+    expect(harness.herdrEvents.at(-1)).toEqual({ active: false, scope: "root" });
   });
 
   test("dispatches a nested slash command on every iteration", async () => {
