@@ -163,7 +163,7 @@ describe("footer rendering", () => {
     const lines = renderFooter(snapshot, 180, theme);
     expect(lines).toHaveLength(2);
     expect(lines[0]).toContain("~/dev/project");
-    expect(lines[0]).toContain(" feature/footer");
+    expect(lines[0]).toContain(" feature/footer");
     expect(lines[0]).toContain("+18");
     expect(lines[0]).toContain(" +1");
     expect(lines[0]).toContain("Polish footer");

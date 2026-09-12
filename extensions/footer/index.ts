@@ -206,7 +206,7 @@ export function renderFooter(snapshot: FooterSnapshot, width: number, theme: Foo
   const locationText = sanitizeFooterText(formatFooterCwd(snapshot.cwd, snapshot.home));
   const location = color(theme, "dim", locationText);
   const branchText = snapshot.branch ? sanitizeFooterText(snapshot.branch) : "";
-  const branch = branchText ? color(theme, "border", ` ${branchText}`) : "";
+  const branch = branchText ? color(theme, "border", ` ${branchText}`) : "";
   const changes = gitParts(snapshot.git, theme).join(" ");
   const leftTop = [location, branch, changes].filter(Boolean).join("  ");
   const title = snapshot.title ? sanitizeFooterText(snapshot.title) : "";

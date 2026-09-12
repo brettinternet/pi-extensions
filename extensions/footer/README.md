@@ -3,7 +3,7 @@
 A responsive two-line footer for [Pi](https://pi.dev), designed for terminals with a Nerd Font.
 
 ```text
-~/dev/project   main  +18 -4 ●2 ✚1   +1                 Refine footer
+~/dev/project   main  +18 -4 ●2 ✚1   +1                 Refine footer
 ━━━━────── 42k/114k 37%    ↑86k  ↓4.2k  R61k  $0.124  openai/gpt-5.4  high
 ```
 
