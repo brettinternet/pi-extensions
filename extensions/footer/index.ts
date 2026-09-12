@@ -155,7 +155,7 @@ function color(theme: FooterTheme, name: ThemeColor, text: string): string {
 }
 
 function joinParts(parts: StyledPart[]): string {
-  return parts.map((part) => part.text).join("  ");
+  return parts.map((part) => part.text).join(" ");
 }
 
 function fitRightParts(parts: StyledPart[], available: number): string {
@@ -218,7 +218,7 @@ export function renderFooter(snapshot: FooterSnapshot, width: number, theme: Foo
     ? "error"
     : contextPercent !== null && contextPercent >= 70 ? "warning" : "text";
   const contextText = context
-    ? `${context.tokens === null ? "?" : formatCount(context.tokens)}/${formatCount(context.contextWindow)} ${contextPercent === null ? "?" : `${contextPercent.toFixed(0)}%`}`
+    ? `${contextPercent === null ? "?" : `${contextPercent.toFixed(0)}%`}/${formatCount(context.contextWindow)}`
     : "context unavailable";
   const leftBottom = `${contextGauge(contextPercent, theme)} ${color(theme, contextColor, contextText)}`;
 

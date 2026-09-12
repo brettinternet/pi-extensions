@@ -169,8 +169,9 @@ describe("footer rendering", () => {
     expect(lines[0]).toContain("Polish footer");
     const plainUsageLine = lines[1]!.replace(/\x1b\[[0-9;A-Za-z]*m/g, "");
     expect(plainUsageLine).toContain("━━━━──────");
-    expect(plainUsageLine).toContain("42k/114k 37%");
-    expect(plainUsageLine).toContain("↑86k");
+    expect(plainUsageLine).toContain("37%/114k");
+    expect(plainUsageLine).not.toContain("42k");
+    expect(plainUsageLine).toContain("↑86k ↓4.2k R61k");
     expect(plainUsageLine).toContain("$0.124");
     expect(plainUsageLine).toContain("openai/gpt-5.4");
     expect(plainUsageLine).toContain("high");
