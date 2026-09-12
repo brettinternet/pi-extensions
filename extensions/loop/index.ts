@@ -572,6 +572,9 @@ export default function loopExtension(pi: ExtensionAPI): void {
   let commandInterruptedKey: string | undefined;
   let pendingFailure: PendingFailure | undefined;
   let currentSessionManagerRef: unknown;
+  let widgetState: LoopState | undefined;
+  let widgetTui: { requestRender(): void } | undefined;
+  let widgetMounted = false;
 
   function stateFrom(ctx: ContextWithSession): LoopState | undefined {
     runState = latestStateFromContext(ctx);
@@ -594,6 +597,9 @@ export default function loopExtension(pi: ExtensionAPI): void {
   }
 
   function clearWidget(ctx: ExtensionContext): void {
+    widgetState = undefined;
+    widgetTui = undefined;
+    widgetMounted = false;
     if (ctx.hasUI) ctx.ui.setWidget(LOOP_WIDGET_KEY, undefined);
   }
 
@@ -602,10 +608,19 @@ export default function loopExtension(pi: ExtensionAPI): void {
       ctx.ui.setWidget(LOOP_WIDGET_KEY, [formatLoopWidget(state, Number.MAX_SAFE_INTEGER)], { placement: "belowEditor" });
       return;
     }
-    ctx.ui.setWidget(LOOP_WIDGET_KEY, (_tui, _theme) => ({
-      render: (width) => [formatLoopWidget(state, width)],
-      invalidate: () => {},
-    }), { placement: "belowEditor" });
+    widgetState = state;
+    if (widgetMounted && widgetTui) {
+      widgetTui.requestRender();
+      return;
+    }
+    ctx.ui.setWidget(LOOP_WIDGET_KEY, (tui, _theme) => {
+      widgetTui = tui;
+      widgetMounted = true;
+      return {
+        render: (width) => widgetState ? [formatLoopWidget(widgetState, width)] : [],
+        invalidate: () => {},
+      };
+    }, { placement: "belowEditor" });
   }
 
   function renderWidget(ctx: ExtensionContext, state = runState): void {

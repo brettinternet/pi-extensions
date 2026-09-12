@@ -62,6 +62,7 @@ function createHarness(options: {
   let replacementNumber = 0;
   let idle = true;
   let abortCount = 0;
+  let widgetRenderRequests = 0;
   let activeContext: ExtensionCommandContext;
 
   const ui = {
@@ -168,6 +169,10 @@ function createHarness(options: {
     get abortCount() {
       return abortCount;
     },
+    get widgetRenderRequests() {
+      return widgetRenderRequests;
+    },
+    requestWidgetRender: () => { widgetRenderRequests += 1; },
     settle: async () => {
       handlers.get("agent_settled")?.({}, activeContext);
       await new Promise((resolve) => setTimeout(resolve, 0));
@@ -211,7 +216,7 @@ function latestWidgetLines(harness: Harness, width = 80): string[] | undefined {
   const value = harness.widgets.at(-1)?.value;
   if (Array.isArray(value)) return value as string[];
   if (typeof value !== "function") return undefined;
-  return (value({}, {}) as { render: (width: number) => string[] }).render(width);
+  return (value({ requestRender: harness.requestWidgetRender }, {}) as { render: (width: number) => string[] }).render(width);
 }
 
 describe("loop parser and state", () => {
@@ -589,7 +594,13 @@ describe("loop lifecycle", () => {
   test("replaces and cumulatively appends to future iteration prompts", async () => {
     const harness = createHarness();
     await harness.command.handler("3 broad review", harness.context);
+    expect(latestWidgetLines(harness)).toEqual(["loop active 3/3 · broad review"]);
+    const mountedWidgetCount = harness.widgets.length;
+
     await harness.command.handler("prompt fix the failing tests", commandContext(harness));
+    expect(harness.widgets).toHaveLength(mountedWidgetCount);
+    expect(harness.widgetRenderRequests).toBe(1);
+    expect(latestWidgetLines(harness)).toEqual(["loop active 3/3 · fix the failing tests"]);
     await harness.command.handler("append preserve public APIs", commandContext(harness));
     await harness.command.handler("append update relevant docs", commandContext(harness));
 
