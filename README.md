@@ -17,6 +17,7 @@ Slash-command descriptions show each command's argument shape. Press `Tab` to co
 | **Herdr Workbench** | Provides visible Neovim, LazyGit, and foreground-job panes. | [`README`](extensions/workbench/README.md) |
 | **Progress** | Shows compact, passive main-agent activity below the editor. | [`README`](extensions/progress/README.md) |
 | **Title** | Generates and persists a concise session title. | Configuration below |
+| **Footer** | Shows responsive context, request usage, and session Git state with Nerd Font icons. | [`README`](extensions/footer/README.md) |
 
 ### Live Codex
 
@@ -146,6 +147,7 @@ Or install individual extensions from npm:
 pi install npm:@brettinternet/pi-copy-prompt
 pi install npm:pi-live-codex
 pi install npm:@brettinternet/pi-progress
+pi install npm:@brettinternet/pi-footer
 pi install npm:@brettinternet/pi-loop
 pi install npm:pi-wait
 pi install npm:pi-title
