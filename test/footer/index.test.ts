@@ -8,6 +8,7 @@ import {
   parseGitState,
   renderFooter,
   sanitizeFooterText,
+  sanitizeStyledFooterText,
 } from "../../extensions/footer/index.ts";
 import footerExtension from "../../extensions/footer/index.ts";
 
@@ -187,6 +188,9 @@ describe("footer rendering", () => {
   test("strips terminal controls from external footer text", () => {
     const unsafe = "safe\x1b[2J\x1b]0;owned\x07\nnext";
     expect(sanitizeFooterText(unsafe)).toBe("safe[2J]0;owned next");
+    expect(sanitizeStyledFooterText(`\x1b[38;5;6mLSP: 0/7\x1b[39m ${unsafe}`)).toBe(
+      "\x1b[38;5;6mLSP: 0/7\x1b[39m safe[2J]0;owned next",
+    );
     const lines = renderFooter({
       ...snapshot,
       branch: unsafe,

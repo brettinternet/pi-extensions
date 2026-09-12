@@ -62,6 +62,15 @@ export function sanitizeFooterText(text: string): string {
     .trim();
 }
 
+export function sanitizeStyledFooterText(text: string): string {
+  const sgr: string[] = [];
+  const placeholders = text.replace(/\x1b\[[0-9;]*m/g, (sequence) => {
+    sgr.push(sequence);
+    return `\uE000${sgr.length - 1}\uE001`;
+  });
+  return sanitizeFooterText(placeholders).replace(/\uE000(\d+)\uE001/g, (_match, index: string) => sgr[Number(index)] ?? "");
+}
+
 export function execSucceeded(result: { code: number; killed?: boolean }): boolean {
   return result.code === 0 && result.killed !== true;
 }
@@ -402,7 +411,7 @@ export default function footerExtension(pi: ExtensionAPI): void {
           }, width, theme);
           const statuses = [...footerData.getExtensionStatuses().entries()]
             .sort(([left], [right]) => left.localeCompare(right))
-            .map(([, text]) => sanitizeFooterText(text))
+            .map(([, text]) => sanitizeStyledFooterText(text))
             .filter(Boolean);
           if (statuses.length > 0) lines.push(truncateToWidth(statuses.join(" "), width, "…"));
           return lines;
