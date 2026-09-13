@@ -316,7 +316,7 @@ describe("loop parser and state", () => {
     expect(command.getArgumentCompletions?.("time ")).toContainEqual({
       value: "time 4h",
       label: "time 4h",
-      description: "Reset the remaining time from now",
+      description: "Switch to timed mode or reset the remaining time",
     });
     expect(command.getArgumentCompletions?.("delay ")).toContainEqual({
       value: "delay off",
@@ -471,10 +471,56 @@ describe("loop lifecycle", () => {
     expect(harness.notifications.at(-1)).toBe("loop time left set to 2h");
     expect(latestWidgetLines(harness, 100)?.[0]).toContain("2h left");
 
-    const counted = createHarness();
-    await counted.command.handler("2 watch the queue", counted.context);
-    await counted.command.handler("time 2h", commandContext(counted));
-    expect(counted.notifications.at(-1)).toBe("only a timed loop has remaining time to update");
+    const countedWithoutDelay = createHarness();
+    await countedWithoutDelay.command.handler("2 watch the queue", countedWithoutDelay.context);
+    await countedWithoutDelay.command.handler("time 2h", commandContext(countedWithoutDelay));
+    expect(countedWithoutDelay.notifications.at(-1)).toBe(
+      "timed loops require a non-zero delay; set /loop delay <duration> first",
+    );
+    expect(countedWithoutDelay.state()?.endsAt).toBeUndefined();
+  });
+
+  test("switches a counted loop to a timed loop", async () => {
+    const harness = createHarness();
+    await harness.command.handler("3 --delay 5m watch the queue", harness.context);
+    await harness.settle();
+    const before = Date.now();
+
+    await harness.command.handler("time 1s", commandContext(harness));
+
+    expect(harness.state()).toMatchObject({ remainingBudget: 0, pendingRetune: null });
+    expect(harness.state()?.endsAt).toBeGreaterThanOrEqual(before + 1_000);
+    expect(harness.state()?.nextActionAt).toBe(harness.state()?.endsAt);
+    expect(harness.notifications.at(-1)).toBe("loop changed to timed mode with 1s left");
+    await harness.command.handler("end", commandContext(harness));
+  });
+
+  test("switches a timed loop to a counted loop", async () => {
+    const harness = createHarness();
+    await harness.command.handler("for 4h --delay 5m watch the queue", harness.context);
+    await harness.settle();
+    const settledAt = harness.state()?.settledAt;
+
+    await harness.command.handler("3", commandContext(harness));
+
+    expect(harness.state()?.endsAt).toBeUndefined();
+    expect(harness.state()).toMatchObject({ remainingBudget: 0, pendingRetune: 3 });
+    expect(harness.state()?.nextActionAt).toBe((settledAt ?? 0) + 5 * 60 * 1_000);
+    expect(harness.notifications.at(-1)).toBe("loop changed to 3 future iterations");
+    await harness.command.handler("end", commandContext(harness));
+  });
+
+  test("switches a paused timed loop to a counted loop without resuming it", async () => {
+    const harness = createHarness();
+    await harness.command.handler("for 4h --delay 5m watch the queue", harness.context);
+    await harness.command.handler("pause", commandContext(harness));
+    await harness.settle();
+
+    await harness.command.handler("2", commandContext(harness));
+
+    expect(harness.state()?.endsAt).toBeUndefined();
+    expect(harness.state()).toMatchObject({ status: "paused", pendingRetune: 2 });
+    expect(harness.notifications.at(-1)).toBe("loop changed to 2 future iterations; resume will use it");
   });
 
   test("reschedules a timed loop wait when its remaining time changes", async () => {

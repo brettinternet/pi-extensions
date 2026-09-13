@@ -107,7 +107,7 @@ function completeLoopArguments(prefix: string): ArgumentCompletion[] | null {
     return completeArguments(timeCommand[1], COMMON_LOOP_TIMEFRAMES.map((value) => ({
       value: `time ${value}`,
       label: `time ${value}`,
-      description: "Reset the remaining time from now",
+      description: "Switch to timed mode or reset the remaining time",
     })));
   }
 
@@ -179,7 +179,7 @@ function completeLoopArguments(prefix: string): ArgumentCompletion[] | null {
     { value: "resume", label: "resume", description: "Resume a paused loop" },
     { value: "next", label: "next", description: "Skip a paused iteration and start the next one" },
     { value: "end", label: "end", description: "End the loop gracefully" },
-    { value: "time ", label: "time <duration>", description: "Reset a timed loop's remaining time from now" },
+    { value: "time ", label: "time <duration>", description: "Switch to timed mode or reset the remaining time" },
     { value: "delay ", label: "delay <duration>", description: "Set the delay between settled iterations" },
     { value: "prompt ", label: "prompt <text>", description: "Replace the future loop prompt" },
     { value: "append ", label: "append <text>", description: "Append to the future loop prompt" },
@@ -1154,16 +1154,19 @@ export default function loopExtension(pi: ExtensionAPI): void {
         notify(ctx, "a loop must be active, stopping, or paused to update its remaining time", "error");
         return;
       }
-      if (state.endsAt === undefined) {
-        notify(ctx, "only a timed loop has remaining time to update", "error");
+      if (state.delay === 0) {
+        notify(ctx, "timed loops require a non-zero delay; set /loop delay <duration> first", "error");
         return;
       }
+      const switchingModes = state.endsAt === undefined;
       const endsAt = Date.now() + parsed.duration;
       const nextActionAt = state.phase === "waiting" && state.nextActionAt !== undefined
         ? Math.min((state.settledAt ?? state.nextActionAt - state.delay) + state.delay, endsAt)
         : state.nextActionAt;
       const updated = {
         ...state,
+        remainingBudget: 0,
+        pendingRetune: null,
         endsAt,
         ...(nextActionAt !== undefined ? { nextActionAt } : {}),
       };
@@ -1172,11 +1175,11 @@ export default function loopExtension(pi: ExtensionAPI): void {
       if (state.status === "active") rescheduleContinuation(ctx, updated);
       const duration = formatLoopDelay(parsed.duration);
       if (state.status === "paused") {
-        notify(ctx, `loop time left set to ${duration}; resume will use it`, "info");
+        notify(ctx, `loop ${switchingModes ? `changed to timed mode with ${duration} left` : `time left set to ${duration}`}; resume will use it`, "info");
       } else if (state.status === "stopping") {
-        notify(ctx, `loop time left set to ${duration}; loop is still stopping`, "info");
+        notify(ctx, `loop ${switchingModes ? `changed to timed mode with ${duration} left` : `time left set to ${duration}`}; loop is still stopping`, "info");
       } else {
-        notify(ctx, `loop time left set to ${duration}`, "info");
+        notify(ctx, switchingModes ? `loop changed to timed mode with ${duration} left` : `loop time left set to ${duration}`, "info");
       }
       return;
     }
@@ -1354,12 +1357,18 @@ export default function loopExtension(pi: ExtensionAPI): void {
     }
 
     if (parsed.kind === "retune" || parsed.kind === "adjust") {
-      if (!state || (state.status !== "active" && state.status !== "stopping")) {
-        notify(ctx, "a loop must be active to retune its remaining budget", "error");
+      const canRetune = state && (
+        state.status === "active" ||
+        state.status === "stopping" ||
+        (parsed.kind === "retune" && state.status === "paused")
+      );
+      if (!canRetune) {
+        notify(ctx, "a loop must be active, stopping, or paused to retune its remaining budget", "error");
         return;
       }
-      if (state.endsAt !== undefined) {
-        notify(ctx, "a timed loop has no iteration budget to retune", "error");
+      const switchingModes = state.endsAt !== undefined;
+      if (switchingModes && parsed.kind === "adjust") {
+        notify(ctx, "a timed loop has no iteration budget to adjust; use /loop <positive-count> to switch modes", "error");
         return;
       }
       const currentBudget = state.pendingRetune ?? state.remainingBudget;
@@ -1368,11 +1377,20 @@ export default function loopExtension(pi: ExtensionAPI): void {
         notify(ctx, `cannot subtract more than the ${currentBudget} future iteration${currentBudget === 1 ? "" : "s"}`, "error");
         return;
       }
-      const retuned = { ...state, pendingRetune: nextBudget, status: "active" as const };
+      const { endsAt: _endsAt, ...withoutDeadline } = state;
+      const retuned = {
+        ...withoutDeadline,
+        pendingRetune: nextBudget,
+        status: state.status === "paused" ? "paused" as const : "active" as const,
+      };
       persist(pi, retuned);
       renderWidget(ctx, retuned);
-      if (nextBudget <= 0) rescheduleContinuation(ctx, retuned);
-      notify(ctx, `loop will run ${nextBudget} future iteration${nextBudget === 1 ? "" : "s"}`, "info");
+      if (switchingModes || nextBudget <= 0) rescheduleContinuation(ctx, retuned);
+      if (state.status === "paused") {
+        notify(ctx, `loop ${switchingModes ? "changed to" : "set to"} ${nextBudget} future iteration${nextBudget === 1 ? "" : "s"}; resume will use it`, "info");
+      } else {
+        notify(ctx, `loop ${switchingModes ? "changed to" : "will run"} ${nextBudget} future iteration${nextBudget === 1 ? "" : "s"}`, "info");
+      }
       return;
     }
 
