@@ -12,7 +12,7 @@ import { Type } from "typebox";
 export const LOOP_STATE_ENTRY = "pi-loop-state-v1";
 export const LOOP_WIDGET_KEY = "pi-loop";
 export const LOOP_USAGE =
-  "usage: /loop <positive-count> [--delay <duration>] <prompt> | /loop for <duration> --delay <duration> <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop time <duration> | /loop delay <duration> | /loop prompt <text> | /loop append <text> | /loop status | /loop resume | /loop next | /loop end";
+  "usage: /loop <positive-count> [--delay <duration>] <prompt> | /loop for <duration> --delay <duration> <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop time <duration> | /loop delay <duration> | /loop prompt <text> | /loop append <text> | /loop status | /loop pause | /loop resume | /loop next | /loop end";
 
 export const MIN_LOOP_DELAY_MS = 1_000;
 export const MAX_LOOP_DELAY_MS = 24 * 60 * 60 * 1_000;
@@ -26,7 +26,7 @@ const LOOP_AGENT_GUIDANCE = `## Active Loop
 
 This session is part of an active unattended loop. If no useful work can continue without human input, credentials, permissions, or another non-transient external dependency, call loop_pause with the blocker. Do not pause for a temporary condition expected to resolve in a later iteration.`;
 
-export type LoopStatus = "active" | "stopping" | "paused" | "completed" | "stopped" | "inactive";
+export type LoopStatus = "active" | "pausing" | "stopping" | "paused" | "completed" | "stopped" | "inactive";
 export type LoopPhase = "running" | "waiting" | "retrying";
 
 export interface LoopState {
@@ -59,14 +59,15 @@ export type ParsedLoopCommand =
   | { kind: "replacePrompt"; prompt: string }
   | { kind: "appendPrompt"; prompt: string }
   | { kind: "status" }
+  | { kind: "pauseAtBoundary" }
   | { kind: "resume" }
   | { kind: "next" }
   | { kind: "end" }
   | { kind: "continue"; runId: string; iteration: number }
   | { kind: "pause"; runId: string; iteration: number };
 
-const ACTIVE_STATUSES = new Set<LoopStatus>(["active", "stopping"]);
-const VISIBLE_STATUSES = new Set<LoopStatus>(["active", "stopping", "paused"]);
+const ACTIVE_STATUSES = new Set<LoopStatus>(["active", "pausing", "stopping"]);
+const VISIBLE_STATUSES = new Set<LoopStatus>(["active", "pausing", "stopping", "paused"]);
 const TERMINAL_STATUSES = new Set<LoopStatus>(["completed", "stopped", "inactive"]);
 
 type ArgumentCompletion = { value: string; label: string; description?: string };
@@ -174,7 +175,8 @@ function completeLoopArguments(prefix: string): ArgumentCompletion[] | null {
 
   return completeArguments(prefix, [
     { value: "status", label: "status", description: "Show the current loop state" },
-    { value: "resume", label: "resume", description: "Retry a paused iteration" },
+    { value: "pause", label: "pause", description: "Pause after the active iteration settles" },
+    { value: "resume", label: "resume", description: "Resume a paused loop" },
     { value: "next", label: "next", description: "Skip a paused iteration and start the next one" },
     { value: "end", label: "end", description: "End the loop gracefully" },
     { value: "time ", label: "time <duration>", description: "Reset a timed loop's remaining time from now" },
@@ -265,6 +267,10 @@ export function parseLoopCommand(args: string): ParsedLoopCommand {
   if (first === "end") {
     if (rest) throw new Error(`end does not accept arguments; ${LOOP_USAGE}`);
     return { kind: "end" };
+  }
+  if (first === "pause") {
+    if (rest) throw new Error(`pause does not accept arguments; ${LOOP_USAGE}`);
+    return { kind: "pauseAtBoundary" };
   }
   if (first === "resume") {
     if (rest) throw new Error(`resume does not accept arguments; ${LOOP_USAGE}`);
@@ -368,6 +374,7 @@ export function parseLoopState(value: unknown): LoopState | undefined {
   const status = value.status;
   if (
     status !== "active" &&
+    status !== "pausing" &&
     status !== "stopping" &&
     status !== "paused" &&
     status !== "completed" &&
@@ -540,8 +547,8 @@ export function formatLoopWidget(state: LoopState, width: number, now = Date.now
     ? ` · retry ${state.retryCount}/${DEFAULT_LOOP_RETRIES}`
     : "";
   const iteration = state.endsAt === undefined ? "" : ` · #${state.currentIteration}`;
-  if (state.status === "stopping") {
-    return truncateToWidth(`loop stopping${iteration}${timeframe}${delay}${retries} · ${prompt}`, width, "…");
+  if (state.status === "pausing" || state.status === "stopping") {
+    return truncateToWidth(`loop ${state.status}${iteration}${timeframe}${delay}${retries} · ${prompt}`, width, "…");
   }
   if (state.endsAt !== undefined) {
     return truncateToWidth(
@@ -725,7 +732,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   ): void {
     if (!statusIsActive(state) || transitionInFlight) return;
     const nextBudget = state.pendingRetune ?? state.remainingBudget;
-    if (state.status === "stopping" || (state.endsAt === undefined && nextBudget <= 0) || state.delay === 0) {
+    if (state.status === "pausing" || state.status === "stopping" || (state.endsAt === undefined && nextBudget <= 0) || state.delay === 0) {
       clearContinuationWait();
       dispatchContinuation(ctx, state);
       return;
@@ -1017,6 +1024,27 @@ export default function loopExtension(pi: ExtensionAPI): void {
     clearContinuationWait();
     clearRetryWait();
 
+    if (state.status === "pausing") {
+      const {
+        nextActionAt: _nextActionAt,
+        pauseReason: _pauseReason,
+        ...withoutSchedule
+      } = state;
+      const paused: LoopState = {
+        ...withoutSchedule,
+        status: "paused",
+        phase: "waiting",
+        settledAt: Date.now(),
+        pauseReason: "paused by user",
+        pausedAt: Date.now(),
+      };
+      persist(pi, paused);
+      renderWidget(ctx, paused);
+      runState = paused;
+      notify(ctx, "loop paused", "info");
+      return;
+    }
+
     if (state.status === "stopping") {
       const stopped = { ...state, status: "stopped" as const };
       persist(pi, stopped);
@@ -1186,6 +1214,35 @@ export default function loopExtension(pi: ExtensionAPI): void {
       return;
     }
 
+    if (parsed.kind === "pauseAtBoundary") {
+      if (!state || isTerminal(state)) {
+        notify(ctx, "a loop must be active to pause", "error");
+        return;
+      }
+      if (state.status === "paused") {
+        notify(ctx, "loop is already paused", "info");
+        return;
+      }
+      if (state.status === "pausing") {
+        notify(ctx, "loop will pause after the active iteration", "info");
+        return;
+      }
+      if (state.phase === "retrying") {
+        pauseLoop(ctx, state, "paused by user");
+        notify(ctx, "loop paused", "info");
+        return;
+      }
+      const pausing: LoopState = { ...state, status: "pausing" };
+      persist(pi, pausing);
+      renderWidget(ctx, pausing);
+      if (state.phase === "waiting") {
+        await advanceAtBoundary(ctx, pausing.runId, pausing.currentIteration);
+        return;
+      }
+      notify(ctx, "loop will pause after the active iteration", "info");
+      return;
+    }
+
     if (parsed.kind === "end") {
       if (!state || state.status === "inactive" || state.status === "completed" || state.status === "stopped") {
         notify(ctx, "loop: no active run", "info");
@@ -1223,7 +1280,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     }
 
     if (parsed.kind === "resume") {
-      if (state?.status === "stopping") {
+      if (state?.status === "pausing" || state?.status === "stopping") {
         const resumed = { ...state, status: "active" as const };
         persist(pi, resumed);
         renderWidget(ctx, resumed);
@@ -1238,6 +1295,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
         await advanceAtBoundary(ctx, state.runId, state.currentIteration, true);
         return;
       }
+      const pausedAtBoundary = state.phase === "waiting";
       const {
         pauseReason: _pauseReason,
         pausedAt: _pausedAt,
@@ -1254,7 +1312,11 @@ export default function loopExtension(pi: ExtensionAPI): void {
       persist(pi, resumed);
       renderWidget(ctx, resumed);
       handledSettlementKey = undefined;
-      continueCurrentIteration(ctx, resumed);
+      if (pausedAtBoundary) {
+        await advanceAtBoundary(ctx, resumed.runId, resumed.currentIteration);
+      } else {
+        continueCurrentIteration(ctx, resumed);
+      }
       return;
     }
 

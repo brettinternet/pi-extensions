@@ -264,6 +264,7 @@ describe("loop parser and state", () => {
       prompt: "preserve the public API",
     });
     expect(parseLoopCommand("status")).toEqual({ kind: "status" });
+    expect(parseLoopCommand("pause")).toEqual({ kind: "pauseAtBoundary" });
     expect(parseLoopCommand("next")).toEqual({ kind: "next" });
     expect(parseLoopCommand("end")).toEqual({ kind: "end" });
     expect(parseLoopCommand("")).toEqual({ kind: "end" });
@@ -273,6 +274,7 @@ describe("loop parser and state", () => {
     expect(() => parseLoopCommand("-2 prompt")).toThrow("adjustment");
     expect(() => parseLoopCommand("2.5 prompt")).toThrow("positive integer");
     expect(() => parseLoopCommand("status now")).toThrow("does not accept");
+    expect(() => parseLoopCommand("pause now")).toThrow("does not accept");
     expect(() => parseLoopCommand("next now")).toThrow("does not accept");
     expect(() => parseLoopCommand("prompt")).toThrow("requires text");
     expect(() => parseLoopCommand("append")).toThrow("requires text");
@@ -296,6 +298,9 @@ describe("loop parser and state", () => {
     expect(command.getArgumentCompletions?.("")).toContainEqual(
       { value: "end", label: "end", description: "End the loop gracefully" },
     );
+    expect(command.getArgumentCompletions?.("pa")).toEqual([
+      { value: "pause", label: "pause", description: "Pause after the active iteration settles" },
+    ]);
     expect(command.getArgumentCompletions?.("3")).toEqual([
       { value: "3 ", label: "3 <prompt>", description: "Run a prompt three times" },
     ]);
@@ -386,6 +391,9 @@ describe("loop parser and state", () => {
 
     expect(formatLoopWidget({ ...state, status: "stopping" }, 80)).toBe(
       "loop stopping · inspect the repository and fix the failing tests",
+    );
+    expect(formatLoopWidget({ ...state, status: "pausing" }, 80)).toBe(
+      "loop pausing · inspect the repository and fix the failing tests",
     );
     expect(formatLoopWidget({ ...state, delay: 2_000 }, 80)).toBe(
       "loop active 4/4 · delay 2s · inspect the repository and fix the failing tests",
@@ -671,6 +679,44 @@ describe("loop lifecycle", () => {
       "fix the failing tests\n\npreserve public APIs\n\nupdate relevant docs",
     ]);
     expect(harness.state()).toMatchObject({ currentIteration: 2, remainingBudget: 1 });
+  });
+
+  test("pauses at the settled boundary and resumes with the next iteration", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 do the work", harness.context);
+
+    await harness.command.handler("pause", commandContext(harness));
+    expect(harness.state()).toMatchObject({ status: "pausing", currentIteration: 1 });
+    expect(harness.notifications.at(-1)).toBe("loop will pause after the active iteration");
+
+    await harness.settle();
+    expect(harness.state()).toMatchObject({
+      status: "paused",
+      phase: "waiting",
+      pauseReason: "paused by user",
+      currentIteration: 1,
+      remainingBudget: 1,
+    });
+    expect(harness.prompts).toEqual(["do the work"]);
+
+    await harness.command.handler("resume", commandContext(harness));
+    expect(harness.state()).toMatchObject({ status: "active", currentIteration: 2, remainingBudget: 0 });
+    expect(harness.prompts).toEqual(["do the work", "do the work"]);
+  });
+
+  test("pauses immediately between iterations", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 --delay 1s do the work", harness.context);
+    await harness.settle();
+    expect(harness.state()).toMatchObject({ status: "active", phase: "waiting" });
+
+    await harness.command.handler("pause", commandContext(harness));
+    expect(harness.state()).toMatchObject({ status: "paused", phase: "waiting" });
+    await new Promise((resolve) => setTimeout(resolve, 1_050));
+    expect(harness.prompts).toEqual(["do the work"]);
+
+    await harness.command.handler("resume", commandContext(harness));
+    expect(harness.prompts).toEqual(["do the work", "do the work"]);
   });
 
   test("advances a paused iteration with next into a fresh session", async () => {
