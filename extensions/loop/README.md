@@ -12,6 +12,7 @@ pi install npm:@brettinternet/pi-loop
 /loop <count>
 /loop +<count>
 /loop -<count>
+/loop time <duration>
 /loop delay <duration>
 /loop prompt <text>
 /loop append <text>
@@ -22,7 +23,7 @@ pi install npm:@brettinternet/pi-loop
 /loop next
 ```
 
-Durations use `ms`, `s`, `m`, `h`, or `d`. Delays range from 1 second to 24 hours. Timed loops run for at most 30 days.
+Durations use `ms`, `s`, `m`, `h`, or `d`. Delays range from 1 second to 24 hours. Timed loops run for at most 30 days. During a timed loop, `/loop time <duration>` resets the remaining time from now.
 
 Errors retry after 30 seconds, 1 minute, and 2 minutes, then pause. Aborting pauses the loop. A `loop_pause` request pauses for human blockers. Recovery preserves the loop so you can resume or advance it.
 

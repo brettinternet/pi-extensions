@@ -246,6 +246,7 @@ describe("loop parser and state", () => {
       delay: 5 * 60 * 1_000,
       prompt: "watch the queue",
     });
+    expect(parseLoopCommand("time 2h")).toEqual({ kind: "time", duration: 2 * 60 * 60 * 1_000 });
     expect(parseLoopCommand("delay 1m")).toEqual({ kind: "delay", delay: 60_000 });
     expect(parseLoopCommand("delay off")).toEqual({ kind: "delay", delay: 0 });
     expect(parseLoopDuration("1000ms")).toBe(1_000);
@@ -275,6 +276,8 @@ describe("loop parser and state", () => {
     expect(() => parseLoopCommand("next now")).toThrow("does not accept");
     expect(() => parseLoopCommand("prompt")).toThrow("requires text");
     expect(() => parseLoopCommand("append")).toThrow("requires text");
+    expect(() => parseLoopCommand("time")).toThrow("requires one duration");
+    expect(() => parseLoopCommand("time 31d")).toThrow("30d");
     expect(() => parseLoopCommand("delay")).toThrow("requires one duration");
     expect(() => parseLoopCommand("delay 999ms")).toThrow("at least 1s");
     expect(() => parseLoopCommand("delay 25h")).toThrow("24h");
@@ -305,6 +308,11 @@ describe("loop parser and state", () => {
     expect(command.getArgumentCompletions?.("ne")).toEqual([
       { value: "next", label: "next", description: "Skip a paused iteration and start the next one" },
     ]);
+    expect(command.getArgumentCompletions?.("time ")).toContainEqual({
+      value: "time 4h",
+      label: "time 4h",
+      description: "Reset the remaining time from now",
+    });
     expect(command.getArgumentCompletions?.("delay ")).toContainEqual({
       value: "delay off",
       label: "delay off",
@@ -441,6 +449,37 @@ describe("loop lifecycle", () => {
     await harness.settle();
     expect(harness.state()).toMatchObject({ status: "completed", currentIteration: 2 });
     expect(harness.prompts).toEqual(["watch the queue", "watch the queue"]);
+  });
+
+  test("updates a timed loop's remaining time from now", async () => {
+    const harness = createHarness();
+    await harness.command.handler("for 4h --delay 5m watch the queue", harness.context);
+    const before = Date.now();
+
+    await harness.command.handler("time 2h", commandContext(harness));
+
+    expect(harness.state()?.endsAt).toBeGreaterThanOrEqual(before + 2 * 60 * 60 * 1_000);
+    expect(harness.state()?.endsAt).toBeLessThanOrEqual(Date.now() + 2 * 60 * 60 * 1_000);
+    expect(harness.notifications.at(-1)).toBe("loop time left set to 2h");
+    expect(latestWidgetLines(harness, 100)?.[0]).toContain("2h left");
+
+    const counted = createHarness();
+    await counted.command.handler("2 watch the queue", counted.context);
+    await counted.command.handler("time 2h", commandContext(counted));
+    expect(counted.notifications.at(-1)).toBe("only a timed loop has remaining time to update");
+  });
+
+  test("reschedules a timed loop wait when its remaining time changes", async () => {
+    const harness = createHarness();
+    await harness.command.handler("for 4h --delay 5m watch the queue", harness.context);
+    await harness.settle();
+    const before = Date.now();
+
+    await harness.command.handler("time 1s", commandContext(harness));
+
+    expect(harness.state()?.nextActionAt).toBe(harness.state()?.endsAt);
+    expect(harness.state()?.endsAt).toBeGreaterThanOrEqual(before + 1_000);
+    await harness.command.handler("end", commandContext(harness));
   });
 
   test("does not dispatch an iteration whose deadline expires during session replacement", async () => {

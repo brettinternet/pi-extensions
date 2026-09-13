@@ -12,7 +12,7 @@ import { Type } from "typebox";
 export const LOOP_STATE_ENTRY = "pi-loop-state-v1";
 export const LOOP_WIDGET_KEY = "pi-loop";
 export const LOOP_USAGE =
-  "usage: /loop <positive-count> [--delay <duration>] <prompt> | /loop for <duration> --delay <duration> <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop delay <duration> | /loop prompt <text> | /loop append <text> | /loop status | /loop resume | /loop next | /loop end";
+  "usage: /loop <positive-count> [--delay <duration>] <prompt> | /loop for <duration> --delay <duration> <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop time <duration> | /loop delay <duration> | /loop prompt <text> | /loop append <text> | /loop status | /loop resume | /loop next | /loop end";
 
 export const MIN_LOOP_DELAY_MS = 1_000;
 export const MAX_LOOP_DELAY_MS = 24 * 60 * 60 * 1_000;
@@ -54,6 +54,7 @@ export type ParsedLoopCommand =
   | { kind: "startTimed"; duration: number; delay: number; prompt: string }
   | { kind: "retune"; count: number }
   | { kind: "adjust"; delta: number }
+  | { kind: "time"; duration: number }
   | { kind: "delay"; delay: number }
   | { kind: "replacePrompt"; prompt: string }
   | { kind: "appendPrompt"; prompt: string }
@@ -99,6 +100,15 @@ function completeLoopArguments(prefix: string): ArgumentCompletion[] | null {
   const input = prefix.trimStart();
   const delayCommand = /^(delay|--delay)(?:\s+(.*))?$/.exec(input);
   if (delayCommand?.[2] !== undefined) return delayCompletions(prefix, delayCommand[1]);
+
+  const timeCommand = /^time(?:\s+(.*))?$/.exec(input);
+  if (timeCommand?.[1] !== undefined) {
+    return completeArguments(timeCommand[1], COMMON_LOOP_TIMEFRAMES.map((value) => ({
+      value: `time ${value}`,
+      label: `time ${value}`,
+      description: "Reset the remaining time from now",
+    })));
+  }
 
   const timedDelay = /^for\s+(\S+)\s+--delay(=|\s+)?(.*)$/.exec(input);
   if (timedDelay) {
@@ -167,6 +177,7 @@ function completeLoopArguments(prefix: string): ArgumentCompletion[] | null {
     { value: "resume", label: "resume", description: "Retry a paused iteration" },
     { value: "next", label: "next", description: "Skip a paused iteration and start the next one" },
     { value: "end", label: "end", description: "End the loop gracefully" },
+    { value: "time ", label: "time <duration>", description: "Reset a timed loop's remaining time from now" },
     { value: "delay ", label: "delay <duration>", description: "Set the delay between settled iterations" },
     { value: "prompt ", label: "prompt <text>", description: "Replace the future loop prompt" },
     { value: "append ", label: "append <text>", description: "Append to the future loop prompt" },
@@ -262,6 +273,11 @@ export function parseLoopCommand(args: string): ParsedLoopCommand {
   if (first === "next") {
     if (rest) throw new Error(`next does not accept arguments; ${LOOP_USAGE}`);
     return { kind: "next" };
+  }
+  if (first === "time") {
+    const fields = rest.split(/\s+/).filter(Boolean);
+    if (fields.length !== 1) throw new Error(`time requires one duration; ${LOOP_USAGE}`);
+    return { kind: "time", duration: parseLoopTimeframe(fields[0]) };
   }
   if (first === "delay") {
     const fields = rest.split(/\s+/).filter(Boolean);
@@ -1102,6 +1118,38 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
     if (parsed.kind === "status") {
       notify(ctx, formatLoopStatus(state), "info");
+      return;
+    }
+
+    if (parsed.kind === "time") {
+      if (!state || isTerminal(state)) {
+        notify(ctx, "a loop must be active, stopping, or paused to update its remaining time", "error");
+        return;
+      }
+      if (state.endsAt === undefined) {
+        notify(ctx, "only a timed loop has remaining time to update", "error");
+        return;
+      }
+      const endsAt = Date.now() + parsed.duration;
+      const nextActionAt = state.phase === "waiting" && state.nextActionAt !== undefined
+        ? Math.min((state.settledAt ?? state.nextActionAt - state.delay) + state.delay, endsAt)
+        : state.nextActionAt;
+      const updated = {
+        ...state,
+        endsAt,
+        ...(nextActionAt !== undefined ? { nextActionAt } : {}),
+      };
+      persist(pi, updated);
+      renderWidget(ctx, updated);
+      if (state.status === "active") rescheduleContinuation(ctx, updated);
+      const duration = formatLoopDelay(parsed.duration);
+      if (state.status === "paused") {
+        notify(ctx, `loop time left set to ${duration}; resume will use it`, "info");
+      } else if (state.status === "stopping") {
+        notify(ctx, `loop time left set to ${duration}; loop is still stopping`, "info");
+      } else {
+        notify(ctx, `loop time left set to ${duration}`, "info");
+      }
       return;
     }
 
