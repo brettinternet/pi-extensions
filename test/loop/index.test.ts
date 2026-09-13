@@ -430,7 +430,7 @@ describe("loop lifecycle", () => {
     expect(harness.state()?.endsAt).toBeGreaterThan(Date.now() + 3 * 60 * 60 * 1_000);
     expect(formatLoopStatus(harness.state())).toContain("ends at:");
     expect(formatLoopWidget(harness.state()!, 100, harness.state()!.endsAt! - 4 * 60 * 60 * 1_000)).toBe(
-      "loop active · 4h left · delay 5m · watch the queue",
+      "loop active · #1 · 4h left · delay 5m · watch the queue",
     );
 
     const first = harness.state()!;

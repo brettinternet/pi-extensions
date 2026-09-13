@@ -523,12 +523,13 @@ export function formatLoopWidget(state: LoopState, width: number, now = Date.now
   const retries = (state.retryCount ?? 0) > 0
     ? ` · retry ${state.retryCount}/${DEFAULT_LOOP_RETRIES}`
     : "";
+  const iteration = state.endsAt === undefined ? "" : ` · #${state.currentIteration}`;
   if (state.status === "stopping") {
-    return truncateToWidth(`loop stopping${timeframe}${delay}${retries} · ${prompt}`, width, "…");
+    return truncateToWidth(`loop stopping${iteration}${timeframe}${delay}${retries} · ${prompt}`, width, "…");
   }
   if (state.endsAt !== undefined) {
     return truncateToWidth(
-      `loop ${state.status}${timeframe}${delay}${retries} · ${prompt}`,
+      `loop ${state.status}${iteration}${timeframe}${delay}${retries} · ${prompt}`,
       width,
       "…",
     );
