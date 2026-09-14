@@ -596,9 +596,6 @@ export default function loopExtension(pi: ExtensionAPI): void {
   let commandInterruptedKey: string | undefined;
   let pendingFailure: PendingFailure | undefined;
   let currentSessionManagerRef: unknown;
-  let widgetState: LoopState | undefined;
-  let widgetTui: { requestRender(): void } | undefined;
-  let widgetMounted = false;
   let herdrBlocked = false;
 
   function reportHerdrBlocked(state: LoopState | undefined): void {
@@ -632,9 +629,6 @@ export default function loopExtension(pi: ExtensionAPI): void {
   }
 
   function clearWidget(ctx: ExtensionContext): void {
-    widgetState = undefined;
-    widgetTui = undefined;
-    widgetMounted = false;
     if (ctx.hasUI) ctx.ui.setWidget(LOOP_WIDGET_KEY, undefined);
   }
 
@@ -643,19 +637,12 @@ export default function loopExtension(pi: ExtensionAPI): void {
       ctx.ui.setWidget(LOOP_WIDGET_KEY, [formatLoopWidget(state, Number.MAX_SAFE_INTEGER)], { placement: "belowEditor" });
       return;
     }
-    widgetState = state;
-    if (widgetMounted && widgetTui) {
-      widgetTui.requestRender();
-      return;
-    }
-    ctx.ui.setWidget(LOOP_WIDGET_KEY, (tui, _theme) => {
-      widgetTui = tui;
-      widgetMounted = true;
-      return {
-        render: (width) => widgetState ? [formatLoopWidget(widgetState, width)] : [],
-        invalidate: () => {},
-      };
-    }, { placement: "belowEditor" });
+    // Replacing the widget invalidates Pi's parent layout caches. Requesting a
+    // render alone can leave the previous line visible until another UI event.
+    ctx.ui.setWidget(LOOP_WIDGET_KEY, (_tui, _theme) => ({
+      render: (width) => [formatLoopWidget(state, width)],
+      invalidate: () => {},
+    }), { placement: "belowEditor" });
   }
 
   function renderWidget(ctx: ExtensionContext, state = runState): void {

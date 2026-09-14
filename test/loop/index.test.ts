@@ -704,8 +704,8 @@ describe("loop lifecycle", () => {
     const mountedWidgetCount = harness.widgets.length;
 
     await harness.command.handler("prompt fix the failing tests", commandContext(harness));
-    expect(harness.widgets).toHaveLength(mountedWidgetCount);
-    expect(harness.widgetRenderRequests).toBe(1);
+    expect(harness.widgets).toHaveLength(mountedWidgetCount + 1);
+    expect(harness.widgetRenderRequests).toBe(0);
     expect(latestWidgetLines(harness)).toEqual(["loop active 3/3 · fix the failing tests"]);
     await harness.command.handler("append preserve public APIs", commandContext(harness));
     await harness.command.handler("append update relevant docs", commandContext(harness));
