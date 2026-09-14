@@ -711,7 +711,6 @@ export class LiveSession {
         this.#refreshPhase();
         break;
       case "input_transcript.added": {
-        this.#outputTurnComplete = true;
         if (this.#inputContinuationDeadline !== undefined) {
           if (this.#now() > this.#inputContinuationDeadline) {
             this.#inputTranscript = "";
@@ -720,6 +719,7 @@ export class LiveSession {
         }
         const startsNew = !this.#inputTranscript;
         if (startsNew) {
+          this.#outputTurnComplete = true;
           this.#suppressResolvedConfirmationDelegation = false;
           this.#suppressResolvedConfirmationTranscript = false;
         }

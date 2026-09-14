@@ -95,6 +95,7 @@ interface Harness {
   userTranscripts: TranscriptUpdate[];
   agentTranscripts: TranscriptUpdate[];
   userTranscriptStarts: boolean[];
+  agentTranscriptStarts: boolean[];
   terminal: Array<Error | undefined>;
   sentToAgent: unknown[];
   aborts(): number;
@@ -198,6 +199,7 @@ function createHarness(
   const userTranscripts: TranscriptUpdate[] = [];
   const agentTranscripts: TranscriptUpdate[] = [];
   const userTranscriptStarts: boolean[] = [];
+  const agentTranscriptStarts: boolean[] = [];
   const terminal: Array<Error | undefined> = [];
   const sentToAgent: unknown[] = [];
   let abortCount = 0;
@@ -229,7 +231,10 @@ function createHarness(
       userTranscripts.push({ text, finalized });
       userTranscriptStarts.push(startsNew);
     },
-    onAgentTranscript: (text, finalized) => agentTranscripts.push({ text, finalized }),
+    onAgentTranscript: (text, finalized, startsNew) => {
+      agentTranscripts.push({ text, finalized });
+      agentTranscriptStarts.push(startsNew);
+    },
     onAttachmentsChanged: () => {},
     onWorkStatus: () => {},
     onTerminal: (error) => terminal.push(error),
@@ -257,6 +262,7 @@ function createHarness(
     userTranscripts,
     agentTranscripts,
     userTranscriptStarts,
+    agentTranscriptStarts,
     terminal,
     sentToAgent,
     aborts: () => abortCount,
@@ -820,6 +826,10 @@ test("coalesces trailing user speech shortly after delegation", async () => {
     item: { text: " results when they get back" },
   });
   harness.transport().emit({
+    type: "output_transcript.added",
+    item: { text: "Let me check that for you. I'll report back." },
+  });
+  harness.transport().emit({
     type: "turn.done",
     turn: {
       role: "user",
@@ -833,6 +843,11 @@ test("coalesces trailing user speech shortly after delegation", async () => {
     { text: "Report to me the results when they get back", finalized: true },
   ]);
   assert.deepEqual(harness.userTranscriptStarts, [true, false, false]);
+  assert.deepEqual(harness.agentTranscripts, [
+    { text: "Let me check that for you.", finalized: false },
+    { text: "Let me check that for you. I'll report back.", finalized: false },
+  ]);
+  assert.deepEqual(harness.agentTranscriptStarts, [true, false]);
 
   await harness.session.stop();
 });
