@@ -128,7 +128,7 @@ describe("progress state", () => {
 
 describe("tool descriptions", () => {
   test("recognizes wrapped check commands without treating ordinary commands as checks", () => {
-    expect(checkCommandLabel("cd /repo && rtk mise exec -- task check")).toBe(
+    expect(checkCommandLabel("cd /repo && mise exec -- task check")).toBe(
       "task check",
     );
     expect(checkCommandLabel("mise exec bun -- bun test src/a.test.ts")).toBe(

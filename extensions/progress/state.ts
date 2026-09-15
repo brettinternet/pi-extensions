@@ -72,7 +72,6 @@ function commandSegments(command: string): string[] {
 
 function stripCommandWrappers(command: string): string {
   let value = command;
-  if (value.startsWith("rtk ")) value = value.slice(4).trimStart();
   const mise = /^mise\s+exec(?:\s+[^\s]+)?\s+--\s+/.exec(value);
   if (mise) value = value.slice(mise[0].length);
   return value;
