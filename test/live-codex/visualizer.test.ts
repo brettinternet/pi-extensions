@@ -96,6 +96,20 @@ describe("Live visualizer", () => {
     );
   });
 
+  test("shows when updates are waiting during a pause", () => {
+    const visualizer = createVisualizer();
+    visualizer.setPhase("paused");
+    visualizer.setPendingUpdates(true);
+
+    assert.match(
+      visualizer.render(80).join("\n"),
+      /⏸ paused · updates waiting · space resume/,
+    );
+
+    visualizer.setPendingUpdates(false);
+    assert.doesNotMatch(visualizer.render(80).join("\n"), /updates waiting/);
+  });
+
   test("stages verbatim multiline text without invoking normal submission", () => {
     const submitted: string[] = [];
     const notes: string[] = [];

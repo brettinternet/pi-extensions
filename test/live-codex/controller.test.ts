@@ -96,6 +96,7 @@ interface Harness {
   agentTranscripts: TranscriptUpdate[];
   userTranscriptStarts: boolean[];
   agentTranscriptStarts: boolean[];
+  pendingUpdates: boolean[];
   terminal: Array<Error | undefined>;
   sentToAgent: unknown[];
   aborts(): number;
@@ -200,6 +201,7 @@ function createHarness(
   const agentTranscripts: TranscriptUpdate[] = [];
   const userTranscriptStarts: boolean[] = [];
   const agentTranscriptStarts: boolean[] = [];
+  const pendingUpdates: boolean[] = [];
   const terminal: Array<Error | undefined> = [];
   const sentToAgent: unknown[] = [];
   let abortCount = 0;
@@ -237,6 +239,7 @@ function createHarness(
     },
     onAttachmentsChanged: () => {},
     onWorkStatus: () => {},
+    onPendingUpdatesChanged: (pending) => pendingUpdates.push(pending),
     onTerminal: (error) => terminal.push(error),
   };
   const session = new LiveSession({
@@ -263,6 +266,7 @@ function createHarness(
     agentTranscripts,
     userTranscriptStarts,
     agentTranscriptStarts,
+    pendingUpdates,
     terminal,
     sentToAgent,
     aborts: () => abortCount,
@@ -724,9 +728,12 @@ test("work updates accumulated after a failed resume reach the retry", async () 
   }));
   harness.session.handleBackgroundActivityFinished(finished("workbench", "after-failure"));
   await flush();
+  assert.deepEqual(harness.pendingUpdates, [true]);
+
   await harness.session.resume();
   await flush();
 
+  assert.deepEqual(harness.pendingUpdates, [true, false]);
   const resumedContext = harness.transport().sent
     .filter((message) => message.type === "session.context.append")
     .map(contextText)

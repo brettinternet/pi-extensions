@@ -218,6 +218,8 @@ class LiveExtensionRuntime {
           onAttachmentsChanged: (count) =>
             this.#visualizer?.setAttachmentCount(count),
           onWorkStatus: (status) => this.#visualizer?.setWorkStatus(status),
+          onPendingUpdatesChanged: (pending) =>
+            this.#visualizer?.setPendingUpdates(pending),
           onTerminal: (error) =>
             session && this.#finish(session, error ?? pendingError),
         },

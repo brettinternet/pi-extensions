@@ -92,6 +92,7 @@ export interface LiveSessionCallbacks {
   onAgentTranscript(text: string, finalized: boolean, startsNew: boolean): void;
   onAttachmentsChanged(count: number): void;
   onWorkStatus(status: WorkStatus): void;
+  onPendingUpdatesChanged(pending: boolean): void;
   onTerminal(error?: Error): void;
 }
 
@@ -427,6 +428,7 @@ export class LiveSession {
       `${role === "user" ? "User" : "Assistant"}: ${text.slice(0, 1_500)}`
     );
     const updates = this.#pausedContext.splice(0);
+    if (updates.length > 0) this.#callbacks.onPendingUpdatesChanged(false);
     const sections = [
       updates.length > 0 ? `Updates while voice was paused:\n${updates.join("\n\n")}` : "",
       transcript.length > 0 ? `Recent voice transcript:\n${transcript.join("\n")}` : "",
@@ -1038,9 +1040,13 @@ export class LiveSession {
   #rememberPausedContext(text: string): void {
     const normalized = text.trim();
     if (!normalized) return;
+    const hadPendingUpdates = this.#pausedContext.length > 0;
     this.#pausedContext.push(normalized);
     while (this.#pausedContext.join("\n\n").length > MAX_RESUME_CONTEXT_CHARS) {
       this.#pausedContext.shift();
+    }
+    if (!hadPendingUpdates && this.#pausedContext.length > 0) {
+      this.#callbacks.onPendingUpdatesChanged(true);
     }
   }
 

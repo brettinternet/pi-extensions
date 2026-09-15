@@ -57,6 +57,7 @@ export class LiveVisualizer extends CustomEditor {
   readonly #inProgressTranscripts: Partial<Record<TranscriptRole, TranscriptUtterance>> = {};
   #attachmentCount = 0;
   #workStatus: WorkStatus = { queued: 0, active: 0, failed: 0 };
+  #pendingUpdates = false;
 
   constructor(
     tui: TUI,
@@ -160,6 +161,12 @@ export class LiveVisualizer extends CustomEditor {
       this.#workStatus.failed === status.failed
     ) return;
     this.#workStatus = status;
+    this.#tui.requestRender();
+  }
+
+  setPendingUpdates(pending: boolean): void {
+    if (this.#pendingUpdates === pending) return;
+    this.#pendingUpdates = pending;
     this.#tui.requestRender();
   }
 
@@ -316,9 +323,10 @@ export class LiveVisualizer extends CustomEditor {
       this.#workStatus.failed > 0 ? `${this.#workStatus.failed} failed` : "",
     ].filter(Boolean).join(" · ");
     const workLabel = work ? ` · ${work}` : "";
+    const pendingUpdatesLabel = this.#pendingUpdates ? " · updates waiting" : "";
     const spaceAction = this.#phase === "paused" ? "resume" : "mute";
-    const fullLabel = ` ${icon} ${this.#phase}${workLabel} · space ${spaceAction} · esc end `;
-    const shortLabel = ` ${icon} ${this.#phase}${workLabel} `;
+    const fullLabel = ` ${icon} ${this.#phase}${pendingUpdatesLabel}${workLabel} · space ${spaceAction} · esc end `;
+    const shortLabel = ` ${icon} ${this.#phase}${pendingUpdatesLabel}${workLabel} `;
     const label =
       innerWidth >= visibleWidth(fullLabel) + 1
         ? fullLabel
