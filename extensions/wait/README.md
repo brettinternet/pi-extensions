@@ -19,7 +19,7 @@ pi install npm:pi-wait
 
 Durations use `ms`, `s`, `m`, `h`, or `d`, up to 24 days. Press `Enter` to start the wait immediately. When a message is already queued, `/wait <duration>` resets its timeout, `/wait <duration> <prompt>` replaces its prompt and timeout, and `/wait now` sends it immediately. `/wait pause` freezes an active countdown and `/wait resume` continues it with the remaining time.
 
-Follow-up prompts queue after current work settles. If the timer expires while Pi is busy, the prompt waits in the queue.
+Follow-up prompts queue after current work settles. If the timer expires while Pi is busy, the prompt waits in the queue. Active and paused waits survive `/reload` in the same session.
 
 `wait_then_continue` ends the current turn, then starts its timer after the turn settles. Do not use it during an active `/loop`.
 

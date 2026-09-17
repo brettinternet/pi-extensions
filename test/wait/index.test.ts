@@ -3,14 +3,19 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import type { AutocompleteProvider } from "@earendil-works/pi-tui";
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import waitExtension, {
+  WAIT_STATE_ENTRY,
   WAIT_WIDGET_KEY,
   formatRemaining,
   formatWaitWidget,
   parseWaitCommand,
   parseWaitDuration,
+  parseWaitState,
+  readWaitState,
 } from "../../extensions/wait/index.ts";
 
-function createHarness() {
+type WaitEntry = { type: "custom"; customType: string; data: unknown };
+
+function createHarness(entries: WaitEntry[] = []) {
   const handlers = new Map<string, (...args: any[]) => any>();
   const tools = new Map<string, any>();
   let autocomplete: AutocompleteProvider | undefined;
@@ -38,12 +43,14 @@ function createHarness() {
         });
       },
     },
+    sessionManager: { getBranch: () => entries },
     isIdle: () => idle,
   } as unknown as ExtensionContext;
 
   const pi = {
     on: (name: string, handler: (...args: any[]) => any) => handlers.set(name, handler),
     registerTool: (tool: any) => tools.set(tool.name, tool),
+    appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }),
     sendUserMessage: (
       content: string,
       options?: {
@@ -61,6 +68,7 @@ function createHarness() {
   return {
     get autocomplete() { return autocomplete!; },
     context,
+    entries,
     handlers,
     tools,
     notifications,
@@ -118,6 +126,18 @@ describe("wait parser and formatting", () => {
 
     const paused = formatWaitWidget({ prompt: "check again", remaining: 61_000, paused: true }, 80);
     expect(stripTerminalSequences(paused)).toBe("wait paused (1m 1s) · /wait resume · /wait cancel · check again");
+  });
+
+  test("reads the latest persisted state", () => {
+    const pending = {
+      version: 1 as const,
+      pending: { prompt: "check deployment", remaining: 5_000, paused: true as const },
+    };
+    expect(parseWaitState(pending)).toEqual(pending);
+    expect(readWaitState([
+      { type: "custom", customType: WAIT_STATE_ENTRY, data: pending },
+      { type: "custom", customType: WAIT_STATE_ENTRY, data: { version: 1, pending: null } },
+    ])).toEqual({ version: 1, pending: null });
   });
 
   test("completes the command, controls, and common durations", async () => {
@@ -390,5 +410,38 @@ describe("wait lifecycle", () => {
     await sleep(15);
 
     expect(harness.messages).toEqual([]);
+  });
+
+  test("restores a paused prompt after reload", async () => {
+    const before = createHarness();
+    await before.submit("10m check deployment");
+    await before.submit("pause");
+    before.handlers.get("session_shutdown")?.({ reason: "reload" }, before.context);
+
+    const after = createHarness(before.entries);
+    after.handlers.get("session_start")?.({ reason: "reload" }, after.context);
+    await after.submit("status");
+
+    expect(after.notifications.at(-1)).toContain("wait: paused with 10m remaining");
+    expect(after.notifications.at(-1)).toContain("check deployment");
+    after.handlers.get("session_shutdown")?.({ reason: "quit" }, after.context);
+  });
+
+  test("delivers an elapsed prompt after reload", async () => {
+    const entries: WaitEntry[] = [{
+      type: "custom",
+      customType: WAIT_STATE_ENTRY,
+      data: { version: 1, pending: { prompt: "check deployment", dueAt: Date.now() - 1 } },
+    }];
+    const harness = createHarness(entries);
+    harness.handlers.get("session_start")?.({ reason: "reload" }, harness.context);
+    await sleep(10);
+
+    expect(harness.messages).toEqual([{
+      content: "check deployment",
+      options: { expandPromptTemplates: true },
+    }]);
+    expect(readWaitState(entries)).toEqual({ version: 1, pending: null });
+    harness.handlers.get("session_shutdown")?.({ reason: "quit" }, harness.context);
   });
 });

@@ -4,6 +4,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 export const WAIT_WIDGET_KEY = "pi-wait";
+export const WAIT_STATE_ENTRY = "pi-wait-state-v1";
 export const WAIT_USAGE = "usage: /wait <duration> [prompt] | /wait now | /wait pause | /wait resume | /wait status | /wait cancel";
 export const MAX_WAIT_MS = 24 * 24 * 60 * 60 * 1_000;
 
@@ -29,6 +30,9 @@ export type PendingWait =
   | { prompt: string; delay: number; dueAt?: undefined; paused?: undefined }
   | { prompt: string; remaining: number; paused: true; dueAt?: undefined };
 
+export type WaitState = { version: 1; pending: PendingWait | null };
+
+type WaitEntry = { type?: string; customType?: string; data?: unknown };
 type ArgumentCompletion = { value: string; label: string; description?: string };
 
 export function parseWaitDuration(value: string): number {
@@ -73,6 +77,47 @@ export function formatRemaining(milliseconds: number): string {
   const days = Math.floor(hours / 24);
   const remainingHours = hours % 24;
   return remainingHours ? `${days}d ${remainingHours}h` : `${days}d`;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null;
+}
+
+export function parseWaitState(value: unknown): WaitState | undefined {
+  if (!isRecord(value) || value.version !== 1) return undefined;
+  if (value.pending === null) return { version: 1, pending: null };
+  if (!isRecord(value.pending) || typeof value.pending.prompt !== "string" || !value.pending.prompt.trim()) {
+    return undefined;
+  }
+
+  const prompt = value.pending.prompt;
+  if (value.pending.paused === true) {
+    const remaining = value.pending.remaining;
+    if (!Number.isSafeInteger(remaining) || (remaining as number) < 1 || (remaining as number) > MAX_WAIT_MS) {
+      return undefined;
+    }
+    return { version: 1, pending: { prompt, remaining: remaining as number, paused: true } };
+  }
+  if (value.pending.paused !== undefined) return undefined;
+
+  if (value.pending.dueAt !== undefined) {
+    const dueAt = value.pending.dueAt;
+    if (!Number.isSafeInteger(dueAt) || (dueAt as number) < 0) return undefined;
+    return { version: 1, pending: { prompt, dueAt: dueAt as number } };
+  }
+
+  const delay = value.pending.delay;
+  if (!Number.isSafeInteger(delay) || (delay as number) < 1 || (delay as number) > MAX_WAIT_MS) return undefined;
+  return { version: 1, pending: { prompt, delay: delay as number } };
+}
+
+export function readWaitState(entries: readonly WaitEntry[] | readonly unknown[]): WaitState | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (!isRecord(entry) || entry.type !== "custom" || entry.customType !== WAIT_STATE_ENTRY) continue;
+    return parseWaitState(entry.data);
+  }
+  return undefined;
 }
 
 export function formatWaitWidget(wait: PendingWait, width: number, now = Date.now()): string {
@@ -184,7 +229,11 @@ export default function waitExtension(pi: ExtensionAPI): void {
     }));
   }
 
-  function cancel(ctx: ExtensionContext, announce: boolean): boolean {
+  function persist(wait: PendingWait | undefined): void {
+    pi.appendEntry(WAIT_STATE_ENTRY, { version: 1, pending: wait ?? null } satisfies WaitState);
+  }
+
+  function cancel(ctx: ExtensionContext, announce: boolean, save = true): boolean {
     if (!pending) {
       clearWidget(ctx);
       if (announce) notify(ctx, "wait: no queued message");
@@ -193,6 +242,7 @@ export default function waitExtension(pi: ExtensionAPI): void {
     pending = undefined;
     clearTimers();
     clearWidget(ctx);
+    if (save) persist(undefined);
     if (announce) notify(ctx, "queued message cancelled");
     return true;
   }
@@ -202,6 +252,7 @@ export default function waitExtension(pi: ExtensionAPI): void {
     pending = undefined;
     clearTimers();
     clearWidget(ctx);
+    persist(undefined);
     try {
       if (ctx.isIdle()) pi.sendUserMessage(expected.prompt, { expandPromptTemplates: true });
       else {
@@ -218,15 +269,35 @@ export default function waitExtension(pi: ExtensionAPI): void {
   function arm(ctx: ExtensionContext, wait: PendingWait, delay: number): void {
     const armed: PendingWait = { prompt: wait.prompt, dueAt: Date.now() + delay };
     pending = armed;
+    persist(armed);
     deliveryTimer = setTimeout(() => deliver(ctx, armed), delay);
     countdownTimer = setInterval(() => renderWidget(ctx), 1_000);
     renderWidget(ctx);
   }
 
+  function restore(ctx: ExtensionContext, wait: PendingWait): void {
+    if (wait.paused) {
+      pending = wait;
+      renderWidget(ctx);
+      return;
+    }
+    if (wait.dueAt === undefined) {
+      arm(ctx, wait, wait.delay);
+      return;
+    }
+
+    pending = wait;
+    const delay = Math.max(0, wait.dueAt - Date.now());
+    deliveryTimer = setTimeout(() => deliver(ctx, wait), delay);
+    countdownTimer = setInterval(() => renderWidget(ctx), 1_000);
+    renderWidget(ctx);
+  }
+
   function schedule(ctx: ExtensionContext, delay: number, prompt: string, afterAgent: boolean): void {
-    const replaced = cancel(ctx, false);
+    const replaced = cancel(ctx, false, false);
     if (afterAgent) {
       pending = { prompt, delay };
+      persist(pending);
       renderWidget(ctx);
       notify(ctx, replaced
         ? "replaced queued message; timer starts after the agent settles"
@@ -257,6 +328,7 @@ export default function waitExtension(pi: ExtensionAPI): void {
 
     const remaining = Math.max(1, pending.dueAt - Date.now());
     pending = { prompt: pending.prompt, remaining, paused: true };
+    persist(pending);
     clearTimers();
     renderWidget(ctx);
     notify(ctx, `wait paused with ${formatRemaining(remaining)} remaining`);
@@ -287,12 +359,14 @@ export default function waitExtension(pi: ExtensionAPI): void {
     clearTimers();
     if (wait.paused) {
       pending = { prompt: wait.prompt, remaining: delay, paused: true };
+      persist(pending);
       renderWidget(ctx);
       notify(ctx, `updated paused wait; ${formatRemaining(delay)} remaining`);
       return;
     }
     if (wait.dueAt === undefined) {
       pending = { prompt: wait.prompt, delay };
+      persist(pending);
       renderWidget(ctx);
       notify(ctx, "updated queued message; timer starts after the agent settles");
       return;
@@ -363,11 +437,15 @@ export default function waitExtension(pi: ExtensionAPI): void {
     },
   });
 
-  pi.on("session_start", (_event, ctx) => {
+  pi.on("session_start", (event, ctx) => {
     sessionContext = ctx;
     pending = undefined;
     clearTimers();
     clearWidget(ctx);
+    if (event.reason === "reload") {
+      const state = readWaitState(ctx.sessionManager.getBranch());
+      if (state?.pending) restore(ctx, state.pending);
+    }
     if (ctx.hasUI) ctx.ui.addAutocompleteProvider((current) => createWaitAutocompleteProvider(current));
   });
 
@@ -388,8 +466,14 @@ export default function waitExtension(pi: ExtensionAPI): void {
     return { action: "handled" };
   });
 
-  pi.on("session_shutdown", (_event, ctx) => {
-    cancel(ctx, false);
+  pi.on("session_shutdown", (event, ctx) => {
+    if (event.reason === "reload") {
+      clearTimers();
+      clearWidget(ctx);
+      pending = undefined;
+    } else {
+      cancel(ctx, false);
+    }
     sessionContext = undefined;
   });
 }
