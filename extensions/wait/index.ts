@@ -4,7 +4,7 @@ import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
 export const WAIT_WIDGET_KEY = "pi-wait";
-export const WAIT_USAGE = "usage: /wait <duration> [prompt] | /wait now | /wait status | /wait cancel";
+export const WAIT_USAGE = "usage: /wait <duration> [prompt] | /wait now | /wait pause | /wait resume | /wait status | /wait cancel";
 export const MAX_WAIT_MS = 24 * 24 * 60 * 60 * 1_000;
 
 const DURATION_PATTERN = /^(\d+(?:\.\d+)?|\.\d+)(ms|s|m|h|d)$/;
@@ -19,12 +19,15 @@ const DURATION_MULTIPLIERS: Record<string, number> = {
 export type ParsedWaitCommand =
   | { kind: "schedule"; delay: number; prompt?: string }
   | { kind: "now" }
+  | { kind: "pause" }
+  | { kind: "resume" }
   | { kind: "status" }
   | { kind: "cancel" };
 
 export type PendingWait =
-  | { prompt: string; dueAt: number }
-  | { prompt: string; delay: number; dueAt?: undefined };
+  | { prompt: string; dueAt: number; paused?: undefined }
+  | { prompt: string; delay: number; dueAt?: undefined; paused?: undefined }
+  | { prompt: string; remaining: number; paused: true; dueAt?: undefined };
 
 type ArgumentCompletion = { value: string; label: string; description?: string };
 
@@ -47,6 +50,8 @@ export function parseWaitCommand(args: string): ParsedWaitCommand {
   if (!input || input === "status") return { kind: "status" };
   if (input === "cancel") return { kind: "cancel" };
   if (input === "now") return { kind: "now" };
+  if (input === "pause") return { kind: "pause" };
+  if (input === "resume") return { kind: "resume" };
 
   const separator = input.search(/\s/);
   if (separator < 0) return { kind: "schedule", delay: parseWaitDuration(input) };
@@ -72,9 +77,14 @@ export function formatRemaining(milliseconds: number): string {
 
 export function formatWaitWidget(wait: PendingWait, width: number, now = Date.now()): string {
   const prompt = wait.prompt.replace(/\s+/g, " ").trim();
-  const state = wait.dueAt === undefined ? "queued" : formatRemaining(wait.dueAt - now);
+  const state = wait.paused
+    ? `paused (${formatRemaining(wait.remaining)})`
+    : wait.dueAt === undefined
+      ? "queued"
+      : formatRemaining(wait.dueAt - now);
+  const action = wait.paused ? "/wait resume" : wait.dueAt === undefined ? "" : "/wait pause";
   return truncateToWidth(
-    `wait ${state} · /wait cancel · ${prompt}`,
+    `wait ${state} · ${action ? `${action} · ` : ""}/wait cancel · ${prompt}`,
     width,
     "…",
   );
@@ -84,6 +94,8 @@ function completeWaitArguments(prefix: string): ArgumentCompletion[] | null {
   const query = prefix.trimStart().toLowerCase();
   const candidates: ArgumentCompletion[] = [
     { value: "now", label: "now", description: "Send the queued message now" },
+    { value: "pause", label: "pause", description: "Pause the active countdown" },
+    { value: "resume", label: "resume", description: "Resume the paused countdown" },
     { value: "cancel", label: "cancel", description: "Cancel the queued message" },
     { value: "status", label: "status", description: "Show the queued message and remaining time" },
     ...["30s", "1m", "5m", "15m", "1h"].map((duration) => ({
@@ -229,6 +241,42 @@ export default function waitExtension(pi: ExtensionAPI): void {
     notify(ctx, message);
   }
 
+  function pause(ctx: ExtensionContext): void {
+    if (!pending) {
+      notify(ctx, "wait: no queued message");
+      return;
+    }
+    if (pending.paused) {
+      notify(ctx, "wait: already paused");
+      return;
+    }
+    if (pending.dueAt === undefined) {
+      notify(ctx, "wait: timer has not started yet");
+      return;
+    }
+
+    const remaining = Math.max(1, pending.dueAt - Date.now());
+    pending = { prompt: pending.prompt, remaining, paused: true };
+    clearTimers();
+    renderWidget(ctx);
+    notify(ctx, `wait paused with ${formatRemaining(remaining)} remaining`);
+  }
+
+  function resume(ctx: ExtensionContext): void {
+    if (!pending) {
+      notify(ctx, "wait: no queued message");
+      return;
+    }
+    if (!pending.paused) {
+      notify(ctx, "wait: not paused");
+      return;
+    }
+
+    const wait = pending;
+    arm(ctx, wait, wait.remaining);
+    notify(ctx, `wait resumed; waiting ${formatRemaining(wait.remaining)}`);
+  }
+
   function reschedule(ctx: ExtensionContext, delay: number): void {
     if (!pending) {
       notify(ctx, "wait: no queued message; provide a prompt", "error");
@@ -237,6 +285,12 @@ export default function waitExtension(pi: ExtensionAPI): void {
 
     const wait = pending;
     clearTimers();
+    if (wait.paused) {
+      pending = { prompt: wait.prompt, remaining: delay, paused: true };
+      renderWidget(ctx);
+      notify(ctx, `updated paused wait; ${formatRemaining(delay)} remaining`);
+      return;
+    }
     if (wait.dueAt === undefined) {
       pending = { prompt: wait.prompt, delay };
       renderWidget(ctx);
@@ -260,8 +314,17 @@ export default function waitExtension(pi: ExtensionAPI): void {
         else deliver(ctx, pending);
         return;
       }
+      if (command.kind === "pause") {
+        pause(ctx);
+        return;
+      }
+      if (command.kind === "resume") {
+        resume(ctx);
+        return;
+      }
       if (command.kind === "status") {
         if (!pending) notify(ctx, "wait: no queued message");
+        else if (pending.paused) notify(ctx, `wait: paused with ${formatRemaining(pending.remaining)} remaining\n${pending.prompt}`);
         else if (pending.dueAt === undefined) notify(ctx, `wait: timer starts after the agent settles\n${pending.prompt}`);
         else notify(ctx, `wait: ${formatRemaining(pending.dueAt - Date.now())}\n${pending.prompt}`);
         return;
@@ -309,7 +372,7 @@ export default function waitExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("agent_settled", (_event, ctx) => {
-    if (!pending || pending.dueAt !== undefined) return;
+    if (!pending || pending.dueAt !== undefined || pending.paused) return;
     const wait = pending;
     arm(ctx, wait, wait.delay);
     notify(ctx, `waiting ${formatRemaining(wait.delay)}`);

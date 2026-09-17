@@ -100,6 +100,8 @@ describe("wait parser and formatting", () => {
     });
     expect(parseWaitCommand("5m")).toEqual({ kind: "schedule", delay: 300_000 });
     expect(parseWaitCommand("now")).toEqual({ kind: "now" });
+    expect(parseWaitCommand("pause")).toEqual({ kind: "pause" });
+    expect(parseWaitCommand("resume")).toEqual({ kind: "resume" });
     expect(parseWaitCommand("status")).toEqual({ kind: "status" });
     expect(parseWaitCommand("")).toEqual({ kind: "status" });
     expect(parseWaitCommand("cancel")).toEqual({ kind: "cancel" });
@@ -111,8 +113,11 @@ describe("wait parser and formatting", () => {
     expect(formatRemaining(61_000)).toBe("1m 1s");
     expect(formatRemaining(3_600_000)).toBe("1h");
     const line = formatWaitWidget({ prompt: "check\nall deployment environments", dueAt: 62_000 }, 36, 1_000);
-    expect(stripTerminalSequences(line)).toBe("wait 1m 1s · /wait cancel · check a…");
+    expect(stripTerminalSequences(line)).toBe("wait 1m 1s · /wait pause · /wait ca…");
     expect(visibleWidth(line)).toBe(36);
+
+    const paused = formatWaitWidget({ prompt: "check again", remaining: 61_000, paused: true }, 80);
+    expect(stripTerminalSequences(paused)).toBe("wait paused (1m 1s) · /wait resume · /wait cancel · check again");
   });
 
   test("completes the command, controls, and common durations", async () => {
@@ -133,6 +138,14 @@ describe("wait parser and formatting", () => {
     expect(await autocomplete.getSuggestions(["/wait no"], 0, 8, options)).toEqual({
       prefix: "no",
       items: [{ value: "now", label: "now", description: "Send the queued message now" }],
+    });
+    expect(await autocomplete.getSuggestions(["/wait pa"], 0, 8, options)).toEqual({
+      prefix: "pa",
+      items: [{ value: "pause", label: "pause", description: "Pause the active countdown" }],
+    });
+    expect(await autocomplete.getSuggestions(["/wait re"], 0, 8, options)).toEqual({
+      prefix: "re",
+      items: [{ value: "resume", label: "resume", description: "Resume the paused countdown" }],
     });
     expect(await autocomplete.getSuggestions(["/wait 5"], 0, 7, options)).toEqual({
       prefix: "5",
@@ -280,6 +293,56 @@ describe("wait lifecycle", () => {
     harness.settle();
     await sleep(15);
     expect(harness.messages[0]?.content).toBe("after settling");
+  });
+
+  test("pauses and resumes an active countdown", async () => {
+    const harness = createHarness();
+
+    await harness.submit("80ms send after resuming");
+    await sleep(10);
+    await harness.submit("pause");
+    expect(harness.notifications.at(-1)).toContain("wait paused with");
+    expect(latestWidgetLines(harness)?.[0]).toContain("/wait resume");
+
+    await sleep(90);
+    expect(harness.messages).toEqual([]);
+    await harness.submit("status");
+    expect(harness.notifications.at(-1)).toContain("wait: paused with");
+
+    await harness.submit("resume");
+    expect(harness.notifications.at(-1)).toContain("wait resumed");
+    await sleep(90);
+    expect(harness.messages).toEqual([{
+      content: "send after resuming",
+      options: { expandPromptTemplates: true },
+    }]);
+  });
+
+  test("reports invalid pause and resume states", async () => {
+    const harness = createHarness();
+
+    await harness.submit("pause");
+    expect(harness.notifications.at(-1)).toBe("wait: no queued message");
+    await harness.submit("100ms queued", "followUp");
+    await harness.submit("pause");
+    expect(harness.notifications.at(-1)).toBe("wait: timer has not started yet");
+    await harness.submit("resume");
+    expect(harness.notifications.at(-1)).toBe("wait: not paused");
+  });
+
+  test("resets a paused countdown without resuming it", async () => {
+    const harness = createHarness();
+
+    await harness.submit("100ms original prompt");
+    await harness.submit("pause");
+    await harness.submit("5ms");
+    expect(harness.notifications.at(-1)).toBe("updated paused wait; 1s remaining");
+    await sleep(15);
+    expect(harness.messages).toEqual([]);
+
+    await harness.submit("resume");
+    await sleep(15);
+    expect(harness.messages[0]?.content).toBe("original prompt");
   });
 
   test("sends the queued message now", async () => {
