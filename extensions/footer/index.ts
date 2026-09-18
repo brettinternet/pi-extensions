@@ -245,7 +245,7 @@ export function renderFooter(snapshot: FooterSnapshot, width: number, theme: Foo
             "dim",
             `${sanitizeFooterText(snapshot.model.provider)}/${sanitizeFooterText(snapshot.model.id)}`,
           ),
-          priority: 7,
+          priority: 11,
         }]
       : []),
     ...(snapshot.model?.reasoning
@@ -255,7 +255,7 @@ export function renderFooter(snapshot: FooterSnapshot, width: number, theme: Foo
             (`thinking${(snapshot.thinkingLevel ?? "off").replace(/^./, (letter) => letter.toUpperCase())}` as ThemeColor),
             sanitizeFooterText(snapshot.thinkingLevel ?? "off"),
           ),
-          priority: 6,
+          priority: 10,
         }]
       : []),
   ];

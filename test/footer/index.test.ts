@@ -180,6 +180,14 @@ describe("footer rendering", () => {
     expect(visibleWidth(lines[1]!)).toBeLessThanOrEqual(180);
   });
 
+  test("prioritizes model and reasoning details on narrow terminals", () => {
+    const usageLine = renderFooter(snapshot, 50, theme)[1]!.replace(/\x1b\[[0-9;A-Za-z]*m/g, "");
+    expect(usageLine).toContain("openai/gpt-5.4 high");
+    expect(usageLine).not.toContain("↑86k");
+    expect(usageLine).not.toContain("↓4.2k");
+    expect(usageLine).not.toContain("$0.124");
+  });
+
   test("stays within narrow terminal widths", () => {
     for (const width of [30, 50, 80, 100]) {
       for (const line of renderFooter(snapshot, width, theme)) {

@@ -16,7 +16,7 @@ It shows:
 
 Git data refreshes every two seconds. The commit count is relative to the first commit recorded for the Pi session and survives reloads. It describes commits made during the session; it cannot prove which process or person authored them.
 
-The footer progressively removes lower-priority cache details on narrow terminals while preserving context, input/output usage, cost, and model information where space allows.
+The footer progressively removes lower-priority usage, cache, and cost details on narrow terminals, favoring provider/model and thinking-level information.
 
 ## Install
 
