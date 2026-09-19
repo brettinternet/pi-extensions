@@ -3,6 +3,7 @@ import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-c
 import { stripTerminalSequences, visibleWidth } from "@earendil-works/pi-tui";
 import loopExtension, {
   DEFAULT_LOOP_RETRIES,
+  LOOP_RUN_ID_ENV,
   LOOP_STATE_ENTRY,
   formatLoopStatus,
   formatLoopWidget,
@@ -421,6 +422,69 @@ describe("loop parser and state", () => {
 });
 
 describe("loop lifecycle", () => {
+  test("exposes one full stable run ID to child commands and restores the prior environment", async () => {
+    const originalValue = process.env[LOOP_RUN_ID_ENV];
+    const inheritedValue = "outer-loop-run";
+    process.env[LOOP_RUN_ID_ENV] = inheritedValue;
+    let firstHarness: Harness | undefined;
+    let secondHarness: Harness | undefined;
+
+    try {
+      firstHarness = createHarness();
+      await firstHarness.command.handler("2 inspect the repository", commandContext(firstHarness));
+      const firstRunId = firstHarness.state()?.runId;
+      if (!firstRunId) throw new Error("first loop did not create a run ID");
+      expect(firstRunId).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+      expect(process.env[LOOP_RUN_ID_ENV]).toBe(firstRunId);
+      expect(Bun.spawnSync({
+        cmd: [
+          process.execPath,
+          "-e",
+          `process.stdout.write(process.env.${LOOP_RUN_ID_ENV} ?? "")`,
+        ],
+        env: { ...process.env },
+      }).stdout.toString()).toBe(firstRunId);
+
+      firstHarness.sessionShutdown("reload");
+      expect(process.env[LOOP_RUN_ID_ENV]).toBe(firstRunId);
+      await firstHarness.sessionStart("reload");
+      expect(process.env[LOOP_RUN_ID_ENV]).toBe(firstRunId);
+
+      await firstHarness.command.handler("pause", commandContext(firstHarness));
+      expect(firstHarness.state()?.status).toBe("pausing");
+      expect(process.env[LOOP_RUN_ID_ENV]).toBe(firstRunId);
+      await firstHarness.settle();
+      expect(firstHarness.state()?.status).toBe("paused");
+      expect(process.env[LOOP_RUN_ID_ENV]).toBe(firstRunId);
+      await firstHarness.command.handler("resume", commandContext(firstHarness));
+      expect(firstHarness.state()?.currentIteration).toBe(2);
+      expect(process.env[LOOP_RUN_ID_ENV]).toBe(firstRunId);
+
+      await firstHarness.settle();
+      expect(firstHarness.state()?.status).toBe("completed");
+      expect(process.env[LOOP_RUN_ID_ENV]).toBe(inheritedValue);
+
+      delete process.env[LOOP_RUN_ID_ENV];
+      secondHarness = createHarness();
+      await secondHarness.command.handler("1 inspect the repository", commandContext(secondHarness));
+      const secondRunId = secondHarness.state()?.runId;
+      if (!secondRunId) throw new Error("second loop did not create a run ID");
+      expect(secondRunId).not.toBe(firstRunId);
+      expect(process.env[LOOP_RUN_ID_ENV]).toBe(secondRunId);
+      await secondHarness.command.handler("end", commandContext(secondHarness));
+      expect(secondHarness.state()?.status).toBe("stopping");
+      expect(process.env[LOOP_RUN_ID_ENV]).toBe(secondRunId);
+      await secondHarness.settle();
+      expect(secondHarness.state()?.status).toBe("stopped");
+      expect(process.env[LOOP_RUN_ID_ENV]).toBeUndefined();
+    } finally {
+      firstHarness?.sessionShutdown("quit");
+      secondHarness?.sessionShutdown("quit");
+      if (originalValue === undefined) delete process.env[LOOP_RUN_ID_ENV];
+      else process.env[LOOP_RUN_ID_ENV] = originalValue;
+    }
+  });
+
   test("starts the first counted iteration in a fresh session", async () => {
     const harness = createHarness();
     await harness.command.handler("2 inspect the repository", harness.context);

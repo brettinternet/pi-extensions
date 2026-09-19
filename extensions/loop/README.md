@@ -35,3 +35,11 @@ Chain commands in the prompt:
 ```
 
 Built-in interactive commands cannot be chained.
+
+While a loop is active, every child command receives its stable run ID as `PI_LOOP_RUN_ID`:
+
+```text
+PI_LOOP_RUN_ID=3992f183-e054-4068-a13e-11281d1747e2
+```
+
+The value is always the full UUID, remains unchanged across every iteration and replacement session in that loop, and differs between independent loops. When the loop ends or its session closes, pi-loop restores the previous value or removes the variable if it was previously unset.

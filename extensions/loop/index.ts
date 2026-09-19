@@ -11,6 +11,7 @@ import { Type } from "typebox";
 
 export const LOOP_STATE_ENTRY = "pi-loop-state-v1";
 export const LOOP_WIDGET_KEY = "pi-loop";
+export const LOOP_RUN_ID_ENV = "PI_LOOP_RUN_ID";
 export const LOOP_USAGE =
   "usage: /loop <positive-count> [--delay <duration>] <prompt> | /loop for <duration> --delay <duration> <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop time <duration> | /loop delay <duration> | /loop prompt <text> | /loop append <text> | /loop status | /loop pause | /loop resume | /loop next | /loop end";
 
@@ -69,6 +70,34 @@ export type ParsedLoopCommand =
 const ACTIVE_STATUSES = new Set<LoopStatus>(["active", "pausing", "stopping"]);
 const VISIBLE_STATUSES = new Set<LoopStatus>(["active", "pausing", "stopping", "paused"]);
 const TERMINAL_STATUSES = new Set<LoopStatus>(["completed", "stopped", "inactive"]);
+
+const LOOP_ENVIRONMENT_STATE_KEY = "__piLoopRunEnvironmentV1";
+type LoopEnvironmentState = { runId: string; originalValue: string | undefined };
+
+function environmentState(): LoopEnvironmentState | undefined {
+  return (globalThis as Record<string, unknown>)[LOOP_ENVIRONMENT_STATE_KEY] as LoopEnvironmentState | undefined;
+}
+
+function exposeLoopRunId(runId: string): void {
+  const active = environmentState();
+  if (active) {
+    active.runId = runId;
+  } else {
+    (globalThis as Record<string, unknown>)[LOOP_ENVIRONMENT_STATE_KEY] = {
+      runId,
+      originalValue: process.env[LOOP_RUN_ID_ENV],
+    } satisfies LoopEnvironmentState;
+  }
+  process.env[LOOP_RUN_ID_ENV] = runId;
+}
+
+function restoreLoopRunId(expectedRunId?: string): void {
+  const active = environmentState();
+  if (!active || (expectedRunId !== undefined && active.runId !== expectedRunId)) return;
+  if (active.originalValue === undefined) delete process.env[LOOP_RUN_ID_ENV];
+  else process.env[LOOP_RUN_ID_ENV] = active.originalValue;
+  delete (globalThis as Record<string, unknown>)[LOOP_ENVIRONMENT_STATE_KEY];
+}
 
 type ArgumentCompletion = { value: string; label: string; description?: string };
 
@@ -612,9 +641,19 @@ export default function loopExtension(pi: ExtensionAPI): void {
     return runState;
   }
 
+  function syncLoopEnvironment(state: LoopState | undefined): void {
+    const runId = state?.runId;
+    if (state && statusIsVisible(state)) {
+      exposeLoopRunId(state.runId);
+      return;
+    }
+    if (!transitionInFlight) restoreLoopRunId(runId);
+  }
+
   function persist(ctx: Pick<ExtensionAPI, "appendEntry">, state: LoopState): void {
     ctx.appendEntry(LOOP_STATE_ENTRY, state);
     runState = state;
+    syncLoopEnvironment(state);
     reportHerdrBlocked(state);
   }
 
@@ -885,6 +924,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   function transferState(state: LoopState, manager: SessionManager): LoopState {
     const transferred = stateForSession({ ...state, status: "active" }, sessionIdentity(manager));
+    exposeLoopRunId(transferred.runId);
     manager.appendCustomEntry(LOOP_STATE_ENTRY, transferred);
     return transferred;
   }
@@ -908,6 +948,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   }
 
   async function replaceForIteration(ctx: ExtensionCommandContext, next: LoopState): Promise<void> {
+    exposeLoopRunId(next.runId);
     clearContinuationWait();
     clearRetryWait();
     clearRecoveryTimer();
@@ -1454,6 +1495,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     const loaded = latestStateFromContext(ctx);
     const owned = loaded && stateBelongsToContext(loaded, ctx) ? loaded : undefined;
     runState = owned;
+    syncLoopEnvironment(owned);
     reportHerdrBlocked(owned);
     if (!owned || owned.status === "inactive") clearWidget(ctx);
     else renderWidget(ctx, owned);
@@ -1533,6 +1575,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     const loaded = latestStateFromContext(ctx);
     const owned = loaded && stateBelongsToContext(loaded, ctx) ? loaded : undefined;
     runState = owned;
+    syncLoopEnvironment(owned);
     reportHerdrBlocked(owned);
     if (!owned || owned.status === "inactive") clearWidget(ctx);
     else renderWidget(ctx, owned);
@@ -1553,6 +1596,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
         // Shutdown may already have detached the runtime's append action.
       }
     }
+    if (event.reason !== "reload" && !transitionInFlight) restoreLoopRunId(loaded?.runId);
     reportHerdrBlocked(undefined);
     clearWidget(ctx);
     currentSessionManagerRef = undefined;
