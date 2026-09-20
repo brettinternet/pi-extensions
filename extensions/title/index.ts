@@ -153,20 +153,10 @@ export async function completeTitle(
   thinkingLevel?: ThinkingLevel,
   signal?: AbortSignal,
 ) {
-  const provider = ctx.modelRegistry.getProvider(model.provider);
-  if (!provider) throw new Error(`unknown provider: ${model.provider}`);
-
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) throw new Error(auth.error);
-
-  const resolvedModel = auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
-  return provider
-    .streamSimple(resolvedModel, request, {
+  return ctx.modelRegistry
+    .streamSimple(model, request, {
       ...completionOptions(config, thinkingLevel),
       signal,
-      apiKey: auth.apiKey,
-      headers: auth.headers,
-      env: auth.env,
     })
     .result();
 }

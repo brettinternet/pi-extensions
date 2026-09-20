@@ -247,17 +247,8 @@ export default function colimaSandbox(pi: ExtensionAPI): void {
   pi.on("before_agent_start", async (event, ctx) => {
     await ensureBroker(ctx);
     assertStableCwd(hostCwd, ctx);
-    const guestLine = "Current working directory: /workspace (Colima sandbox; repository workspace only)";
-    let replaced = false;
-    const systemPrompt = event.systemPrompt
-      .split("\n")
-      .map((line) => {
-        if (!line.startsWith("Current working directory:")) return line;
-        replaced = true;
-        return guestLine;
-      })
-      .join("\n");
-    return { systemPrompt: replaced ? systemPrompt : `${systemPrompt}\n\n${guestLine}` };
+    event.systemPromptOptions.cwd = GUEST_WORKSPACE;
+    event.systemPromptOptions.sections.sandbox = "Colima sandbox; repository workspace only";
   });
 
   pi.registerCommand("sandbox", {

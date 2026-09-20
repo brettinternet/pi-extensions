@@ -189,15 +189,7 @@ export async function completeInference(
   thinkingLevel: ThinkingLevel,
   signal?: AbortSignal,
 ) {
-  const provider = ctx.modelRegistry.getProvider(model.provider);
-  if (!provider) throw new Error(`unknown provider: ${model.provider}`);
-  const auth = await ctx.modelRegistry.getApiKeyAndHeaders(model);
-  if (!auth.ok) throw new Error(auth.error);
-  const resolvedModel = auth.baseUrl ? { ...model, baseUrl: auth.baseUrl } : model;
-  return provider.streamSimple(resolvedModel, request, {
-    ...inferenceOptions(config, thinkingLevel, signal),
-    apiKey: auth.apiKey,
-    headers: auth.headers,
-    env: auth.env,
-  }).result();
+  return ctx.modelRegistry
+    .streamSimple(model, request, inferenceOptions(config, thinkingLevel, signal))
+    .result();
 }

@@ -41,18 +41,15 @@ function harness(completions: Array<Promise<any>> = []) {
     modelRegistry: {
       find: (provider: string, id: string) => provider === model.provider && id === model.id ? model : undefined,
       hasConfiguredAuth: () => true,
-      getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "test" }),
-      getProvider: () => ({
-        streamSimple: (_model: Model, request: unknown, options: { signal: AbortSignal }) => {
-          requests.push(request);
-          signals.push(options.signal);
-          const completion = completions[calls++] ?? Promise.resolve({
-            content: [{ type: "text", text: JSON.stringify(semantic) }],
-            stopReason: "stop",
-          });
-          return { result: () => completion };
-        },
-      }),
+      streamSimple: (_model: Model, request: unknown, options: { signal: AbortSignal }) => {
+        requests.push(request);
+        signals.push(options.signal);
+        const completion = completions[calls++] ?? Promise.resolve({
+          content: [{ type: "text", text: JSON.stringify(semantic) }],
+          stopReason: "stop",
+        });
+        return { result: () => completion };
+      },
     },
   } as unknown as ExtensionContext;
   progressExtension(pi);

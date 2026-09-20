@@ -256,15 +256,12 @@ describe("automatic title generation", () => {
         hasUI: true,
         model: activeModel,
         modelRegistry: {
-          getProvider: () => ({
-            streamSimple: (_model: unknown, request: typeof titleRequest) => {
-              requestCount += 1;
-              titleRequest = request;
-              markStarted();
-              return { result: () => completion };
-            },
-          }),
-          getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "test-key" }),
+          streamSimple: (_model: unknown, request: typeof titleRequest) => {
+            requestCount += 1;
+            titleRequest = request;
+            markStarted();
+            return { result: () => completion };
+          },
         },
         sessionManager: {
           getBranch: () => [
@@ -346,25 +343,22 @@ describe("automatic title generation", () => {
         hasUI: true,
         model: activeModel,
         modelRegistry: {
-          getProvider: () => ({
-            streamSimple: (_model: unknown, _request: unknown, options: { signal: AbortSignal }) => {
-              requestCount += 1;
-              if (requestCount === 1) {
-                automaticSignal = options.signal;
-                markAutomaticStarted();
-                return {
-                  result: () => new Promise((_, reject) => {
-                    options.signal.addEventListener("abort", () => {
-                      markAutomaticAborted();
-                      reject(new Error("aborted"));
-                    }, { once: true });
-                  }),
-                };
-              }
-              return { result: () => regeneration };
-            },
-          }),
-          getApiKeyAndHeaders: async () => ({ ok: true as const, apiKey: "test-key" }),
+          streamSimple: (_model: unknown, _request: unknown, options: { signal: AbortSignal }) => {
+            requestCount += 1;
+            if (requestCount === 1) {
+              automaticSignal = options.signal;
+              markAutomaticStarted();
+              return {
+                result: () => new Promise((_, reject) => {
+                  options.signal.addEventListener("abort", () => {
+                    markAutomaticAborted();
+                    reject(new Error("aborted"));
+                  }, { once: true });
+                }),
+              };
+            }
+            return { result: () => regeneration };
+          },
         },
         sessionManager: {
           getBranch: () => [
@@ -424,7 +418,7 @@ describe("title completion output", () => {
 });
 
 describe("title completion", () => {
-  test("uses authenticated provider streamSimple with the configured thinking level", async () => {
+  test("uses model registry streamSimple with the configured thinking level", async () => {
     const response = {
       role: "assistant" as const,
       content: [],
@@ -447,31 +441,19 @@ describe("title completion", () => {
     const controller = new AbortController();
     const ctx = {
       modelRegistry: {
-        getProvider: () => ({
-          streamSimple: (model: Model, _request: unknown, options: Record<string, unknown>) => {
-            requestedModel = model;
-            requestedOptions = options;
-            return { result: async () => response };
-          },
-        }),
-        getApiKeyAndHeaders: async () => ({
-          ok: true as const,
-          apiKey: "test-key",
-          headers: { "x-test": "value" },
-          baseUrl: "https://example.test/v1",
-          env: { TEST_ENV: "value" },
-        }),
+        streamSimple: (model: Model, _request: unknown, options: Record<string, unknown>) => {
+          requestedModel = model;
+          requestedOptions = options;
+          return { result: async () => response };
+        },
       },
     } as unknown as Parameters<typeof completeTitle>[0];
 
     await expect(
       completeTitle(ctx, deepSeekModel, { messages: [] }, config("ignored"), "low", controller.signal),
     ).resolves.toBe(response);
-    expect(requestedModel?.baseUrl).toBe("https://example.test/v1");
+    expect(requestedModel).toBe(deepSeekModel);
     expect(requestedOptions).toMatchObject({
-      apiKey: "test-key",
-      headers: { "x-test": "value" },
-      env: { TEST_ENV: "value" },
       reasoning: "low",
       signal: controller.signal,
     });
