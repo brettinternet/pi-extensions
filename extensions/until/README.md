@@ -99,24 +99,25 @@ Up to 32 watches may be active.
 ## Commands
 
 ```text
-/until <side-effect-free shell condition>
-/until-list
-/until-complete <id>
-/until-cancel <id>
-/until-stats
+/until start <side-effect-free shell condition>
+/until list
+/until status <id>
+/until complete <id>
+/until cancel <id>
+/until stats
 ```
 
-Commands complete common conditions and active watch IDs.
+The first argument is always an action, so shell conditions cannot conflict with command names. Completion suggests actions, common conditions, and relevant active watch IDs.
 
 ## Session display
 
 ```text
 ╭─ UNTIL · deployment ────────────────────────────────────╮
 │ ◷ next 12s · 2m14s elapsed · 5 checks                  │
-╰─ 8f2c1a7d · wakes agent · /until-list ─────────────────╯
+╰─ 8f2c1a7d · wakes agent · /until list ─────────────────╯
 ```
 
-`/until-list` opens active and recent watches. Other extensions can observe active watches:
+`/until list` opens active and recent watches. Other extensions can observe active watches:
 
 ```ts
 pi.events.on("pi-until:watches", (watches) => {

@@ -59,21 +59,60 @@ describe("pi-until extension", () => {
       )
     );
 
+    expect([...extension.commands.keys()]).toEqual(["until"]);
     expect(
-      extension.commands.get("until")?.getArgumentCompletions?.("test -f")
-    ).toContainEqual(expect.objectContaining({ value: "test -f " }));
+      extension.commands.get("until")?.getArgumentCompletions?.("")
+    ).toContainEqual(expect.objectContaining({ value: "start " }));
     expect(
-      extension.commands
-        .get("until-cancel")
-        ?.getArgumentCompletions?.("")
-        ?.map(({ value }) => value)
-    ).toEqual(expect.arrayContaining([oneShot.id, recurring.id]));
+      extension.commands.get("until")?.getArgumentCompletions?.("start test -f")
+    ).toContainEqual(expect.objectContaining({ value: "start test -f " }));
     expect(
       extension.commands
-        .get("until-complete")
-        ?.getArgumentCompletions?.("")
+        .get("until")
+        ?.getArgumentCompletions?.("cancel ")
         ?.map(({ value }) => value)
-    ).toEqual([recurring.id]);
+    ).toEqual(expect.arrayContaining([
+      `cancel ${oneShot.id}`,
+      `cancel ${recurring.id}`,
+    ]));
+    expect(
+      extension.commands
+        .get("until")
+        ?.getArgumentCompletions?.("complete ")
+        ?.map(({ value }) => value)
+    ).toEqual([`complete ${recurring.id}`]);
+  });
+
+  it("routes actions through the single until command", async () => {
+    const session = new FakeSession();
+    const extension = loadExtension(session);
+    live.push(extension);
+    const { ctx, notify } = session.context();
+    const command = extension.commands.get("until")!;
+
+    await command.handler("false", ctx);
+    expect(notify).toHaveBeenLastCalledWith(
+      expect.stringContaining("Usage: /until"),
+      "error",
+    );
+
+    await command.handler("start false", ctx);
+    expect(notify).toHaveBeenLastCalledWith(
+      expect.stringMatching(/^Watching condition as [a-f0-9]{8}$/),
+      "info",
+    );
+    const cancel = command.getArgumentCompletions?.("cancel ")?.[0]?.value;
+    const id = cancel?.split(" ")[1];
+    expect(id).toBeDefined();
+
+    await command.handler(`status ${id}`, ctx);
+    expect(notify).toHaveBeenLastCalledWith(
+      expect.stringContaining(`pi-until watch ${id}`),
+      "info",
+    );
+
+    await command.handler(`cancel ${id}`, ctx);
+    expect(notify).toHaveBeenLastCalledWith(`Cancelled ${id}`, "info");
   });
 
   it("returns immediately and wakes the agent after a later successful check", async () => {

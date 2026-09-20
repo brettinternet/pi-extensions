@@ -79,7 +79,7 @@ describe("pi-until watch indicator", () => {
 
     expect(lines.join("\n")).toContain("4 session watches");
     expect(lines.join("\n")).toContain("+1 more");
-    expect(lines.join("\n")).toContain("/until-list for details");
+    expect(lines.join("\n")).toContain("/until list for details");
     expect(lines.every((line) => visibleWidth(line) === 52)).toBe(true);
   });
 

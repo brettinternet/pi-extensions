@@ -149,7 +149,7 @@ export function renderWatchIndicator(
     const body = `${statusIcon(watch, now, theme)} ${watchMetrics(watch, now, theme)}`;
     const footer = theme.fg(
       "dim",
-      `${watch.id} · ${watch.kind === "recurring" ? "recurring" : `wakes ${watch.wake}`} · /until-list`
+      `${watch.id} · ${watch.kind === "recurring" ? "recurring" : `wakes ${watch.wake}`} · /until list`
     );
     return [
       topBorder(title, width, theme),
@@ -180,7 +180,7 @@ export function renderWatchIndicator(
     );
   }
   lines.push(
-    bottomBorder(theme.fg("dim", "/until-list for details"), width, theme)
+    bottomBorder(theme.fg("dim", "/until list for details"), width, theme)
   );
   return lines;
 }

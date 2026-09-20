@@ -1017,162 +1017,165 @@ export default function piUntil(
       "Watch a shell predicate or schedule serialized work in this live Pi session",
   });
 
+  type CommandCompletion = {
+    value: string;
+    label: string;
+    description: string;
+  };
+
   const commandCompletions = (
     prefix: string,
-    candidates: readonly { value: string; label: string; description: string }[],
+    candidates: readonly CommandCompletion[],
   ) => {
-    const query = prefix.trim().toLowerCase();
+    const query = prefix.trimStart().toLowerCase();
     const matches = candidates.filter((candidate) =>
       candidate.value.toLowerCase().startsWith(query),
     );
     return matches.length > 0 ? matches : null;
   };
 
-  const activeIdCompletions = (prefix: string, recurringOnly = false) =>
+  const activeIdCompletions = (
+    action: "status" | "cancel" | "complete",
+    prefix: string,
+  ) =>
     commandCompletions(
       prefix,
       activeWatches()
         .filter(({ actor }) =>
-          !recurringOnly || actor.getSnapshot().context.definition.kind === "recurring",
+          action !== "complete" ||
+          actor.getSnapshot().context.definition.kind === "recurring",
         )
         .map(({ actor }) => {
           const receipt = toReceipt({ actor });
           return {
-            value: receipt.id,
+            value: `${action} ${receipt.id}`,
             label: `${receipt.id} · ${receipt.label}`,
             description: `${receipt.kind} ${receipt.status}`,
           };
         }),
     );
 
+  const untilCommandCompletions = (prefix: string) => {
+    const input = prefix.trimStart();
+    if (input === "start" || input.startsWith("start ")) {
+      return commandCompletions(prefix, [
+        { value: "start test -f ", label: "test -f <path>", description: "Watch for a file" },
+        { value: "start test -d ", label: "test -d <path>", description: "Watch for a directory" },
+        { value: "start git diff --quiet", label: "git diff --quiet", description: "Watch for a clean worktree" },
+      ]);
+    }
+    for (const action of ["status", "cancel", "complete"] as const) {
+      if (input === action || input.startsWith(`${action} `)) {
+        return activeIdCompletions(action, prefix);
+      }
+    }
+    return commandCompletions(prefix, [
+      { value: "start ", label: "start <condition>", description: "Start a shell-condition watch" },
+      { value: "list", label: "list", description: "Open session watches" },
+      { value: "status ", label: "status <id>", description: "Inspect a watch" },
+      { value: "cancel ", label: "cancel <id>", description: "Cancel a watch" },
+      { value: "complete ", label: "complete <id>", description: "Complete a recurring watch" },
+      { value: "stats", label: "stats", description: "Summarize local usage telemetry" },
+    ]);
+  };
+
+  const commandUsage =
+    "Usage: /until <start <condition> | list | status <id> | cancel <id> | complete <id> | stats>";
+
   pi.registerCommand("until", {
-    getArgumentCompletions: (prefix) =>
-      commandCompletions(prefix, [
-        { value: "test -f ", label: "test -f <path>", description: "Watch for a file" },
-        { value: "test -d ", label: "test -d <path>", description: "Watch for a directory" },
-        { value: "git diff --quiet", label: "git diff --quiet", description: "Watch for a clean worktree" },
-      ]),
+    getArgumentCompletions: untilCommandCompletions,
     description:
-      "Start a default agent-waking watch: /until <side-effect-free shell condition>",
+      "[start <condition> | list | status <id> | cancel <id> | complete <id> | stats] — Manage session watches",
     handler: async (args, ctx) => {
       currentContext = ctx;
-      void track(sessionId(ctx), {
-        action: "start",
-        event: "action",
-        source: "command",
-      });
-      if (!args.trim()) {
-        ctx.ui.notify(
-          "Usage: /until <side-effect-free shell condition>",
-          "warning"
-        );
+      const input = args.trim();
+      const match = /^(\S+)(?:\s+([\s\S]*))?$/.exec(input);
+      const action = match?.[1];
+      const value = match?.[2] ?? "";
+
+      if (!action) {
+        ctx.ui.notify(commandUsage, "warning");
         return;
       }
+
       try {
-        const command = parseCommand({ action: "start", condition: args }, ctx);
-        if (command.action !== "start") return;
-        const record = startWatch(command, ctx);
-        const receipt = toReceipt(record);
-        ctx.ui.notify(`Watching ${receipt.label} as ${receipt.id}`, "info");
+        if (action === "start") {
+          void track(sessionId(ctx), { action, event: "action", source: "command" });
+          const command = parseCommand({ action, condition: value }, ctx);
+          if (command.action !== "start") return;
+          const receipt = toReceipt(startWatch(command, ctx));
+          ctx.ui.notify(`Watching ${receipt.label} as ${receipt.id}`, "info");
+          return;
+        }
+
+        if (action === "list") {
+          if (value) throw new Error(commandUsage);
+          void track(sessionId(ctx), { action, event: "action", source: "command" });
+          await showWatchPanel(ctx);
+          return;
+        }
+
+        if (action === "stats") {
+          if (value) throw new Error(commandUsage);
+          void track(sessionId(ctx), { action, event: "action", source: "command" });
+          if (!telemetry.enabled) {
+            ctx.ui.notify(
+              "pi-until telemetry is disabled (set PI_UNTIL_TELEMETRY=1 to enable)",
+              "warning",
+            );
+            return;
+          }
+          const events = await readTelemetry(telemetry.filePath);
+          ctx.ui.notify(
+            summaryText(summarizeTelemetry(events), telemetry.filePath),
+            "info",
+          );
+          return;
+        }
+
+        if (action !== "status" && action !== "cancel" && action !== "complete") {
+          throw new Error(commandUsage);
+        }
+        if (!value || /\s/.test(value)) throw new Error(commandUsage);
+        void track(sessionId(ctx), { action, event: "action", source: "command" });
+
+        const id = value;
+        const record = watches.get(id);
+        if (!record) {
+          const historical = terminalReceiptFor(id);
+          if (action === "status" && historical) {
+            ctx.ui.notify(receiptText(historical), "info");
+            return;
+          }
+          ctx.ui.notify(`Unknown pi-until watch: ${id}`, "warning");
+          return;
+        }
+
+        if (action === "status") {
+          ctx.ui.notify(receiptText(toReceipt(record)), "info");
+          return;
+        }
+        if (action === "cancel") {
+          if (receiptStatus(record) === "running") {
+            record.actor.send({ type: "CANCEL" });
+          }
+          ctx.ui.notify(`Cancelled ${id}`, "info");
+          return;
+        }
+        if (record.actor.getSnapshot().context.definition.kind !== "recurring") {
+          ctx.ui.notify(`Watch ${id} is not recurring`, "warning");
+          return;
+        }
+        if (receiptStatus(record) === "running") {
+          record.actor.send({ type: "COMPLETE" });
+        }
+        ctx.ui.notify(`Completed ${id}`, "info");
       } catch (error) {
         ctx.ui.notify(
           error instanceof Error ? error.message : String(error),
-          "error"
+          "error",
         );
       }
-    },
-  });
-
-  pi.registerCommand("until-list", {
-    description: "Open watches owned by this Pi session",
-    handler: async (_args, ctx) => {
-      currentContext = ctx;
-      void track(sessionId(ctx), {
-        action: "list",
-        event: "action",
-        source: "command",
-      });
-      await showWatchPanel(ctx);
-    },
-  });
-
-  pi.registerCommand("until-stats", {
-    description: "Summarize local pi-until usage telemetry",
-    handler: async (_args, ctx) => {
-      currentContext = ctx;
-      void track(sessionId(ctx), {
-        action: "stats",
-        event: "action",
-        source: "command",
-      });
-      if (!telemetry.enabled) {
-        ctx.ui.notify(
-          "pi-until telemetry is disabled (set PI_UNTIL_TELEMETRY=1 to enable)",
-          "warning"
-        );
-        return;
-      }
-      const events = await readTelemetry(telemetry.filePath);
-      ctx.ui.notify(
-        summaryText(summarizeTelemetry(events), telemetry.filePath),
-        "info"
-      );
-    },
-  });
-
-  pi.registerCommand("until-cancel", {
-    description: "Cancel a watch: /until-cancel <id>",
-    getArgumentCompletions: (prefix) => activeIdCompletions(prefix),
-    handler: async (args, ctx) => {
-      currentContext = ctx;
-      void track(sessionId(ctx), {
-        action: "cancel",
-        event: "action",
-        source: "command",
-      });
-      const id = args.trim();
-      const record = watches.get(id);
-      if (!record) {
-        ctx.ui.notify(
-          `Unknown pi-until watch: ${id || "<missing id>"}`,
-          "warning"
-        );
-        return;
-      }
-      if (receiptStatus(record) === "running") {
-        record.actor.send({ type: "CANCEL" });
-      }
-      ctx.ui.notify(`Cancelled ${id}`, "info");
-    },
-  });
-
-  pi.registerCommand("until-complete", {
-    description: "Complete a recurring watch: /until-complete <id>",
-    getArgumentCompletions: (prefix) => activeIdCompletions(prefix, true),
-    handler: async (args, ctx) => {
-      currentContext = ctx;
-      void track(sessionId(ctx), {
-        action: "complete",
-        event: "action",
-        source: "command",
-      });
-      const id = args.trim();
-      const record = watches.get(id);
-      if (!record) {
-        ctx.ui.notify(
-          `Unknown pi-until watch: ${id || "<missing id>"}`,
-          "warning"
-        );
-        return;
-      }
-      if (record.actor.getSnapshot().context.definition.kind !== "recurring") {
-        ctx.ui.notify(`Watch ${id} is not recurring`, "warning");
-        return;
-      }
-      if (receiptStatus(record) === "running") {
-        record.actor.send({ type: "COMPLETE" });
-      }
-      ctx.ui.notify(`Completed ${id}`, "info");
     },
   });
 

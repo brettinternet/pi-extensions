@@ -66,11 +66,12 @@ Aborted or failed output pauses the run. State and session ownership are persist
 Derived from Joel Hooks' MIT-licensed `pi-until` project and adapted for Pi 0.86. One-shot watches default to a 24-hour timeout; recurring watches require `timeoutSeconds` (up to 30 days).
 
 ```text
-/until <side-effect-free shell condition>
-/until-list
-/until-complete <recurring-id>
-/until-cancel <id>
-/until-stats
+/until start <side-effect-free shell condition>
+/until list
+/until status <id>
+/until complete <recurring-id>
+/until cancel <id>
+/until stats
 ```
 
 Use the `until` tool with `action: "start"` for shell predicates or `action: "repeat"` for recurring same-session follow-ups. Watches are background, non-overlapping, session-scoped, and survive `/reload` only. Set `PI_UNTIL_TELEMETRY=1` to opt into bounded local JSONL telemetry.
