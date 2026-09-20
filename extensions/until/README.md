@@ -202,4 +202,6 @@ ready -> queued -> awaiting message_start -> awaiting agent_settled -> ready
 
 ## Contributions
 
-This extension is derived from Joel Hooks' MIT-licensed `pi-until` project and adapted for this repository's Pi 0.86 APIs. See [`LICENSE`](./LICENSE).
+This extension is derived from Joel Hooks' MIT-licensed `pi-until` project. See [`LICENSE`](./LICENSE).
+
+This version adds Pi 0.86 support, stricter process cleanup and bounds, reload-safe delivery/history restoration, opt-in rotating telemetry, command completions, and expanded tests.
