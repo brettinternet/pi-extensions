@@ -1,0 +1,26 @@
+{
+  "name": "@brettinternet/pi-until",
+  "version": "0.1.0",
+  "description": "Session-scoped shell-condition watches and recurring agent follow-ups for Pi.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brettinternet/pi-extensions.git",
+    "directory": "extensions/until"
+  },
+  "files": ["*.ts", "README.md", "LICENSE"],
+  "publishConfig": { "access": "public" },
+  "keywords": ["async", "monitor", "pi", "pi-extension", "pi-package", "polling", "recurring"],
+  "engines": { "node": ">=22.19.0" },
+  "dependencies": {
+    "typebox": "1.3.14",
+    "xstate": "5.32.5"
+  },
+  "peerDependencies": {
+    "@earendil-works/pi-ai": ">=0.86.0",
+    "@earendil-works/pi-coding-agent": ">=0.86.0",
+    "@earendil-works/pi-tui": ">=0.86.0"
+  },
+  "pi": { "extensions": ["./index.ts"] }
+}
