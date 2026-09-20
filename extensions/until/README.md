@@ -188,6 +188,6 @@ bun test test/until
 
 ## Contributions
 
-This extension is derived from Joel Hooks' MIT-licensed `pi-until` project. See [`LICENSE`](./LICENSE).
+This extension is derived from Joel Hooks' `pi-until`. See [`LICENSE`](./LICENSE).
 
 This version adds Pi 0.86 support, stricter process cleanup and bounds, reload-safe delivery and history restoration, opt-in rotating telemetry, command completions, and expanded tests.
