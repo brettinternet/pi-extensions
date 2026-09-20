@@ -13,6 +13,7 @@ Slash-command descriptions show each command's argument shape. Press `Tab` to co
 | **Live Codex** | Realtime `gpt-live-1-codex` voice mode for Pi. | [`docs`](extensions/live-codex/global-voice-broker.md) |
 | **Loop** | Runs a prompt a bounded number of times in fresh Pi sessions. | [`README`](extensions/loop/README.md) |
 | **Wait** | Sends a queued message after a cancellable timeout. | [`README`](extensions/wait/README.md) |
+| **Until** | Watches shell predicates and schedules serialized recurring follow-ups in one live session. | [`README`](extensions/until/README.md) |
 | **Herdr Agent State** | Reports aggregate Pi lifecycle state to Herdr and keeps the pane working while async subagents run. | [`README`](extensions/herdr-agent-state/README.md) |
 | **Herdr Workbench** | Provides visible Neovim, LazyGit, and foreground-job panes. | [`README`](extensions/workbench/README.md) |
 | **Progress** | Shows compact, passive main-agent activity below the editor. | [`README`](extensions/progress/README.md) |
@@ -59,6 +60,20 @@ Each iteration gets a fresh Pi session. Filesystem changes carry forward; conver
 ```
 
 Aborted or failed output pauses the run. State and session ownership are persisted in custom entries, with a compact active/paused widget.
+
+### Until
+
+Derived from Joel Hooks' MIT-licensed `pi-until` project and adapted for Pi 0.86. One-shot watches default to a 24-hour timeout; recurring watches require `timeoutSeconds` (up to 30 days).
+
+```text
+/until <side-effect-free shell condition>
+/until-list
+/until-complete <recurring-id>
+/until-cancel <id>
+/until-stats
+```
+
+Use the `until` tool with `action: "start"` for shell predicates or `action: "repeat"` for recurring same-session follow-ups. Watches are background, non-overlapping, session-scoped, and survive `/reload` only. Set `PI_UNTIL_TELEMETRY=1` to opt into bounded local JSONL telemetry.
 
 ### Wait
 
@@ -150,6 +165,7 @@ pi install npm:@brettinternet/pi-progress
 pi install npm:@brettinternet/pi-footer
 pi install npm:@brettinternet/pi-loop
 pi install npm:pi-wait
+pi install npm:@brettinternet/pi-until
 pi install npm:pi-title
 ```
 
