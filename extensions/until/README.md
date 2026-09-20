@@ -1,32 +1,10 @@
 # pi-until
 
-A Pi extension for non-blocking shell-condition watches and recurring follow-ups owned by one live Pi session.
+Watch a shell condition or run recurring follow-ups without blocking Pi.
 
-For shell watches, **exit code 0 means true**. Pi checks immediately, then polls in the background. When the condition succeeds, the extension can wake the agent with a receipt or only show a notification.
-
-For recurring follow-ups, Pi wakes the same agent every fixed interval with an immutable Markdown task packet. The agent must explicitly complete or cancel the recurrence.
-
-## Why
-
-Long-running work should not pin a tool call, burn model turns, or depend on someone remembering to check a terminal later.
-
-`pi-until` turns this:
-
-```sh
-while ! ssh host 'test -f /tmp/done'; do sleep 30; done
-```
-
-into a session-owned watch that leaves Pi free for other work.
-
-## Choose the primitive
-
-| Need | Use |
-| --- | --- |
-| Resume when a cheap fact becomes true | `action: "start"` |
-| Ask the same agent to do work on a fixed cadence | `action: "repeat"` |
-| Survive Pi exit, session replacement, or reboot | Use a durable workload scheduler instead |
-
-A shell condition is a predicate, not a job. If the command changes the system, it does not belong in `pi-until`.
+- Exit code `0` means true.
+- Checks run in the background without model turns.
+- Watches belong to one live Pi session.
 
 ## Install
 
@@ -34,102 +12,89 @@ A shell condition is a predicate, not a job. If the command changes the system, 
 pi install npm:@brettinternet/pi-until
 ```
 
-Then restart Pi or run `/reload`.
+Restart Pi or run `/reload`.
 
-For local development from this repository:
+## Watch a condition
 
-```bash
-pi install ./extensions/until
+```ts
+until({
+  action: "start",
+  condition: "test -f .deploy-finished",
+  label: "deployment",
+  intervalSeconds: 30,
+  wake: "agent",
+});
 ```
 
-## Agent tool
+Pi checks immediately, then every 30 seconds. Success wakes the agent once.
 
-The extension registers `until` with six actions:
-
-- `start` — begin a background shell-condition watch.
-- `repeat` — begin a recurring agent follow-up.
-- `list` — list watches in this Pi session.
-- `status` — inspect one watch by ID.
-- `complete` — mark a recurring watch complete.
-- `cancel` — stop a watch without marking it complete.
-
-A `start` call accepts:
-
-- `condition` — side-effect-free shell command; exit 0 means true.
-- `label` — short safe name.
-- `cwd` — working directory; defaults to Pi's current directory.
-- `intervalSeconds` — polling interval; defaults to 30.
-- `checkTimeoutSeconds` — limit for one check; defaults to 30.
-- `timeoutSeconds` — optional overall deadline; one-shot watches default to 24 hours and explicit values may be up to 30 days.
-- `wake` — `agent` or `notify`; defaults to `agent`.
-
-Example intent:
-
-```text
-Watch until the remote verification receipt exists, then continue the migration review.
+```ts
+until({
+  action: "start",
+  condition: "ssh host 'test -f ~/migration/verify.done'",
+  label: "migration verification",
+  wake: "notify",
+});
 ```
 
-Equivalent condition:
+`wake: "notify"` reports success without starting an agent turn.
 
-```sh
-ssh host 'test -f ~/migration/verify.done'
-```
+| `start` option | Default | Limit |
+| --- | --- | --- |
+| `intervalSeconds` | `30` | `1` to `86400` |
+| `checkTimeoutSeconds` | `30` | `1` to `3600` |
+| `timeoutSeconds` | `86400` (24h) | 30 days |
+| `cwd` | Pi working directory | Existing directory |
+| `label` | `condition` | 120 characters |
+| `wake` | `agent` | `agent` or `notify` |
 
-A `repeat` call accepts:
-
-- `instruction` — the task given to the agent on every wake.
-- `quickRef` — a short human reference for the recurring task.
-- `contextRefs` — optional `{ label, target }` pointers. The extension passes them through without resolving them.
-- `intervalSeconds` — the fixed cadence.
-- `timeoutSeconds` — required absolute lifetime of the recurrence.
-- `immediate` — `true` to wake after the current agent turn; otherwise the first wake follows one interval.
-- `condition` — optional side-effect-free shell gate. Exit 0 permits that tick to wake the agent. It never completes the recurrence.
-- `label` — optional safe display and telemetry label. It defaults to `recurring follow-up`, never to task text.
-- `cwd` and `checkTimeoutSeconds` — settings for the optional gate.
+## Run recurring work
 
 ```ts
 until({
   action: "repeat",
-  intervalSeconds: 21_600,
-  timeoutSeconds: 86_400,
   instruction: "Review the deployment and fix remaining failures.",
   quickRef: "Release 42 verification",
   contextRefs: [{ label: "Runbook", target: "docs/release.md" }],
+  intervalSeconds: 21_600,
+  timeoutSeconds: 86_400,
   condition: "test -f .deploy-finished",
   immediate: false,
 });
 ```
 
-The extension snapshots `instruction`, `quickRef`, `contextRefs`, and the origin session entry at start. Change the intent by completing or cancelling the old recurrence and starting another one.
+The optional `condition` must exit `0` before that tick wakes the agent. It does not complete the recurrence.
 
-Cadence stays anchored to the original schedule. One session-wide arbiter sends only one `pi-until` follow-up into Pi at a time. It waits for Pi to start that exact message and for the resulting agent turn to settle before it sends another. Missed ticks increase `missedTicks` instead of stacking agent turns. If acknowledgement takes more than five seconds, the arbiter pauses and warns instead of guessing that Pi discarded an accepted message. A late `message_start` resumes the lifecycle safely. A synchronous dispatch rejection fails the recurring watch.
+Recurring watches:
 
-## Agent contract
+- stay in the same session;
+- keep cadence anchored to the original schedule;
+- send one immutable task packet at a time;
+- count overlapping ticks as `missedTicks` instead of stacking turns;
+- require `timeoutSeconds`, `instruction`, and `quickRef`;
+- always wake the agent.
 
-- Treat `contextRefs` as opaque pointers. Read a target only when the instruction requires it.
-- Call `complete` only when the recurring goal is achieved. A finished turn is not a finished recurrence.
-- Call `cancel` when the recurrence should stop without success.
-- An expired or failed receipt is terminal. Do not continue its instruction unless the user asks.
-
-## Session display
-
-Active watches appear in a compact card above the editor. Shell watches show check attempts. Recurring watches show deliveries, missed ticks, and whether a follow-up is pending or running. The card disappears when the session has no active watches.
-
-```text
-╭─ UNTIL · deploy verification ─────────────────────────╮
-│ ◷ next 12s · 2m14s elapsed · 5 checks                 │
-╰─ 8f2c1a7d · wakes agent · /until-list ────────────────╯
-```
-
-The footer is not used. `/until-list` opens a scrollable session panel with active and finished watches.
-
-Other extensions can follow active watches on `pi.events`. Whenever the visible list changes (a watch starts, ticks, finishes, or is cancelled), the full list is emitted on `pi-until:watches`, including an empty list when the last watch finishes. Refreshes that change nothing do not emit.
+Finish explicitly:
 
 ```ts
-pi.events.on("pi-until:watches", (watches) => {
-  // [{ id, label, kind, status, wake, startedAt, nextDueAt, attempts, ... }]
-});
+until({ action: "complete", id: "8f2c1a7d" }); // goal achieved
+until({ action: "cancel", id: "8f2c1a7d" });   // stop without success
 ```
+
+A finished turn does not complete a recurring watch.
+
+## Tool actions
+
+| Action | Result |
+| --- | --- |
+| `start` | Watch a shell condition |
+| `repeat` | Schedule recurring follow-ups |
+| `list` | List active and recent watches |
+| `status` | Inspect one watch |
+| `complete` | Complete recurring work |
+| `cancel` | Stop any watch |
+
+Up to 32 watches may be active.
 
 ## Commands
 
@@ -141,39 +106,79 @@ pi.events.on("pi-until:watches", (watches) => {
 /until-stats
 ```
 
-`/until` uses the defaults and wakes the agent when the condition succeeds. `/until-stats` summarizes the local telemetry file.
+Commands complete common conditions and active watch IDs.
+
+## Session display
+
+```text
+╭─ UNTIL · deployment ────────────────────────────────────╮
+│ ◷ next 12s · 2m14s elapsed · 5 checks                  │
+╰─ 8f2c1a7d · wakes agent · /until-list ─────────────────╯
+```
+
+`/until-list` opens active and recent watches. Other extensions can observe active watches:
+
+```ts
+pi.events.on("pi-until:watches", (watches) => {
+  // [{ id, label, kind, status, nextDueAt, attempts, ... }]
+});
+```
 
 ## Lifecycle
 
-A watch belongs to one live Pi session/process.
+| Event | Result |
+| --- | --- |
+| Agent turn ends | Watch continues |
+| `/reload` | Watches, delivery state, and recent receipts restore |
+| `/new`, `/resume`, `/fork` | Watches stop |
+| Pi exits or the machine reboots | Watches stop |
+| Print or JSON mode | New watches are rejected |
 
-- It survives normal agent turns.
-- It does not block Pi.
-- It survives `/reload`. Pi keeps the process and session alive across a reload and only replaces the extension instance. On `session_shutdown { reason: "reload" }` the extension terminates the in-flight check and writes versioned watch and delivery-queue state to a `pi-until-suspended` session entry. The new instance restores it only on `session_start { reason: "reload" }`. Definitions, task snapshots, counts, terminal receipt history, pending deliveries, the next due time, and the absolute expiry carry over without redispatching already-submitted messages.
-- It stops on session switch, fork, `/new`, or Pi shutdown. Graceful shutdown waits for process-tree cleanup before Pi exits. A suspension entry from an earlier process is never resurrected on `resume`.
-- It does not survive a machine reboot.
-- Print and JSON modes reject new watches because those processes are not durable owners.
-
-This boundary is intentional. `pi-until` is a session primitive, not another scheduler or daemon.
+Use a durable scheduler when work must survive the owning Pi process.
 
 ## Telemetry
 
-The extension appends one JSON line per event to `~/.pi/agent/pi-until/events.jsonl`. Nothing leaves the machine. Events: `started`, `finished`, `suspended`, `resumed`, and `action` (tool or command use). A condition is recorded only as a 12-character hash; no command fragment is written. Recurring instructions, quick references, and context pointers are never written to telemetry. Labels are written, so keep them safe.
+Telemetry is off by default.
 
-- Telemetry is off by default; `PI_UNTIL_TELEMETRY=1` enables it.
-- `PI_UNTIL_TELEMETRY_FILE=/path/events.jsonl` moves it.
-- The file rotates at 5 MiB and retains one `.1` backup.
-- `/until-stats` prints counts by status and wake mode, median attempts and duration, and reload suspend/resume counts.
+```bash
+PI_UNTIL_TELEMETRY=1 pi
+PI_UNTIL_TELEMETRY_FILE=/path/events.jsonl pi
+```
+
+The JSONL file contains watch metadata and 12-character condition hashes, never command text or recurring instructions. It rotates at 5 MiB and keeps one `.1` backup.
 
 ## Safety
 
-Conditions run through the inherited shell with the same permissions as Pi. The extension discards stdout and stderr. Cancellation and timeouts terminate the condition's process group on macOS and Linux.
+Conditions run through the inherited shell with Pi's permissions. Use side-effect-free, idempotent commands.
 
-Use side-effect-free, idempotent checks. A condition string is arbitrary shell access; installing this extension grants that capability even when Pi's normal bash tool is disabled. Do not put secrets in commands, labels, task snapshots, or context pointers. Recurring task packets remain in the private Pi session, but they are still persisted session data. If the thing needs a durable cross-process owner, use the real workload scheduler instead.
+- stdout and stderr are discarded;
+- each check has a timeout;
+- cancellation stops the process group on macOS and Linux;
+- secrets do not belong in commands, labels, instructions, or context references;
+- installing this extension grants shell access even if Pi's normal shell tool is disabled.
+
+## Architecture
+
+One machine owns each watch:
+
+```text
+waiting -> checking -> satisfied
+   ^          |
+   |          v
+   +------ not ready
+
+recurring due -> queued -> running -> waiting
+                     |
+                     +-> missed ticks coalesce
+```
+
+One session queue serializes delivery:
+
+```text
+ready -> queued -> message_start -> agent_settled -> ready
+```
 
 ## Development
-
-From the repository root:
 
 ```bash
 bun install
@@ -181,27 +186,8 @@ bun run check
 bun test test/until
 ```
 
-One XState v5 machine owns each watch:
-
-```text
-active.routing -> waiting -> checking -----------------> satisfied
-       |            |          |                            (shell)
-       |            |          +-> duePending
-       |            +------------> duePending -> awaitingSettlement
-       |                                      -> routing  (recurring)
-       +-> completed | expired | cancelled | failed
-```
-
-A second XState v5 machine owns the session delivery queue:
-
-```text
-ready -> queued -> awaiting message_start -> awaiting agent_settled -> ready
-```
-
-`command.ts` parses the flat provider schema once into an internal command. The watch machine owns cadence, expiry, checks, delivery counts, missed ticks, and terminal state. The session queue owns cross-watch serialization, message correlation, deduplication, and dispatch acknowledgement. `index.ts` adapts these parts to Pi lifecycle events, receipts, and UI.
-
 ## Contributions
 
 This extension is derived from Joel Hooks' MIT-licensed `pi-until` project. See [`LICENSE`](./LICENSE).
 
-This version adds Pi 0.86 support, stricter process cleanup and bounds, reload-safe delivery/history restoration, opt-in rotating telemetry, command completions, and expanded tests.
+This version adds Pi 0.86 support, stricter process cleanup and bounds, reload-safe delivery and history restoration, opt-in rotating telemetry, command completions, and expanded tests.
