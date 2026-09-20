@@ -1,7 +1,5 @@
 # pi-until
 
-This extension is derived from Joel Hooks' MIT-licensed `pi-until` project and adapted for this repository's Pi 0.86 APIs. See [`LICENSE`](./LICENSE).
-
 A Pi extension for non-blocking shell-condition watches and recurring follow-ups owned by one live Pi session.
 
 For shell watches, **exit code 0 means true**. Pi checks immediately, then polls in the background. When the condition succeeds, the extension can wake the agent with a receipt or only show a notification.
@@ -201,3 +199,7 @@ ready -> queued -> awaiting message_start -> awaiting agent_settled -> ready
 ```
 
 `command.ts` parses the flat provider schema once into an internal command. The watch machine owns cadence, expiry, checks, delivery counts, missed ticks, and terminal state. The session queue owns cross-watch serialization, message correlation, deduplication, and dispatch acknowledgement. `index.ts` adapts these parts to Pi lifecycle events, receipts, and UI.
+
+## Contributions
+
+This extension is derived from Joel Hooks' MIT-licensed `pi-until` project and adapted for this repository's Pi 0.86 APIs. See [`LICENSE`](./LICENSE).
