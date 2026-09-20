@@ -10,10 +10,12 @@ import type {
   WatchDefinition,
   WatchFacts,
 } from "./domain.ts";
+import type { FollowUpSuspension } from "./follow-up.ts";
 
 export const SUSPENDED_ENTRY_TYPE = "pi-until-suspended";
-export const SUSPENSION_VERSION = 2;
+export const SUSPENSION_VERSION = 3;
 export const MAX_ACTIVE_WATCHES = 32;
+const MAX_FOLLOW_UP_REQUESTS = 82;
 
 const persistedWatchSchema = Type.Object(
   {
@@ -23,10 +25,66 @@ const persistedWatchSchema = Type.Object(
   { additionalProperties: false }
 );
 
+const followUpRequestBase = {
+  dedupeKey: Type.String({ minLength: 1, maxLength: 256 }),
+  id: Type.String({ minLength: 1, maxLength: 128 }),
+  watchId: Type.String({ minLength: 1, maxLength: 128 }),
+};
+
+const followUpRequestSchema = Type.Union([
+  Type.Object(
+    {
+      ...followUpRequestBase,
+      dispatchedAt: Type.Optional(Type.Number()),
+      kind: Type.Literal("recurring"),
+    },
+    { additionalProperties: false }
+  ),
+  Type.Object(
+    {
+      ...followUpRequestBase,
+      content: Type.String({ maxLength: 50_000 }),
+      customType: Type.String({ minLength: 1, maxLength: 120 }),
+      details: Type.Unknown(),
+      kind: Type.Literal("terminal"),
+    },
+    { additionalProperties: false }
+  ),
+]);
+
+const followUpPhaseSchema = Type.Union([
+  Type.Literal("awaitingSettlement"),
+  Type.Literal("awaitingStart"),
+  Type.Literal("busy"),
+  Type.Literal("ready"),
+  Type.Literal("startUncertain"),
+]);
+
+const followUpSuspensionSchema = Type.Object(
+  {
+    active: Type.Optional(followUpRequestSchema),
+    phase: followUpPhaseSchema,
+    queue: Type.Array(followUpRequestSchema, {
+      maxItems: MAX_FOLLOW_UP_REQUESTS,
+    }),
+  },
+  { additionalProperties: false }
+);
+
 const suspensionDataSchema = Type.Object(
   {
+    followUps: followUpSuspensionSchema,
     suspendedAt: Type.String(),
     v: Type.Literal(SUSPENSION_VERSION),
+    watches: Type.Array(persistedWatchSchema, { maxItems: MAX_ACTIVE_WATCHES }),
+  },
+  { additionalProperties: false }
+);
+
+const versionTwoSuspensionDataSchema = Type.Object(
+  {
+    suspendedAt: Type.String(),
+    v: Type.Literal(2),
     watches: Type.Array(persistedWatchSchema, { maxItems: MAX_ACTIVE_WATCHES }),
   },
   { additionalProperties: false }
@@ -57,8 +115,14 @@ export interface PersistedWatch {
 }
 
 export interface SuspensionData {
+  readonly followUps: FollowUpSuspension;
   readonly suspendedAt: string;
   readonly v: typeof SUSPENSION_VERSION;
+  readonly watches: readonly PersistedWatch[];
+}
+
+export interface SuspendedSession {
+  readonly followUps?: FollowUpSuspension;
   readonly watches: readonly PersistedWatch[];
 }
 
@@ -98,8 +162,14 @@ export const suspendWatch = (context: WatchContext): PersistedWatch => ({
 
 export const suspensionData = (
   watches: readonly PersistedWatch[],
+  followUps: FollowUpSuspension,
   now: number
 ): SuspensionData => ({
+  followUps: {
+    active: followUps.active,
+    phase: followUps.phase,
+    queue: [...followUps.queue],
+  },
   suspendedAt: new Date(now).toISOString(),
   v: SUSPENSION_VERSION,
   watches: [...watches],
@@ -142,28 +212,40 @@ const normalizeLegacyWatch = (
  * entries are normalized at this boundary; malformed newest entries resolve
  * to an empty set instead of reviving older facts.
  */
-export const suspendedWatchesFrom = (
+export const suspendedSessionFrom = (
   entries: readonly SessionEntry[]
-): readonly PersistedWatch[] => {
+): SuspendedSession => {
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (entry?.type !== "custom" || entry.customType !== SUSPENDED_ENTRY_TYPE) {
       continue;
     }
     if (Value.Check(suspensionDataSchema, entry.data)) {
-      return entry.data.watches;
+      return {
+        followUps: entry.data.followUps as FollowUpSuspension,
+        watches: entry.data.watches,
+      };
+    }
+    if (Value.Check(versionTwoSuspensionDataSchema, entry.data)) {
+      return { watches: entry.data.watches };
     }
     if (Value.Check(legacySuspensionDataSchema, entry.data)) {
       const suspendedAt = Date.parse(entry.data.suspendedAt);
       const normalizedAt = Number.isFinite(suspendedAt) ? suspendedAt : 0;
-      return entry.data.watches.map((watch) =>
-        normalizeLegacyWatch(watch, normalizedAt)
-      );
+      return {
+        watches: entry.data.watches.map((watch) =>
+          normalizeLegacyWatch(watch, normalizedAt)
+        ),
+      };
     }
-    return [];
+    return { watches: [] };
   }
-  return [];
+  return { watches: [] };
 };
+
+export const suspendedWatchesFrom = (
+  entries: readonly SessionEntry[]
+): readonly PersistedWatch[] => suspendedSessionFrom(entries).watches;
 
 export const resumeInput = (watch: PersistedWatch): WatchActorInput => ({
   definition: watch.definition,

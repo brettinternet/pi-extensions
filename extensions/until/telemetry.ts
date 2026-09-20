@@ -1,5 +1,12 @@
 import { createHash } from "node:crypto";
-import { appendFile, mkdir, readFile, rename, stat } from "node:fs/promises";
+import {
+  appendFile,
+  mkdir,
+  readFile,
+  rename,
+  stat,
+  unlink,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { dirname, join } from "node:path";
 
@@ -163,13 +170,19 @@ export const createTelemetrySink = (
     try {
       directoryReady ??= mkdir(dirname(filePath), { recursive: true });
       await directoryReady;
+      let details;
       try {
-        const details = await stat(filePath);
-        if (details.size > TELEMETRY_ROTATION_BYTES) {
-          await rename(filePath, `${filePath}.1`);
+        details = await stat(filePath);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+      }
+      if (details !== undefined && details.size > TELEMETRY_ROTATION_BYTES) {
+        try {
+          await unlink(`${filePath}.1`);
+        } catch (error) {
+          if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
         }
-      } catch {
-        // The event file may not exist yet.
+        await rename(filePath, `${filePath}.1`);
       }
       await appendFile(filePath, `${JSON.stringify(full)}\n`, "utf-8");
     } catch {

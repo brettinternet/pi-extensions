@@ -37,6 +37,7 @@ import type {
 import {
   createFollowUpMachine,
   type FollowUpRequest,
+  type FollowUpSuspension,
 } from "./follow-up.ts";
 import { renderWatchIndicator, renderWatchPanel } from "./indicator.ts";
 import type { WatchDisplay, WatchPhase } from "./indicator.ts";
@@ -47,11 +48,11 @@ import {
   renderRecurringWakePacket,
 } from "./packet.ts";
 import {
-  MAX_ACTIVE_WATCHES as MAX_RESTORED_WATCHES,
+  MAX_ACTIVE_WATCHES,
   SUSPENDED_ENTRY_TYPE,
   resumeInput,
   suspendWatch,
-  suspendedWatchesFrom,
+  suspendedSessionFrom,
   suspensionData,
 } from "./suspension.ts";
 import type { PersistedWatch } from "./suspension.ts";
@@ -67,7 +68,6 @@ import type { TelemetrySink } from "./telemetry.ts";
 
 export { prepareUntilArguments, untilParameters } from "./command.ts";
 
-const MAX_ACTIVE_WATCHES = 32;
 const MAX_TERMINAL_RECEIPTS = 50;
 const WIDGET_KEY = "pi-until-watches";
 export const WATCHES_EVENT = "pi-until:watches";
@@ -635,7 +635,10 @@ export default function piUntil(
     }
   };
 
-  const createSessionFollowUps = (sessionBusy: boolean): FollowUpActor => {
+  const createSessionFollowUps = (
+    sessionBusy: boolean,
+    restored?: FollowUpSuspension
+  ): FollowUpActor => {
     const actor = createActor(
       createFollowUpMachine({
         dispatch: dispatchFollowUp,
@@ -680,12 +683,34 @@ export default function piUntil(
         },
         now: () => clock.now(),
       }),
-      { clock, input: { sessionBusy } }
+      { clock, input: { restored, sessionBusy } }
     );
     actor.start();
+    if (restored?.phase === "awaitingSettlement" && !sessionBusy) {
+      actor.send({ type: "SESSION_SETTLED" });
+    }
     return actor;
   };
   followUps = createSessionFollowUps(true);
+
+  const suspendFollowUps = (actor: FollowUpActor): FollowUpSuspension => {
+    const snapshot = actor.getSnapshot();
+    const phase = snapshot.matches("awaitingSettlement")
+      ? "awaitingSettlement"
+      : snapshot.matches("awaitingStart") ||
+          snapshot.matches("restoredAwaitingStart")
+        ? "awaitingStart"
+        : snapshot.matches("startUncertain")
+          ? "startUncertain"
+          : snapshot.context.sessionBusy
+            ? "busy"
+            : "ready";
+    return {
+      active: snapshot.context.active,
+      phase,
+      queue: [...snapshot.context.queue],
+    };
+  };
 
   const parseCommand = (
     params: UntilParameters,
@@ -754,7 +779,7 @@ export default function piUntil(
     suspended: readonly PersistedWatch[],
     ctx: ExtensionContext
   ) => {
-    for (const watch of suspended.slice(0, MAX_RESTORED_WATCHES)) {
+    for (const watch of suspended.slice(0, MAX_ACTIVE_WATCHES)) {
       if (watches.size >= MAX_ACTIVE_WATCHES) break;
       if (watches.has(watch.facts.id)) continue;
       const input = resumeInput(watch);
@@ -1177,9 +1202,14 @@ export default function piUntil(
 
   pi.on("session_start", (event, ctx) => {
     currentContext = ctx;
-    if (shuttingDown) {
+    const suspended =
+      event.reason === "reload"
+        ? suspendedSessionFrom(ctx.sessionManager.getBranch())
+        : { watches: [] };
+    if (event.reason === "reload" || shuttingDown) {
+      followUps.stop();
       shuttingDown = false;
-      followUps = createSessionFollowUps(!ctx.isIdle());
+      followUps = createSessionFollowUps(!ctx.isIdle(), suspended.followUps);
     } else {
       followUps.send({
         type: ctx.isIdle() ? "SESSION_SETTLED" : "SESSION_BUSY",
@@ -1190,13 +1220,14 @@ export default function piUntil(
     // must never resurrect watches nobody is running.
     if (event.reason === "reload") {
       restoreTerminalReceipts(ctx);
-      resumeWatches(suspendedWatchesFrom(ctx.sessionManager.getBranch()), ctx);
+      resumeWatches(suspended.watches, ctx);
     }
     refreshIndicator();
   });
 
   pi.on("session_shutdown", async (event) => {
     shuttingDown = true;
+    const suspendedFollowUps = suspendFollowUps(followUps);
     followUps.stop();
     const active = activeWatches();
     try {
@@ -1207,7 +1238,9 @@ export default function piUntil(
         // Materialize the immutable machine value before handing it to Pi's
         // persistence boundary; some providers clone proxy values as {}.
         const persisted = JSON.parse(
-          JSON.stringify(suspensionData(suspended, clock.now()))
+          JSON.stringify(
+            suspensionData(suspended, suspendedFollowUps, clock.now())
+          )
         ) as ReturnType<typeof suspensionData>;
         // Written even when empty so the newest entry always wins.
         pi.appendEntry(SUSPENDED_ENTRY_TYPE, persisted);

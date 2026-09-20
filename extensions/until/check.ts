@@ -8,20 +8,27 @@ import type {
 
 const FORCE_KILL_DELAY_MS = 1_000;
 
+function processTreeTarget(pid: number): number {
+  return process.platform === "win32" ? pid : -pid;
+}
+
+function processTreeExists(pid: number | undefined): boolean {
+  if (pid === undefined) return false;
+  try {
+    process.kill(processTreeTarget(pid), 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function signalProcessTree(
   pid: number | undefined,
   signal: NodeJS.Signals
 ): void {
-  if (pid === undefined) {
-    return;
-  }
-
+  if (pid === undefined) return;
   try {
-    if (process.platform === "win32") {
-      process.kill(pid, signal);
-    } else {
-      process.kill(-pid, signal);
-    }
+    process.kill(processTreeTarget(pid), signal);
   } catch {
     // The process tree already exited.
   }
@@ -68,17 +75,23 @@ const executeShellCondition: RunUntilCheck = async (
       resolve(result);
     }
 
-    function terminate() {
-      if (settled || killed) {
+    function settleAfterTreeCleanup(result: UntilCheckResult) {
+      if (!processTreeExists(child.pid)) {
+        settle(result);
         return;
       }
-      killed = true;
       signalProcessTree(child.pid, "SIGTERM");
       forceKillTimer = setTimeout(() => {
         signalProcessTree(child.pid, "SIGKILL");
         forceKillTimer = undefined;
-        settle({ code: 1, killed: true });
+        settle(result);
       }, FORCE_KILL_DELAY_MS);
+    }
+
+    function terminate() {
+      if (settled || killed) return;
+      killed = true;
+      settleAfterTreeCleanup({ code: 1, killed: true });
     }
 
     const checkTimer = setTimeout(terminate, input.checkTimeoutMs);
@@ -94,10 +107,10 @@ const executeShellCondition: RunUntilCheck = async (
     });
 
     child.once("exit", (code) => {
-      if (killed) {
-        return;
-      }
-      settle({
+      if (killed) return;
+      // Shells can exit while detached background children remain alive. Reap
+      // that process group before resolving so polling never leaks commands.
+      settleAfterTreeCleanup({
         code: code ?? 1,
         killed: false,
       });

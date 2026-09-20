@@ -18,13 +18,28 @@ export type FollowUpRequest =
       readonly kind: "terminal";
     });
 
+export type FollowUpPhase =
+  | "awaitingSettlement"
+  | "awaitingStart"
+  | "busy"
+  | "ready"
+  | "startUncertain";
+
+export interface FollowUpSuspension {
+  readonly active?: FollowUpRequest;
+  readonly phase: FollowUpPhase;
+  readonly queue: readonly FollowUpRequest[];
+}
+
 export interface FollowUpMachineInput {
+  readonly restored?: FollowUpSuspension;
   readonly sessionBusy: boolean;
 }
 
 export interface FollowUpContext {
   readonly active?: FollowUpRequest;
   readonly queue: readonly FollowUpRequest[];
+  readonly restoredPhase?: FollowUpPhase;
   readonly sessionBusy: boolean;
 }
 
@@ -123,6 +138,12 @@ export const createFollowUpMachine = (ports: FollowUpPorts) =>
         (event.type === "DISPATCH_FAILED" ||
           event.type === "MESSAGE_STARTED") &&
         context.active?.id === event.id,
+      restoredAwaitingSettlement: ({ context }) =>
+        context.restoredPhase === "awaitingSettlement",
+      restoredAwaitingStart: ({ context }) =>
+        context.restoredPhase === "awaitingStart",
+      restoredStartUncertain: ({ context }) =>
+        context.restoredPhase === "startUncertain",
     },
     types: {
       // SAFETY: XState reads these empty values only as compile-time type witnesses.
@@ -134,11 +155,13 @@ export const createFollowUpMachine = (ports: FollowUpPorts) =>
     },
   }).createMachine({
     context: ({ input }) => ({
-      queue: [],
+      active: input.restored?.active,
+      queue: input.restored?.queue ?? [],
+      restoredPhase: input.restored?.phase,
       sessionBusy: input.sessionBusy,
     }),
     id: "sessionFollowUps",
-    initial: "routing",
+    initial: "restoring",
     on: {
       DROP: { actions: "dropQueued" },
     },
@@ -161,6 +184,28 @@ export const createFollowUpMachine = (ports: FollowUpPorts) =>
           },
         },
         entry: ["recordDispatchTime", "dispatchActive"],
+        on: {
+          DISPATCH_FAILED: {
+            actions: ["reportFailure", "clearActive"],
+            guard: "matchesActive",
+            target: "routing",
+          },
+          ENQUEUE: { actions: "enqueue" },
+          MESSAGE_STARTED: {
+            actions: "reportStarted",
+            guard: "matchesActive",
+            target: "awaitingSettlement",
+          },
+          SESSION_BUSY: { actions: "markSessionBusy" },
+        },
+      },
+      restoredAwaitingStart: {
+        after: {
+          dispatchAck: {
+            actions: "reportUnacknowledged",
+            target: "startUncertain",
+          },
+        },
         on: {
           DISPATCH_FAILED: {
             actions: ["reportFailure", "clearActive"],
@@ -200,6 +245,17 @@ export const createFollowUpMachine = (ports: FollowUpPorts) =>
             target: "routing",
           },
         },
+      },
+      restoring: {
+        always: [
+          {
+            guard: "restoredAwaitingSettlement",
+            target: "awaitingSettlement",
+          },
+          { guard: "restoredAwaitingStart", target: "restoredAwaitingStart" },
+          { guard: "restoredStartUncertain", target: "startUncertain" },
+          { target: "routing" },
+        ],
       },
       routing: {
         always: [

@@ -151,7 +151,7 @@ A watch belongs to one live Pi session/process.
 
 - It survives normal agent turns.
 - It does not block Pi.
-- It survives `/reload`. Pi keeps the process and session alive across a reload and only replaces the extension instance. On `session_shutdown { reason: "reload" }` the extension terminates the in-flight check and writes a versioned watch value to a `pi-until-suspended` session entry. The new instance restores it only on `session_start { reason: "reload" }`. Definitions, task snapshots, counts, the next due time, and the absolute expiry carry over.
+- It survives `/reload`. Pi keeps the process and session alive across a reload and only replaces the extension instance. On `session_shutdown { reason: "reload" }` the extension terminates the in-flight check and writes versioned watch and delivery-queue state to a `pi-until-suspended` session entry. The new instance restores it only on `session_start { reason: "reload" }`. Definitions, task snapshots, counts, terminal receipt history, pending deliveries, the next due time, and the absolute expiry carry over without redispatching already-submitted messages.
 - It stops on session switch, fork, `/new`, or Pi shutdown. Graceful shutdown waits for process-tree cleanup before Pi exits. A suspension entry from an earlier process is never resurrected on `resume`.
 - It does not survive a machine reboot.
 - Print and JSON modes reject new watches because those processes are not durable owners.
