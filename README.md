@@ -165,7 +165,7 @@ pi install npm:@brettinternet/pi-progress
 pi install npm:@brettinternet/pi-footer
 pi install npm:@brettinternet/pi-loop
 pi install npm:pi-wait
-pi install npm:@brettinternet/pi-until
+pi install npm:pi-until
 pi install npm:pi-title
 ```
 

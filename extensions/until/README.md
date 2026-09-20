@@ -9,7 +9,7 @@ Watch a shell condition or run recurring follow-ups without blocking Pi.
 ## Install
 
 ```bash
-pi install npm:@brettinternet/pi-until
+pi install npm:pi-until
 ```
 
 Restart Pi or run `/reload`.

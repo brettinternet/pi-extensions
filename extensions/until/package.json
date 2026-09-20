@@ -1,5 +1,5 @@
 {
-  "name": "@brettinternet/pi-until",
+  "name": "pi-until",
   "version": "0.1.0",
   "description": "Session-scoped shell-condition watches and recurring agent follow-ups for Pi.",
   "type": "module",
