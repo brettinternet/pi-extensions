@@ -27,7 +27,6 @@ const THINKING_TOKEN_BUDGETS: Record<Exclude<ThinkingLevel, "off">, number> = {
   max: 16_384,
 };
 
-export const MIN_CONFIDENCE = 0.5;
 export const INFERENCE_SYSTEM_PROMPT = [
   "Classify the observed coding activity into a compact progress snapshot.",
   "The digest status is active while the run is still working and settled after the agent stops; make current describe ongoing work for active status and the most useful final state for settled status.",
@@ -151,7 +150,6 @@ export function parseInference(value: unknown): SemanticSnapshot {
   if (typeof input.confidence !== "number" || !Number.isFinite(input.confidence) || input.confidence < 0 || input.confidence > 1) {
     throw new Error('inference field "confidence" must be a number from 0 to 1');
   }
-  if (input.confidence < MIN_CONFIDENCE) throw new Error("inference confidence is too low");
 
   return {
     phase: (input.phase === undefined ? "" : oneLine(input.phase, "phase", 48, true)) || "Progress",

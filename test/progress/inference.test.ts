@@ -81,6 +81,7 @@ describe("progress inference contract", () => {
   test("normalizes and bounds recoverable output", () => {
     expect(parseInference({ ...valid, phase: " Verification\n" })).toEqual(valid);
     expect(parseInference({ ...valid, current: "" })).toEqual({ ...valid, current: "" });
+    expect(parseInference({ ...valid, confidence: 0.1 })).toEqual({ ...valid, confidence: 0.1 });
     expect(parseInference({ ...valid, phase: "x".repeat(49) }).phase).toBe("x".repeat(48));
     expect(parseInference({ ...valid, current: "x".repeat(97) }).current).toBe("x".repeat(96));
     expect(parseInference({ ...valid, completed: ["a", "b", "c", "d"] }).completed).toEqual(["a", "b", "c"]);
@@ -96,9 +97,9 @@ describe("progress inference contract", () => {
     expect(inferenceFromCompletion({ content: [{ type: "text", text: `\`\`\`json\n${JSON.stringify(valid)}\n\`\`\`` }], stopReason: "stop" })).toEqual(valid);
   });
 
-  test("rejects low-confidence and unsafe or malformed output", () => {
+  test("rejects unsafe or malformed output", () => {
     expect(() => parseInference({ ...valid, completed: "Configured FleetView" })).toThrow("must be an array");
-    expect(() => parseInference({ ...valid, confidence: 0.2 })).toThrow("too low");
+    expect(() => parseInference({ ...valid, confidence: -0.1 })).toThrow("number from 0 to 1");
     expect(() => parseInference({ ...valid, phase: "Verified" })).toThrow("cannot claim verification");
     expect(() => parseInference({ ...valid, phase: "\u001b[2JVerification" })).toThrow("terminal control");
     expect(() => inferenceFromCompletion({ content: [{ type: "text", text: "not json" }], stopReason: "stop" })).toThrow("invalid JSON");
