@@ -1,163 +1,38 @@
-# pi-extensions
+# Pi Extensions
 
-Personal extensions and themes for the [Pi coding agent](https://pi.dev).
+TypeScript extensions and themes for the [Pi coding agent](https://pi.dev).
 
-Slash-command descriptions show each command's argument shape. Press `Tab` to complete subcommands, common values, voices, and model references. Thinking levels complete after `:`.
+Slash-command descriptions show argument shapes. Press `Tab` to complete subcommands, common values, voices, and model references. Thinking levels complete after `:`.
 
 ## Extensions
 
-| Extension | What it does | Details |
-|---|---|---|
-| **Colima Sandbox** | Runs Pi's filesystem and shell tools in a disposable Colima container. | [`README`](extensions/colima-sandbox/README.md) |
-| **Copy Prompt** | Copies the current prompt editor text to the system clipboard with `Alt+C`. | [`README`](extensions/copy-prompt/README.md) |
-| **Live Codex** | Realtime `gpt-live-1-codex` voice mode for Pi. | [`docs`](extensions/live-codex/global-voice-broker.md) |
-| **Loop** | Runs a prompt a bounded number of times in fresh Pi sessions. | [`README`](extensions/loop/README.md) |
-| **Wait** | Sends a queued message after a cancellable timeout. | [`README`](extensions/wait/README.md) |
-| **Until** | Watches shell predicates and schedules serialized recurring follow-ups in one live session. | [`README`](extensions/until/README.md) |
-| **Herdr Agent State** | Reports aggregate Pi lifecycle state to Herdr and keeps the pane working while async subagents run. | [`README`](extensions/herdr-agent-state/README.md) |
-| **Herdr Workbench** | Provides visible Neovim, LazyGit, and foreground-job panes. | [`README`](extensions/workbench/README.md) |
-| **Progress** | Shows compact, passive main-agent activity below the editor. | [`README`](extensions/progress/README.md) |
-| **Title** | Generates and persists a concise session title. | Configuration below |
-| **Footer** | Shows responsive context, request usage, and session Git state with Nerd Font icons. | [`README`](extensions/footer/README.md) |
+| Extension | What it does | Docs |
+| --- | --- | --- |
+| **Colima Sandbox** | Runs Pi filesystem and shell tools in a disposable Colima container. | [README](extensions/colima-sandbox/README.md) |
+| **Copy Prompt** | Copies prompt editor text to the system clipboard with `Alt+C`. | [README](extensions/copy-prompt/README.md) |
+| **Footer** | Renders context usage, cache metrics, and session Git status. | [README](extensions/footer/README.md) |
+| **Herdr Agent State** | Syncs Pi lifecycle state to Herdr so panes stay active during async subagent work. | [README](extensions/herdr-agent-state/README.md) |
+| **Live Codex** | Realtime voice interface backed by OpenAI Codex. | [README](extensions/live-codex/README.md) |
+| **Loop** | Runs a prompt repeatedly across fresh Pi sessions. | [README](extensions/loop/README.md) |
+| **Progress** | Displays compact agent activity below the editor. | [README](extensions/progress/README.md) |
+| **Title** | Generates and persists concise session titles. | [README](extensions/title/README.md) |
+| **Until** | Watches background shell conditions and runs recurring follow-ups in one session. | [README](extensions/until/README.md) |
+| **Wait** | Delays or queues follow-up prompts until current work settles. | [README](extensions/wait/README.md) |
+| **Workbench** | Coordinates Neovim, LazyGit, and foreground jobs in Herdr. | [README](extensions/workbench/README.md) |
 
-### Live Codex
+## Theme
 
-Start Pi in its interactive TUI:
-
-```text
-/live
-/live <voice>
-```
-
-![prompt with live voice enabled](docs/live.png)
-
-Known realtime voices support completion; custom voice names are also accepted. `Ctrl+L` toggles voice mode and `Esc` ends it.
-
-While live, printable non-whitespace input opens the editor. Bare `Space` mutes only while the editor is empty. Press `Enter` with nonblank text to stage a verbatim note, limited to 4,000 characters, for the next spoken request. Dropped images and staged notes are sent with that request.
-
-Only one Pi session owns live voice at a time. Starting `/live` elsewhere offers an authenticated handoff. Existing Pi work continues, but the previous voice surface stops. Queued voice requests and pending voice-routed confirmations must be resolved in the old session first.
-
-Requires Node.js 22.19+, microphone access, and an OpenAI Codex login:
-
-```text
-/login openai-codex
-```
-
-### Loop
-
-Each iteration gets a fresh Pi session. Filesystem changes carry forward; conversational messages do not.
-
-```text
-/loop <count> <prompt>   Start
-/loop <count>            Retune future iterations
-/loop prompt <text>       Replace the future prompt
-/loop append <text>       Append to the future prompt
-/loop status             Inspect
-/loop                    Request graceful end
-/loop end                Request graceful end
-/loop resume             Retry a paused iteration in place
-/loop next               Skip a paused iteration and start the next one
-```
-
-Aborted or failed output pauses the run. State and session ownership are persisted in custom entries, with a compact active/paused widget.
-
-### Until
-
-Derived from Joel Hooks' MIT-licensed `pi-until` project and adapted for Pi 0.86. One-shot watches default to a 24-hour timeout; recurring watches require `timeoutSeconds` (up to 30 days).
-
-```text
-/until start <side-effect-free shell condition>
-/until list
-/until status <id>
-/until complete <recurring-id>
-/until cancel <id>
-/until stats
-```
-
-Use the `until` tool with `action: "start"` for shell predicates or `action: "repeat"` for recurring same-session follow-ups. Watches are background, non-overlapping, session-scoped, and survive `/reload` only. Set `PI_UNTIL_TELEMETRY=1` to opt into bounded local JSONL telemetry.
-
-### Wait
-
-Queue one message with a countdown above the prompt input:
-
-```text
-/wait 5m check the deployment
-/wait 10s
-/wait now
-/wait status
-/wait cancel
-```
-
-A duration alone resets the queued message's timeout; including a prompt replaces both. `/wait now` sends the queued message immediately. If Pi is working when the timeout expires, the message is delivered as a follow-up after the current run settles.
-
-### Herdr Workbench
-
-Registers a typed `workbench` tool for visible Neovim, LazyGit, and foreground-job panes managed by the `brettinternet.workbench` Herdr plugin.
-
-Jobs run asynchronously, remain cancellable, and emit session- and workspace-scoped background activity events. The tool only mutates trusted projects and limits follow-up operations to resources owned by the current Pi session.
-
-### Progress
-
-![session progress reported as history of work](docs/progress.png)
-
-Shows up to two truncated lines of passive activity below the editor. It observes active tools, recent check outcomes, and successful edit/write targets. When explicitly configured, bounded advisory inference adds a debounced current activity during longer runs and a settled current/completed/blocker summary; it does not register an LLM tool, change prompts, or provide semantic verification.
-
-`pi-subagents` FleetView remains the source for delegated work.
-
-### Title
-
-Generates one session title in the background after the first assistant message containing text is finalized. The title does not wait for later tool results or the full run. It appears when generation finishes, is persisted as the Pi session name, and is used verbatim as the terminal title.
-
-Existing and manually named sessions are unchanged.
-
-Configuration: `~/.pi/agent/pi-title.jsonc` or the directory set by `PI_CODING_AGENT_DIR`.
-
-```jsonc
-{
-  "enabled": true,
-  "model": null,
-  "maxTokens": 30,
-  "maxLength": 60
-}
-```
-
-Comments and trailing commas are supported. The legacy `pi-title.json` is read only when `.jsonc` does not exist; `.jsonc` takes precedence. `/title` configuration changes preserve comments.
-
-Model behavior:
-
-- Omitted or `null`: use the active session model.
-- `"auto"`: use an available lightweight model.
-- Explicit `provider/model[:effort]`: use that model.
-
-```text
-/title                                   Show title, status, and config path
-/title My custom title                   Set a custom title
-/title set status                        Set a subcommand-shaped custom title
-/title on                                Enable automatic titles
-/title off                               Disable automatic titles
-/title model openai/gpt-5-nano           Select a dedicated title model
-/title model auto                        Use the lightweight-model fallback
-/title model active                      Use the active session model
-/title regenerate                        Replace the title automatically
-```
-
-## Themes
-
-| Theme | What it does |
-|---|---|
-| **Terminal** | Uses the terminal's ANSI palette so Pi follows the terminal color scheme. |
-
-Select `terminal` in `/settings` after installation.
+Select `terminal` in `/settings` to use the terminal ANSI palette.
 
 ## Install
 
-Install all extensions and themes:
+Install everything from this repository:
 
 ```sh
 pi install git:github.com/brettinternet/pi-extensions
 ```
 
-Or install individual extensions from npm:
+Or install a published extension:
 
 ```sh
 pi install npm:@brettinternet/pi-copy-prompt
@@ -170,7 +45,11 @@ pi install npm:pi-until
 pi install npm:pi-title
 ```
 
-Installed extensions are loaded from their package metadata.
+Load a local extension directly:
+
+```sh
+pi -e ./extensions/footer/index.ts
+```
 
 ## Development
 
@@ -178,5 +57,4 @@ Installed extensions are loaded from their package metadata.
 bun install
 bun run check
 bun test
-pi -e .
 ```
