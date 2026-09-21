@@ -195,6 +195,8 @@ export default function waitExtension(pi: ExtensionAPI): void {
   let deliveryTimer: ReturnType<typeof setTimeout> | undefined;
   let countdownTimer: ReturnType<typeof setInterval> | undefined;
   let sessionContext: ExtensionContext | undefined;
+  let widgetVisible = false;
+  let requestWidgetRender: (() => void) | undefined;
 
   function notify(ctx: ExtensionContext, message: string, type: "info" | "warning" | "error" = "info"): void {
     if (ctx.hasUI) {
@@ -214,7 +216,10 @@ export default function waitExtension(pi: ExtensionAPI): void {
   }
 
   function clearWidget(ctx = sessionContext): void {
-    if (ctx?.hasUI) ctx.ui.setWidget(WAIT_WIDGET_KEY, undefined);
+    if (!ctx?.hasUI || !widgetVisible) return;
+    widgetVisible = false;
+    requestWidgetRender = undefined;
+    ctx.ui.setWidget(WAIT_WIDGET_KEY, undefined);
   }
 
   function renderWidget(ctx = sessionContext): void {
@@ -222,11 +227,19 @@ export default function waitExtension(pi: ExtensionAPI): void {
       clearWidget(ctx);
       return;
     }
-    const wait = pending;
-    ctx.ui.setWidget(WAIT_WIDGET_KEY, (_tui, _theme) => ({
-      render: (width) => [formatWaitWidget(wait, width)],
-      invalidate: () => {},
-    }));
+    if (widgetVisible) {
+      requestWidgetRender?.();
+      return;
+    }
+    ctx.ui.setWidget(WAIT_WIDGET_KEY, (tui, _theme) => {
+      requestWidgetRender = () => tui.requestRender();
+      return {
+        render: (width) => pending ? [formatWaitWidget(pending, width)] : [],
+        invalidate: () => {},
+        dispose: () => { requestWidgetRender = undefined; },
+      };
+    });
+    widgetVisible = true;
   }
 
   function persist(wait: PendingWait | undefined): void {

@@ -21,6 +21,7 @@ function createHarness(entries: WaitEntry[] = []) {
   let autocomplete: AutocompleteProvider | undefined;
   const notifications: string[] = [];
   const widgets: Array<{ key: string; value: unknown }> = [];
+  let widgetRenderRequests = 0;
   const messages: Array<{
     content: string;
     options?: {
@@ -34,7 +35,10 @@ function createHarness(entries: WaitEntry[] = []) {
     mode: "tui",
     hasUI: true,
     ui: {
-      setWidget: (key: string, value: unknown) => widgets.push({ key, value }),
+      setWidget: (key: string, value: unknown) => {
+        widgets.push({ key, value });
+        if (typeof value === "function") value({ requestRender: () => { widgetRenderRequests += 1; } }, {});
+      },
       notify: (message: string) => notifications.push(message),
       addAutocompleteProvider: (factory: (current: AutocompleteProvider) => AutocompleteProvider) => {
         autocomplete = factory({
@@ -73,6 +77,7 @@ function createHarness(entries: WaitEntry[] = []) {
     tools,
     notifications,
     widgets,
+    get widgetRenderRequests() { return widgetRenderRequests; },
     messages,
     submit: (args: string, streamingBehavior?: "steer" | "followUp") => handlers.get("input")?.({
       text: `/wait${args ? ` ${args}` : ""}`,
@@ -88,7 +93,7 @@ function latestWidgetLines(harness: ReturnType<typeof createHarness>, width = 80
   const value = [...harness.widgets].reverse().find(({ key }) => key === WAIT_WIDGET_KEY)?.value;
   if (Array.isArray(value)) return value as string[];
   if (typeof value !== "function") return undefined;
-  return (value({}, {}) as { render: (width: number) => string[] }).render(width);
+  return (value({ requestRender: () => {} }, {}) as { render: (width: number) => string[] }).render(width);
 }
 
 function sleep(milliseconds: number): Promise<void> {
@@ -175,6 +180,18 @@ describe("wait parser and formatting", () => {
 });
 
 describe("wait lifecycle", () => {
+  test("updates the countdown without re-registering and reordering its widget", async () => {
+    const harness = createHarness();
+
+    await harness.submit("2s keep widget position stable");
+    expect(harness.widgets.filter(({ value }) => value !== undefined)).toHaveLength(1);
+    await sleep(1_050);
+
+    expect(harness.widgets.filter(({ value }) => value !== undefined)).toHaveLength(1);
+    expect(harness.widgetRenderRequests).toBeGreaterThan(0);
+    await harness.submit("cancel");
+  });
+
   test("delivers when idle and clears the widget", async () => {
     const harness = createHarness();
 
