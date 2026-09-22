@@ -29,11 +29,29 @@ const MAX_ACTIVE_INFERENCES_PER_RUN = 4;
 export const INFERENCE_ENTRY = "pi-progress-inference-v1";
 export const RUNTIME_ENTRY = "pi-progress-runtime-v1";
 
+const SUBAGENT_ASYNC_COMPLETE_EVENT = "subagent:async-complete";
+const SUBAGENT_FOREGROUND_COMPLETE_EVENT = "subagent:foreground-complete";
+const SUBAGENT_DELEGATION_RESPONSE_EVENT = "prompt-template:subagent:response";
+
 type BranchEntry = {
   type?: string;
   customType?: string;
   data?: unknown;
   message?: { role?: string };
+};
+
+type SubagentCompletion = {
+  id?: unknown;
+  runId?: unknown;
+  mode?: unknown;
+  durationMs?: unknown;
+};
+
+type SubagentDelegationResponse = {
+  requestId?: unknown;
+  ownerRunId?: unknown;
+  nodeId?: unknown;
+  usage?: { durationMs?: unknown };
 };
 
 function textOf(content: unknown): string {
@@ -59,9 +77,12 @@ export default function progressExtension(pi: ExtensionAPI): void {
   let configuredModel: string | null = null;
   let activeInferenceCount = 0;
   let accumulatedRuntimeMs = 0;
+  let accumulatedAgentRuntimeMs = 0;
   let activeRuntimeStartedAt: number | undefined;
   let hasRecordedRuntime = false;
   let runtimeTimer: ReturnType<typeof setInterval> | undefined;
+  const recordedSubagentRuns = new Set<string>();
+  const delegatedWorkflowRuns = new Set<string>();
   let historyMode: ProgressHistoryMode = "hidden";
 
   function stopRuntimeTimer(): void {
@@ -114,6 +135,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
           theme,
           width,
           hasRecordedRuntime ? formatRuntime(currentRuntimeMs()) : undefined,
+          accumulatedAgentRuntimeMs > 0 ? formatRuntime(accumulatedAgentRuntimeMs) : undefined,
         ),
         invalidate: () => {},
       }),
@@ -162,10 +184,13 @@ export default function progressExtension(pi: ExtensionAPI): void {
     for (let index = branch.length - 1; index >= 0; index -= 1) {
       const entry = branch[index];
       if (entry.type !== "custom" || entry.customType !== RUNTIME_ENTRY) continue;
-      const activeMs = (entry.data as { activeMs?: unknown } | undefined)?.activeMs;
-      if (typeof activeMs === "number" && Number.isFinite(activeMs) && activeMs >= 0) {
-        accumulatedRuntimeMs = activeMs;
+      const data = entry.data as { activeMs?: unknown; agentMs?: unknown } | undefined;
+      if (typeof data?.activeMs === "number" && Number.isFinite(data.activeMs) && data.activeMs >= 0) {
+        accumulatedRuntimeMs = data.activeMs;
         hasRecordedRuntime = true;
+      }
+      if (typeof data?.agentMs === "number" && Number.isFinite(data.agentMs) && data.agentMs >= 0) {
+        accumulatedAgentRuntimeMs = data.agentMs;
       }
       return;
     }
@@ -298,8 +323,11 @@ export default function progressExtension(pi: ExtensionAPI): void {
     configuredModel = null;
     activeInferenceCount = 0;
     accumulatedRuntimeMs = 0;
+    accumulatedAgentRuntimeMs = 0;
     activeRuntimeStartedAt = undefined;
     hasRecordedRuntime = false;
+    recordedSubagentRuns.clear();
+    delegatedWorkflowRuns.clear();
     if (ctx) {
       restoreSemantic(ctx);
       restoreRuntime(ctx);
@@ -312,6 +340,66 @@ export default function progressExtension(pi: ExtensionAPI): void {
     resetSession(ctx);
     render(ctx);
   });
+
+  function addAgentRuntime(durationMs: unknown, identity: string): void {
+    if (
+      typeof durationMs !== "number" ||
+      !Number.isFinite(durationMs) ||
+      durationMs <= 0 ||
+      recordedSubagentRuns.has(identity)
+    ) return;
+    recordedSubagentRuns.add(identity);
+    accumulatedAgentRuntimeMs += durationMs;
+    const ctx = currentContext;
+    if (!ctx) return;
+    pi.appendEntry(RUNTIME_ENTRY, {
+      activeMs: currentRuntimeMs(),
+      agentMs: accumulatedAgentRuntimeMs,
+    });
+    scheduleRender(ctx);
+  }
+
+  const subagentEventUnsubscribers = [
+    pi.events.on(SUBAGENT_DELEGATION_RESPONSE_EVENT, (value) => {
+      if (!value || typeof value !== "object" || Array.isArray(value)) return;
+      const response = value as SubagentDelegationResponse;
+      if (
+        typeof response.requestId !== "string" ||
+        typeof response.ownerRunId !== "string" ||
+        typeof response.nodeId !== "string"
+      ) return;
+      delegatedWorkflowRuns.add(response.ownerRunId);
+      addAgentRuntime(
+        response.usage?.durationMs,
+        `delegation:${response.ownerRunId}:${response.nodeId}:${response.requestId}`,
+      );
+    }),
+    pi.events.on(
+      SUBAGENT_FOREGROUND_COMPLETE_EVENT,
+      (value) => recordCompletion(value, "foreground"),
+    ),
+    pi.events.on(
+      SUBAGENT_ASYNC_COMPLETE_EVENT,
+      (value) => recordCompletion(value, "async"),
+    ),
+  ];
+
+  function recordCompletion(value: unknown, source: "async" | "foreground"): void {
+    if (!value || typeof value !== "object" || Array.isArray(value)) return;
+    const completion = value as SubagentCompletion;
+    const runId = typeof completion.runId === "string"
+      ? completion.runId
+      : typeof completion.id === "string"
+        ? completion.id
+        : undefined;
+    if (!runId) return;
+    if (
+      source === "foreground" &&
+      completion.mode === "workflow" &&
+      delegatedWorkflowRuns.has(runId)
+    ) return;
+    addAgentRuntime(completion.durationMs, `${source}:${runId}`);
+  }
 
   function invalidatePendingInference(): void {
     cancelInference();
@@ -414,16 +502,23 @@ export default function progressExtension(pi: ExtensionAPI): void {
     state.settleRun();
     state.setSemantic(undefined);
     digest.settle();
-    if (wasActive) pi.appendEntry(RUNTIME_ENTRY, { activeMs: accumulatedRuntimeMs });
+    if (wasActive) pi.appendEntry(RUNTIME_ENTRY, {
+      activeMs: accumulatedRuntimeMs,
+      agentMs: accumulatedAgentRuntimeMs,
+    });
     scheduleRender(ctx);
     inferSettledRun(ctx);
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    for (const unsubscribe of subagentEventUnsubscribers) unsubscribe();
     cancelInference();
     const wasActive = state.snapshot().agentActive;
     pauseRuntimeTimer();
-    if (wasActive) pi.appendEntry(RUNTIME_ENTRY, { activeMs: accumulatedRuntimeMs });
+    if (wasActive) pi.appendEntry(RUNTIME_ENTRY, {
+      activeMs: accumulatedRuntimeMs,
+      agentMs: accumulatedAgentRuntimeMs,
+    });
     if (ctx.hasUI) {
       ctx.ui.setWidget(WIDGET_KEY, undefined);
       ctx.ui.setWidget(PROGRESS_HISTORY_WIDGET_KEY, undefined);
@@ -434,7 +529,10 @@ export default function progressExtension(pi: ExtensionAPI): void {
     digest.reset();
     activeInferenceCount = 0;
     accumulatedRuntimeMs = 0;
+    accumulatedAgentRuntimeMs = 0;
     hasRecordedRuntime = false;
+    recordedSubagentRuns.clear();
+    delegatedWorkflowRuns.clear();
   });
 
   function setHistory(ctx: ExtensionContext, mode: ProgressHistoryMode): void {

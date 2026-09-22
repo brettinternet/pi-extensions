@@ -99,6 +99,7 @@ export function renderProgress(
   theme: Theme,
   width: number,
   runtime?: string,
+  agentRuntime?: string,
 ): string[] {
   const hasObservedFacts =
     snapshot.runStarted ||
@@ -109,7 +110,9 @@ export function renderProgress(
   if ((!hasObservedFacts && !snapshot.semantic && !runtime) || width < 8) return [];
 
   const separator = theme.fg("dim", " · ");
-  const heading = theme.fg("dim", runtime ? `progress ${runtime}` : "progress");
+  const headingParts = [runtime ? `progress ${runtime}` : "progress"];
+  if (agentRuntime) headingParts.push(`agents ${agentRuntime}`);
+  const heading = theme.fg("dim", headingParts.join(" · "));
   if (!hasObservedFacts && !snapshot.semantic) {
     return [truncateToWidth(heading, width)];
   }

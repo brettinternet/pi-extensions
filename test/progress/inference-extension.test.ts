@@ -32,6 +32,7 @@ function harness(completions: Array<Promise<any>> = []) {
     registerShortcut: () => {},
     registerTool: () => { registerToolCalls += 1; },
     appendEntry: (type: string, data: unknown) => entries.push({ type, data }),
+    events: { on: () => () => {}, emit: () => {} },
   } as unknown as ExtensionAPI;
   const ctx = {
     cwd: "/repo",

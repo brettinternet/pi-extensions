@@ -24,6 +24,7 @@ const theme = {
 
 function setup() {
   const handlers = new Map<string, Handler>();
+  const eventHandlers = new Map<string, Array<(value: unknown) => void>>();
   let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
   const shortcuts = new Map<string, Parameters<ExtensionAPI["registerShortcut"]>[1]>();
   const notifications: string[] = [];
@@ -42,6 +43,20 @@ function setup() {
       shortcuts.set(key, options);
     },
     appendEntry: (type: string, data: unknown) => entries.push({ type, data }),
+    events: {
+      on: (name: string, handler: (value: unknown) => void) => {
+        const registered = eventHandlers.get(name) ?? [];
+        registered.push(handler);
+        eventHandlers.set(name, registered);
+        return () => {
+          const current = eventHandlers.get(name) ?? [];
+          eventHandlers.set(name, current.filter((candidate) => candidate !== handler));
+        };
+      },
+      emit: (name: string, value: unknown) => {
+        for (const handler of eventHandlers.get(name) ?? []) handler(value);
+      },
+    },
   } as unknown as ExtensionAPI;
   const ctx = {
     cwd: "/repo",
@@ -60,6 +75,9 @@ function setup() {
   progressExtension(pi);
   return {
     handlers,
+    events: (name: string, value: unknown) => {
+      for (const handler of eventHandlers.get(name) ?? []) handler(value);
+    },
     widgets,
     command: command!,
     shortcut: shortcuts.get("alt+g")!,
@@ -174,7 +192,10 @@ describe("progress extension", () => {
       await flushRender();
 
       expect(latestLines(widgets)).toEqual(["progress 1m · ✓ settled"]);
-      expect(entries).toContainEqual({ type: RUNTIME_ENTRY, data: { activeMs: 60_000 } });
+      expect(entries).toContainEqual({
+        type: RUNTIME_ENTRY,
+        data: { activeMs: 60_000, agentMs: 0 },
+      });
 
       now.mockReturnValue(420_000);
       expect(latestLines(widgets)).toEqual(["progress 1m · ✓ settled"]);
@@ -189,17 +210,72 @@ describe("progress extension", () => {
     }
   });
 
-  test("restores accumulated active work from session metadata", () => {
+  test("restores accumulated active and subagent work from session metadata", () => {
     const { handlers, widgets, ctx } = setup();
     ctx.sessionManager.getBranch = () => [{
       type: "custom",
       customType: RUNTIME_ENTRY,
-      data: { activeMs: 90 * 60_000 },
+      data: { activeMs: 90 * 60_000, agentMs: 125 * 60_000 },
     }] as any;
 
     handlers.get("session_start")!({}, ctx);
-    expect(latestLines(widgets)).toEqual(["progress 1h"]);
+    expect(latestLines(widgets)).toEqual(["progress 1h · agents 2h"]);
     handlers.get("session_shutdown")!({}, ctx);
+  });
+
+  test("shows cumulative subagent time separately and hides it when absent", async () => {
+    const { handlers, events, widgets, entries, ctx } = setup();
+    handlers.get("session_start")!({}, ctx);
+    handlers.get("before_agent_start")!({}, ctx);
+    await flushRender();
+    expect(latestLines(widgets)).toEqual(["progress <1m · ● thinking"]);
+
+    events("prompt-template:subagent:response", {
+      requestId: "attempt-1",
+      ownerRunId: "workflow-1",
+      nodeId: "review",
+      usage: { durationMs: 40 * 60_000 },
+    });
+    events("prompt-template:subagent:response", {
+      requestId: "attempt-2",
+      ownerRunId: "workflow-1",
+      nodeId: "tests",
+      usage: { durationMs: 35 * 60_000 },
+    });
+    events("subagent:foreground-complete", {
+      id: "workflow-1",
+      mode: "workflow",
+      durationMs: 45 * 60_000,
+    });
+    await flushRender();
+
+    expect(latestLines(widgets)).toEqual([
+      "progress <1m · agents 1h · ● thinking",
+    ]);
+    expect(entries.at(-1)).toEqual({
+      type: RUNTIME_ENTRY,
+      data: { activeMs: expect.any(Number), agentMs: 75 * 60_000 },
+    });
+  });
+
+  test("records direct and async subagent completion time", async () => {
+    const { handlers, events, widgets, ctx } = setup();
+    handlers.get("session_start")!({}, ctx);
+    handlers.get("before_agent_start")!({}, ctx);
+
+    events("subagent:foreground-complete", {
+      id: "direct-1",
+      mode: "single",
+      durationMs: 20 * 60_000,
+    });
+    events("subagent:async-complete", {
+      id: "async-1",
+      mode: "single",
+      durationMs: 25 * 60_000,
+    });
+    await flushRender();
+
+    expect(latestLines(widgets)).toEqual(["progress <1m · agents 45m · ● thinking"]);
   });
 
   test("keeps a read-only result until the next request starts", async () => {

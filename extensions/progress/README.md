@@ -1,7 +1,7 @@
 # pi-progress
 
 ```text
-progress 25m · current: Updating the implementation inferred · ● edit src/index.ts · ✓ bun test
+progress 25m · agents 42m · current: Updating the implementation inferred · ● edit src/index.ts · ✓ bun test
  touched src/index.ts · test/index.test.ts
 ```
 
@@ -9,7 +9,7 @@ progress 25m · current: Updating the implementation inferred · ● edit src/in
 pi install npm:@brettinternet/pi-progress
 ```
 
-It shows observed tools, checks, successful edit-write paths, and work time. These signals describe activity, not semantic proof that the result is correct.
+It shows observed tools, checks, successful edit-write paths, and work time. When subagents run, their cumulative runtime appears separately as `agents`; parallel child runtimes are added together. The agents value is hidden until a subagent reports runtime. These signals describe activity, not semantic proof that the result is correct.
 
 Optional configuration:
 
