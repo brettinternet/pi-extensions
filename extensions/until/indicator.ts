@@ -18,6 +18,7 @@ export type WatchPhase =
 
 export interface WatchDisplay {
   readonly attempts: number;
+  readonly condition?: string;
   readonly deliveries: number;
   readonly id: string;
   readonly intervalMs: number;
@@ -154,6 +155,15 @@ export function renderWatchIndicator(
     return [
       topBorder(title, width, theme),
       row(body, width, theme),
+      ...(watch.condition === undefined
+        ? []
+        : [
+            row(
+              `${theme.fg("muted", "Check:")} ${theme.fg("text", watch.condition)}`,
+              width,
+              theme
+            ),
+          ]),
       bottomBorder(footer, width, theme),
     ];
   }
@@ -164,9 +174,13 @@ export function renderWatchIndicator(
   const visible = watches.slice(0, MAX_WIDGET_ROWS);
   const lines = [topBorder(title, width, theme)];
   for (const watch of visible) {
+    const subject =
+      watch.condition === undefined
+        ? watch.label
+        : `${watch.label} · ${watch.condition}`;
     const body = `${statusIcon(watch, now, theme)} ${theme.fg(
       "text",
-      watch.label
+      subject
     )}${theme.fg("dim", ` · ${statusText(watch, now)} · #${watch.attempts}`)}`;
     lines.push(row(body, width, theme));
   }
@@ -225,7 +239,16 @@ export function renderWatchPanel(
           ),
           width,
           theme
-        )
+        ),
+        ...(watch.condition === undefined
+          ? []
+          : [
+              row(
+                `${theme.fg("muted", "Check:")} ${theme.fg("text", watch.condition)}`,
+                width,
+                theme
+              ),
+            ])
       );
     }
   }

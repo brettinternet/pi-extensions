@@ -17,6 +17,7 @@ const theme = {
 function watch(overrides: Partial<WatchDisplay> = {}): WatchDisplay {
   return {
     attempts: 5,
+    condition: "test -f .deploy-finished",
     deliveries: 0,
     id: "8f2c1a7d",
     intervalMs: 30_000,
@@ -36,8 +37,9 @@ describe("pi-until watch indicator", () => {
   it("shows one session watch as a framed live card", () => {
     const lines = renderWatchIndicator([watch()], 100_000, 64, theme);
 
-    expect(lines).toHaveLength(3);
+    expect(lines).toHaveLength(4);
     expect(lines.join("\n")).toContain("UNTIL · deploy verification");
+    expect(lines.join("\n")).toContain("Check: test -f .deploy-finished");
     expect(lines.join("\n")).toContain("next 30s");
     expect(lines.join("\n")).toContain("2m14s elapsed");
     expect(lines.join("\n")).toContain("5 checks");
@@ -79,6 +81,7 @@ describe("pi-until watch indicator", () => {
 
     expect(lines.join("\n")).toContain("4 session watches");
     expect(lines.join("\n")).toContain("+1 more");
+    expect(lines.join("\n")).toContain("first · test -f .deploy-finished");
     expect(lines.join("\n")).toContain("/until list for details");
     expect(lines.every((line) => visibleWidth(line) === 52)).toBe(true);
   });
@@ -104,6 +107,7 @@ describe("pi-until watch indicator", () => {
 
     expect(lines.join("\n")).toContain("succeeded");
     expect(lines.join("\n")).toContain("failed watch");
+    expect(lines.join("\n")).toContain("Check: test -f .deploy-finished");
     expect(lines.join("\n")).toContain("1-2 of 2");
     expect(lines.every((line) => visibleWidth(line) === 60)).toBe(true);
   });

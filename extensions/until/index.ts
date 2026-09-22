@@ -264,6 +264,7 @@ function toWatchDisplay(record: WatchRecord): WatchDisplay {
   const { definition, facts } = record.actor.getSnapshot().context;
   return {
     attempts: facts.attempts,
+    condition: gateOf(definition)?.command,
     deliveries: facts.deliveries,
     id: facts.id,
     intervalMs: definition.intervalMs,
