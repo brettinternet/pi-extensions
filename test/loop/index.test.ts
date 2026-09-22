@@ -48,6 +48,7 @@ function stateOf(value: Manager): LoopState | undefined {
 function createHarness(options: {
   cancelReplacement?: boolean;
   beforeWithSession?: (manager: Manager, replacementNumber: number) => void;
+  modelAvailable?: boolean;
 } = {}) {
   const handlers = new Map<string, (...args: any[]) => any>();
   let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
@@ -66,6 +67,9 @@ function createHarness(options: {
   let abortCount = 0;
   let widgetRenderRequests = 0;
   let activeContext: ExtensionCommandContext;
+  let selectedModel: { provider: string; id: string } | undefined;
+  const models = [{ provider: "test", id: "default" }, { provider: "test", id: "custom" }];
+  const selectedModels: string[] = [];
 
   const ui = {
     setWidget: (key: string, value: unknown) => widgets.push({ key, value }),
@@ -79,8 +83,8 @@ function createHarness(options: {
     hasUI: true,
     ui,
     sessionManager: value,
-    modelRegistry: {},
-    model: undefined,
+    modelRegistry: { find: (provider: string, id: string) => models.find((model) => model.provider === provider && model.id === id) },
+    get model() { return selectedModel; },
     scopedModels: [],
     isIdle: () => idle,
     isProjectTrusted: () => true,
@@ -125,6 +129,12 @@ function createHarness(options: {
       tool = value;
     },
     appendEntry: (customType: string, data: unknown) => current.entries.push({ type: "custom", customType, data }),
+    setModel: async (model: { provider: string; id: string }) => {
+      if (options.modelAvailable === false && model.id === "custom") return false;
+      selectedModel = model;
+      selectedModels.push(model.id);
+      return true;
+    },
     sendUserMessage: (content: string, opts?: { expandPromptTemplates?: boolean }) => {
       if (opts?.expandPromptTemplates && content.startsWith("/loop ")) {
         const [, ...args] = content.slice(1).split(" ");
@@ -144,6 +154,7 @@ function createHarness(options: {
     parents.push(opts?.parentSession);
     if (options.cancelReplacement) return { cancelled: true };
     const next = manager(`session-${++replacementNumber}`, `/tmp/session-${replacementNumber}.jsonl`);
+    selectedModel = models[0];
     const nextContext = contextFor(next);
     (nextContext as any).newSession = originalNewSession;
     current = next;
@@ -174,6 +185,8 @@ function createHarness(options: {
     promptOptions,
     parents,
     herdrEvents,
+    selectedModels,
+    selectModel: (id: string) => { selectedModel = models.find((model) => model.id === id); },
     get abortCount() {
       return abortCount;
     },
@@ -495,6 +508,33 @@ describe("loop lifecycle", () => {
     expect(harness.current.entries.every((entry) => entry.customType === LOOP_STATE_ENTRY)).toBeTrue();
     expect(stateOf(harness.current)).toMatchObject({ currentIteration: 1, remainingBudget: 1, status: "active" });
     expect(latestWidgetLines(harness)).toEqual(["loop active 2/2 · inspect the repository"]);
+  });
+
+  test("preserves the selected model across fresh sessions and follows mid-loop changes", async () => {
+    const harness = createHarness();
+    harness.selectModel("custom");
+    await harness.command.handler("3 inspect the repository", harness.context);
+    expect(harness.state()?.model).toEqual({ provider: "test", id: "custom" });
+    expect(harness.selectedModels).toEqual(["custom"]);
+
+    await harness.settle();
+    expect(harness.state()?.model).toEqual({ provider: "test", id: "custom" });
+    expect(harness.selectedModels).toEqual(["custom", "custom"]);
+
+    harness.selectModel("default");
+    await harness.settle();
+    expect(harness.state()?.model).toEqual({ provider: "test", id: "default" });
+    expect(harness.selectedModels).toEqual(["custom", "custom", "default"]);
+    expect(harness.prompts).toEqual(Array(3).fill("inspect the repository"));
+  });
+
+  test("pauses rather than running on the default when the selected model is unavailable", async () => {
+    const harness = createHarness({ modelAvailable: false });
+    harness.selectModel("custom");
+    await harness.command.handler("2 inspect the repository", harness.context);
+    expect(harness.state()?.status).toBe("paused");
+    expect(harness.prompts).toEqual([]);
+    expect(harness.notifications.some((message) => message.includes("loop model unavailable: test/custom"))).toBeTrue();
   });
 
   test("runs timed loops until their persisted deadline", async () => {

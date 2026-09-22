@@ -1,6 +1,6 @@
 # pi-loop
 
-Run a prompt repeatedly, with a fresh session for every iteration.
+Run a prompt repeatedly, with a fresh session for every iteration. Each new session uses the model selected in the preceding session (including a custom non-default model); changing models mid-loop takes effect on the next iteration. If that model is unavailable, the loop pauses rather than falling back to the default.
 
 ```bash
 pi install npm:@brettinternet/pi-loop

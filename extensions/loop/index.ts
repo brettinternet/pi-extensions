@@ -48,6 +48,7 @@ export interface LoopState {
   pausedAt?: number;
   ownerSessionId?: string;
   ownerSessionFile?: string;
+  model?: { provider: string; id: string };
 }
 
 export type ParsedLoopCommand =
@@ -65,7 +66,8 @@ export type ParsedLoopCommand =
   | { kind: "next" }
   | { kind: "end" }
   | { kind: "continue"; runId: string; iteration: number }
-  | { kind: "pause"; runId: string; iteration: number };
+  | { kind: "pause"; runId: string; iteration: number }
+  | { kind: "restoreModel"; runId: string; iteration: number };
 
 const ACTIVE_STATUSES = new Set<LoopStatus>(["active", "pausing", "stopping"]);
 const VISIBLE_STATUSES = new Set<LoopStatus>(["active", "pausing", "stopping", "paused"]);
@@ -341,7 +343,7 @@ export function parseLoopCommand(args: string): ParsedLoopCommand {
   // These commands are only emitted by the extension itself. Keeping them in
   // the same dispatcher gives boundary transitions command-only session APIs
   // while preventing user input from accidentally looking like one.
-  if (first === "__continue" || first === "__pause") {
+  if (first === "__continue" || first === "__pause" || first === "__restore_model") {
     const fields = rest.split(/\s+/).filter(Boolean);
     if (fields.length !== 2 || !/^[A-Za-z0-9_-]+$/.test(fields[0])) {
       throw new Error("invalid internal loop command");
@@ -352,7 +354,9 @@ export function parseLoopCommand(args: string): ParsedLoopCommand {
     }
     return first === "__continue"
       ? { kind: "continue", runId: fields[0], iteration }
-      : { kind: "pause", runId: fields[0], iteration };
+      : first === "__pause"
+        ? { kind: "pause", runId: fields[0], iteration }
+        : { kind: "restoreModel", runId: fields[0], iteration };
   }
 
   if (/^[+\-]\d/.test(first)) {
@@ -440,6 +444,12 @@ export function parseLoopState(value: unknown): LoopState | undefined {
   if (value.pausedAt !== undefined && !isNonNegativeInteger(value.pausedAt)) return undefined;
   if (value.ownerSessionId !== undefined && typeof value.ownerSessionId !== "string") return undefined;
   if (value.ownerSessionFile !== undefined && typeof value.ownerSessionFile !== "string") return undefined;
+  const model = value.model;
+  if (
+    model !== undefined &&
+    (!isRecord(model) || typeof model.provider !== "string" || !model.provider ||
+      typeof model.id !== "string" || !model.id)
+  ) return undefined;
 
   return {
     version: 1,
@@ -459,6 +469,9 @@ export function parseLoopState(value: unknown): LoopState | undefined {
     ...(value.pausedAt !== undefined ? { pausedAt: value.pausedAt } : {}),
     ...(value.ownerSessionId ? { ownerSessionId: value.ownerSessionId } : {}),
     ...(value.ownerSessionFile ? { ownerSessionFile: value.ownerSessionFile } : {}),
+    ...(isRecord(model) && typeof model.provider === "string" && typeof model.id === "string"
+      ? { model: { provider: model.provider, id: model.id } }
+      : {}),
   };
 }
 
@@ -933,9 +946,17 @@ export default function loopExtension(pi: ExtensionAPI): void {
     replacement: ReplacementContext,
     state: LoopState,
   ): Promise<void> {
-    // The new extension instance restores this entry in before_agent_start.
-    // This callback still owns the command context, so it is the safe place to
-    // start the turn after the replacement is complete.
+    // The replacement owns the new extension runtime. Restore its model before
+    // starting a turn, rather than using the invalidated previous runtime.
+    if (state.model) {
+      await replacement.sendUserMessage(
+        `/loop __restore_model ${state.runId} ${state.currentIteration}`,
+        { expandPromptTemplates: true },
+      );
+      if (replacement.model?.provider !== state.model.provider || replacement.model.id !== state.model.id) {
+        throw new Error(`loop model unavailable: ${state.model.provider}/${state.model.id}`);
+      }
+    }
     if (replacement.hasUI) showWidget(replacement, state);
     if (state.endsAt !== undefined && Date.now() >= state.endsAt) {
       await replacement.sendUserMessage(
@@ -1109,6 +1130,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     } = state;
     const next: LoopState = {
       ...withoutPause,
+      ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : {}),
       currentIteration: state.currentIteration + 1,
       remainingBudget: state.endsAt === undefined ? nextBudget - 1 : 0,
       pendingRetune: null,
@@ -1157,6 +1179,16 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
     if (parsed.kind === "continue") {
       await advanceAtBoundary(ctx, parsed.runId, parsed.iteration);
+      return;
+    }
+
+    if (parsed.kind === "restoreModel") {
+      const state = currentState(ctx);
+      if (!state || state.runId !== parsed.runId || state.currentIteration !== parsed.iteration || !state.model) return;
+      const model = ctx.modelRegistry.find(state.model.provider, state.model.id);
+      if (!model || !(await pi.setModel(model))) {
+        throw new Error(`loop model unavailable: ${state.model.provider}/${state.model.id}`);
+      }
       return;
     }
 
@@ -1443,6 +1475,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
       status: "active",
       retryCount: 0,
       phase: "running",
+      ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : {}),
       ...(timed ? { endsAt: Date.now() + parsed.duration } : {}),
       ...(contextIdentity(ctx).id ? { ownerSessionId: contextIdentity(ctx).id } : {}),
       ...(contextIdentity(ctx).file ? { ownerSessionFile: contextIdentity(ctx).file } : {}),
