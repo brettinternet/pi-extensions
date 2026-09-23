@@ -66,8 +66,10 @@ export class HistoryPicker {
           this.tui.requestRender();
         });
       }
-    } else if (matchesKey(data, "up") || matchesKey(data, "down") || matchesKey(data, "pageUp") || matchesKey(data, "pageDown")) {
-      const delta = matchesKey(data, "up") ? -1 : matchesKey(data, "down") ? 1 : matchesKey(data, "pageUp") ? -VISIBLE : VISIBLE;
+    } else if ((["up", "down", "ctrl+p", "ctrl+n", "ctrl+k", "ctrl+j", "pageUp", "pageDown"] as const).some((key) => matchesKey(data, key))) {
+      const delta = matchesKey(data, "up") || matchesKey(data, "ctrl+p") || matchesKey(data, "ctrl+k")
+        ? -1 : matchesKey(data, "down") || matchesKey(data, "ctrl+n") || matchesKey(data, "ctrl+j")
+          ? 1 : matchesKey(data, "pageUp") ? -VISIBLE : VISIBLE;
       this.selected = Math.max(0, Math.min(this.results().length - 1, this.selected + delta));
       this.offset = Math.max(0, Math.min(this.offset, this.selected), this.selected - VISIBLE + 1);
     } else if (matchesKey(data, "enter")) {
@@ -112,7 +114,7 @@ export class HistoryPicker {
       lines.push(row(prefix + truncateToWidth(summary, available, "…") + this.theme.fg("dim", `  ${date}`)));
     }
     lines.push(row(""));
-    lines.push(row(this.theme.fg("dim", ` ↑↓ navigate · enter insert · tab ${this.scope === "project" ? "global" : "project"} · esc cancel · ${results.length} matches`)));
+    lines.push(row(this.theme.fg("dim", ` ↑↓/C-p,n/C-k,j navigate · enter insert · tab ${this.scope === "project" ? "global" : "project"} · esc cancel · ${results.length} matches`)));
     lines.push(border("╰" + "─".repeat(inner) + "╯"));
     return lines;
   }

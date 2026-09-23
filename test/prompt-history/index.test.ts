@@ -59,6 +59,23 @@ test("picker searches, toggles scope, restores complete selection and cancels", 
   expect(results).toEqual(["Other prompt", undefined]);
 });
 
+test("Ctrl+P/K and Ctrl+N/J move through history like arrows", () => {
+  const prompts: Prompt[] = [
+    { cwd: "/project", text: "Newest", timestamp: Date.now() },
+    { cwd: "/project", text: "Older", timestamp: Date.now() - 1 },
+    { cwd: "/project", text: "Oldest", timestamp: Date.now() - 2 },
+  ];
+  const selected: string[] = [];
+  const theme = { fg: (_color: string, value: string) => value };
+  for (const [key, expected] of [["\x0e", "Older"], ["\x0a", "Oldest"], ["\x10", "Newest"], ["\x0b", "Newest"]]) {
+    const picker = new HistoryPicker(prompts, "/project", { requestRender: () => {} }, theme as any, (value) => selected.push(value ?? ""));
+    if (key === "\x0a" || key === "\x0b") picker.handleInput("\x0e");
+    picker.handleInput(key);
+    picker.handleInput("\r");
+    expect(selected.at(-1)).toBe(expected);
+  }
+});
+
 test("loads global history on first Tab without blocking project search", async () => {
   const prompts: Prompt[] = [{ cwd: "/project", text: "Local", timestamp: Date.now() }];
   let finish!: (prompts: Prompt[]) => void;
