@@ -5,30 +5,37 @@ import type { Prompt } from "./history.ts";
 
 export interface CachedSession {
   mtimeMs: number;
+  ctimeMs: number;
+  ino: number;
+  dev: number;
   size: number;
   prompts: Prompt[];
 }
 
 type Index = { version: 1; root: string; files: Record<string, CachedSession> };
 
-export async function readIndex(path: string, root: string): Promise<Record<string, CachedSession>> {
+export async function readIndex(path: string, root: string): Promise<{ files: Record<string, CachedSession>; valid: boolean }> {
   try {
     const value: unknown = JSON.parse(await readFile(path, "utf8"));
-    if (!value || typeof value !== "object") return {};
+    if (!value || typeof value !== "object") return { files: {}, valid: false };
     const index = value as Partial<Index>;
-    if (index.version !== 1 || index.root !== root || !index.files || typeof index.files !== "object" || Array.isArray(index.files)) return {};
+    if (index.version !== 1 || index.root !== root || !index.files || typeof index.files !== "object" || Array.isArray(index.files)) return { files: {}, valid: false };
     const files: Record<string, CachedSession> = {};
+    let valid = true;
     for (const [file, record] of Object.entries(index.files)) {
-      if (record && Number.isFinite(record.mtimeMs) && Number.isFinite(record.size) &&
+      if (record && Number.isFinite(record.mtimeMs) && Number.isFinite(record.ctimeMs) &&
+        Number.isFinite(record.ino) && Number.isFinite(record.dev) && Number.isFinite(record.size) &&
         Array.isArray(record.prompts) && record.prompts.every((prompt) =>
           prompt && typeof prompt.text === "string" && typeof prompt.cwd === "string" && Number.isFinite(prompt.timestamp))) {
         files[file] = record;
+      } else {
+        valid = false;
       }
     }
-    return files;
+    return { files, valid };
   } catch {
     // A missing or damaged index is rebuilt from the session files.
-    return {};
+    return { files: {}, valid: false };
   }
 }
 

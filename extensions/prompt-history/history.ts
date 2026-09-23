@@ -1,5 +1,5 @@
 import { readdir, readFile, stat } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { join } from "node:path";
 import { readIndex, writeIndex, type CachedSession } from "./index-cache.ts";
 
 export interface Prompt {
@@ -9,9 +9,23 @@ export interface Prompt {
 }
 
 const cache = new Map<string, CachedSession>();
+const pending = new Map<string, Promise<void>>();
 
 /** Collect all user turns (including abandoned branches) from persisted sessions. */
 export async function loadPrompts(sessionRoot: string, sharedDirectory: boolean, indexPath?: string): Promise<Prompt[]> {
+  if (!indexPath) return scanPrompts(sessionRoot, sharedDirectory);
+  const previous = pending.get(indexPath) ?? Promise.resolve();
+  const run = previous.then(() => scanPrompts(sessionRoot, sharedDirectory, indexPath));
+  const settled = run.then(() => {}, () => {});
+  pending.set(indexPath, settled);
+  try {
+    return await run;
+  } finally {
+    if (pending.get(indexPath) === settled) pending.delete(indexPath);
+  }
+}
+
+async function scanPrompts(sessionRoot: string, sharedDirectory: boolean, indexPath?: string): Promise<Prompt[]> {
   let directories: string[];
   try {
     directories = sharedDirectory
@@ -19,8 +33,9 @@ export async function loadPrompts(sessionRoot: string, sharedDirectory: boolean,
       : (await readdir(sessionRoot, { withFileTypes: true }))
           .filter((entry) => entry.isDirectory())
           .map((entry) => join(sessionRoot, entry.name));
-  } catch {
-    return [];
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== "ENOENT") return [];
+    directories = [];
   }
 
   const files: string[] = [];
@@ -34,9 +49,10 @@ export async function loadPrompts(sessionRoot: string, sharedDirectory: boolean,
     }
   }
 
-  const indexed = indexPath ? await readIndex(indexPath, sessionRoot) : {};
+  const index = indexPath ? await readIndex(indexPath, sessionRoot) : { files: {}, valid: true };
+  const indexed = index.files;
   const next: Record<string, CachedSession> = {};
-  let changed = false;
+  let changed = !index.valid;
   const prompts: Prompt[] = [];
   // Bound concurrent reads so a large history doesn't exhaust file descriptors.
   for (let i = 0; i < files.length; i += 16) {
@@ -44,12 +60,13 @@ export async function loadPrompts(sessionRoot: string, sharedDirectory: boolean,
       try {
         const info = await stat(file);
         const previous = indexPath ? indexed[file] : cache.get(file);
-        if (previous?.mtimeMs === info.mtimeMs && previous.size === info.size) {
+        if (previous?.mtimeMs === info.mtimeMs && previous.ctimeMs === info.ctimeMs &&
+          previous.ino === info.ino && previous.dev === info.dev && previous.size === info.size) {
           next[file] = previous;
           return previous.prompts;
         }
         const parsed = parseSession(await readFile(file, "utf8"));
-        next[file] = { mtimeMs: info.mtimeMs, size: info.size, prompts: parsed };
+        next[file] = { mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, ino: info.ino, dev: info.dev, size: info.size, prompts: parsed };
         if (!indexPath) cache.set(file, next[file]);
         changed = true;
         return parsed;
@@ -62,6 +79,17 @@ export async function loadPrompts(sessionRoot: string, sharedDirectory: boolean,
     for (const batch of batches) prompts.push(...batch);
   }
   if (indexPath && (changed || Object.keys(indexed).length !== Object.keys(next).length)) {
+    // A source may have changed or disappeared during the scan. Never retain
+    // its old text in the disk index; the next open will read the new version.
+    await Promise.all(Object.entries(next).map(async ([file, record]) => {
+      try {
+        const info = await stat(file);
+        if (info.mtimeMs !== record.mtimeMs || info.ctimeMs !== record.ctimeMs ||
+          info.ino !== record.ino || info.dev !== record.dev || info.size !== record.size) delete next[file];
+      } catch {
+        delete next[file];
+      }
+    }));
     await writeIndex(indexPath, sessionRoot, next);
   }
   return prompts.sort((a, b) => b.timestamp - a.timestamp);
@@ -96,12 +124,4 @@ export function parseSession(contents: string): Prompt[] {
     }
   }
   return prompts;
-}
-
-export function matchingPrompts(prompts: readonly Prompt[], cwd: string, scope: "project" | "global", query: string): Prompt[] {
-  const words = query.toLocaleLowerCase().trim().split(/\s+/).filter(Boolean);
-  return prompts.filter((prompt) =>
-    (scope === "global" || (prompt.cwd && resolve(prompt.cwd) === resolve(cwd))) &&
-    words.every((word) => prompt.text.toLocaleLowerCase().includes(word))
-  );
 }
