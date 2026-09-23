@@ -50,6 +50,7 @@
       "./extensions/loop/index.ts",
       "./extensions/wait/index.ts",
       "./extensions/progress/index.ts",
+      "./extensions/prompt-history/index.ts",
       "./extensions/title/index.ts",
       "./extensions/footer/index.ts",
       "./extensions/workbench/index.ts",

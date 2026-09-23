@@ -15,6 +15,7 @@ Slash-command descriptions show argument shapes. Press `Tab` to complete subcomm
 | **Live Codex** | Realtime voice interface backed by OpenAI Codex. | [README](extensions/live-codex/README.md) |
 | **Loop** | Runs a prompt repeatedly across fresh Pi sessions. | [README](extensions/loop/README.md) |
 | **Progress** | Displays compact agent activity below the editor. | [README](extensions/progress/README.md) |
+| **Prompt History** | Searches saved prompts by project or globally with `Ctrl+R`. | [README](extensions/prompt-history/README.md) |
 | **Title** | Generates and persists concise session titles. | [README](extensions/title/README.md) |
 | **Until** | Watches background shell conditions and runs recurring follow-ups in one session. | [README](extensions/until/README.md) |
 | **Wait** | Delays or queues follow-up prompts until current work settles. | [README](extensions/wait/README.md) |
