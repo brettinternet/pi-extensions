@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { dirname, join } from "node:path";
 import { getAgentDir, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Input, matchesKey, truncateToWidth } from "@earendil-works/pi-tui";
@@ -128,11 +129,13 @@ export default function (pi: ExtensionAPI): void {
     const standardRoot = join(getAgentDir(), "sessions");
     const isStandard = dirname(sessionDir) === standardRoot;
     const root = isStandard ? standardRoot : sessionDir;
-    const prompts = await loadPrompts(scope === "project" ? sessionDir : root, scope === "project" || !isStandard);
+    const load = (directory: string, shared: boolean) => loadPrompts(directory, shared,
+      join(getAgentDir(), "prompt-history", `${createHash("sha256").update(directory).digest("hex").slice(0, 16)}.json`));
+    const prompts = await load(scope === "project" ? sessionDir : root, scope === "project" || !isStandard);
     const original = ctx.ui.getEditorText();
     const selected = await ctx.ui.custom<string | undefined>(
       (tui, theme, _keys, done) => new HistoryPicker(prompts, ctx.cwd, tui, theme, done, original, scope,
-        scope === "project" ? () => loadPrompts(root, !isStandard) : undefined),
+        scope === "project" ? () => load(root, !isStandard) : undefined),
       { overlay: true, overlayOptions: { anchor: "center", width: "90%", maxHeight: "80%", margin: 1 } },
     );
     if (selected !== undefined) ctx.ui.setEditorText(selected);

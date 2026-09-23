@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from "bun:test";
-import { mkdtemp, mkdir, writeFile, unlink, rmdir } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, stat, writeFile, unlink, rmdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { loadPrompts, matchingPrompts, parseSession, type Prompt } from "../../extensions/prompt-history/history.ts";
@@ -37,6 +37,30 @@ test("reads saved sessions from all project folders and filters exact cwd", asyn
   expect(matchingPrompts(prompts, "/project", "project", "first details")).toHaveLength(1);
   expect(matchingPrompts(prompts, "/other", "project", "")).toHaveLength(0);
   expect(matchingPrompts(prompts, "/other", "global", "second")).toHaveLength(1);
+});
+
+test("persistent index refreshes changed sessions, prunes deleted sessions, and recovers corruption", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-prompt-history-index-test-"));
+  const source = join(root, "session.jsonl");
+  const index = join(root, "private", "history.json");
+  try {
+    await writeFile(source, session("/project"));
+    expect((await loadPrompts(root, true, index)).map((prompt) => prompt.text)).toHaveLength(2);
+    expect(JSON.parse(await readFile(index, "utf8")).files[source].prompts).toHaveLength(2);
+    expect((await stat(index)).mode & 0o777).toBe(0o600);
+    expect((await loadPrompts(root, true, index)).map((prompt) => prompt.text)).toHaveLength(2);
+    await writeFile(source, `${session("/project")}\n${JSON.stringify({ type: "message", timestamp: "2026-02-01", message: { role: "user", content: "New prompt" } })}`);
+    expect((await loadPrompts(root, true, index))[0]?.text).toBe("New prompt");
+    await writeFile(index, "broken index");
+    expect(await loadPrompts(root, true, index)).toHaveLength(3);
+    await unlink(source);
+    expect(await loadPrompts(root, true, index)).toEqual([]);
+    expect(Object.keys(JSON.parse(await readFile(index, "utf8")).files)).toEqual([]);
+  } finally {
+    await unlink(index);
+    await rmdir(join(root, "private"));
+    await rmdir(root);
+  }
 });
 
 test("picker searches, toggles scope, restores complete selection and cancels", () => {

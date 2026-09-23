@@ -1,5 +1,6 @@
 import { readdir, readFile, stat } from "node:fs/promises";
 import { join, resolve } from "node:path";
+import { readIndex, writeIndex, type CachedSession } from "./index-cache.ts";
 
 export interface Prompt {
   text: string;
@@ -7,10 +8,10 @@ export interface Prompt {
   timestamp: number;
 }
 
-const cache = new Map<string, { mtimeMs: number; size: number; prompts: Prompt[] }>();
+const cache = new Map<string, CachedSession>();
 
 /** Collect all user turns (including abandoned branches) from persisted sessions. */
-export async function loadPrompts(sessionRoot: string, sharedDirectory: boolean): Promise<Prompt[]> {
+export async function loadPrompts(sessionRoot: string, sharedDirectory: boolean, indexPath?: string): Promise<Prompt[]> {
   let directories: string[];
   try {
     directories = sharedDirectory
@@ -33,23 +34,35 @@ export async function loadPrompts(sessionRoot: string, sharedDirectory: boolean)
     }
   }
 
+  const indexed = indexPath ? await readIndex(indexPath, sessionRoot) : {};
+  const next: Record<string, CachedSession> = {};
+  let changed = false;
   const prompts: Prompt[] = [];
   // Bound concurrent reads so a large history doesn't exhaust file descriptors.
   for (let i = 0; i < files.length; i += 16) {
     const batches = await Promise.all(files.slice(i, i + 16).map(async (file) => {
       try {
         const info = await stat(file);
-        const previous = cache.get(file);
-        if (previous?.mtimeMs === info.mtimeMs && previous.size === info.size) return previous.prompts;
+        const previous = indexPath ? indexed[file] : cache.get(file);
+        if (previous?.mtimeMs === info.mtimeMs && previous.size === info.size) {
+          next[file] = previous;
+          return previous.prompts;
+        }
         const parsed = parseSession(await readFile(file, "utf8"));
-        cache.set(file, { mtimeMs: info.mtimeMs, size: info.size, prompts: parsed });
+        next[file] = { mtimeMs: info.mtimeMs, size: info.size, prompts: parsed };
+        if (!indexPath) cache.set(file, next[file]);
+        changed = true;
         return parsed;
       } catch {
         cache.delete(file);
+        changed = true;
         return [];
       }
     }));
     for (const batch of batches) prompts.push(...batch);
+  }
+  if (indexPath && (changed || Object.keys(indexed).length !== Object.keys(next).length)) {
+    await writeIndex(indexPath, sessionRoot, next);
   }
   return prompts.sort((a, b) => b.timestamp - a.timestamp);
 }
