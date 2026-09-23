@@ -160,6 +160,40 @@ describe("progress extension", () => {
     expect(latestLines(widgets)).toEqual(["progress <1m · ● edit src/a.ts"]);
   });
 
+  test("does not render a stale context after session replacement or shutdown", async () => {
+    const { handlers, widgets, ctx } = setup();
+    let stale = false;
+    Object.defineProperty(ctx, "hasUI", {
+      get: () => {
+        if (stale) throw new Error("stale extension ctx");
+        return true;
+      },
+    });
+
+    handlers.get("session_start")!({}, ctx);
+    handlers.get("before_agent_start")!({}, ctx);
+    handlers.get("session_before_switch")!({}, ctx);
+    stale = true;
+    await flushRender();
+
+    stale = false;
+    const replacement = { ...ctx, hasUI: true } as ExtensionContext;
+    stale = true;
+    handlers.get("session_start")!({}, replacement);
+    handlers.get("before_agent_start")!({}, replacement);
+    await flushRender();
+    expect(latestLines(widgets)).toEqual(["progress <1m · ● thinking"]);
+
+    handlers.get("tool_execution_start")!(
+      { toolCallId: "edit-1", toolName: "edit", args: { path: "/repo/src/a.ts" } },
+      replacement,
+    );
+    handlers.get("session_shutdown")!({}, replacement);
+    Object.defineProperty(replacement, "hasUI", { get: () => { throw new Error("stale extension ctx"); } });
+    await flushRender();
+    expect(widgets.at(-1)?.content).toBeUndefined();
+  });
+
   test("starts counting runtime at the first prompt", async () => {
     const now = spyOn(Date, "now").mockReturnValue(1_000);
     const { handlers, widgets, ctx } = setup();

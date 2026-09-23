@@ -69,6 +69,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
   const digest = new ActivityDigest();
   let currentContext: ExtensionContext | undefined;
   let renderScheduled = false;
+  let shutDown = false;
   let activeInferenceTimer: ReturnType<typeof setTimeout> | undefined;
   let inferenceController: AbortController | undefined;
   let inferencePromise: Promise<void> | undefined;
@@ -90,11 +91,13 @@ export default function progressExtension(pi: ExtensionAPI): void {
     runtimeTimer = undefined;
   }
 
-  function startRuntimeTimer(ctx: ExtensionContext): void {
+  function startRuntimeTimer(): void {
     if (activeRuntimeStartedAt !== undefined) return;
     activeRuntimeStartedAt = Date.now();
     hasRecordedRuntime = true;
-    runtimeTimer = setInterval(() => scheduleRender(ctx), 60_000);
+    runtimeTimer = setInterval(() => {
+      if (currentContext) scheduleRender(currentContext);
+    }, 60_000);
     runtimeTimer.unref?.();
   }
 
@@ -144,12 +147,13 @@ export default function progressExtension(pi: ExtensionAPI): void {
   }
 
   function scheduleRender(ctx: ExtensionContext): void {
+    if (shutDown) return;
     currentContext = ctx;
     if (renderScheduled) return;
     renderScheduled = true;
     queueMicrotask(() => {
       renderScheduled = false;
-      render(currentContext ?? ctx);
+      if (currentContext) render(currentContext);
     });
   }
 
@@ -402,6 +406,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
   }
 
   function invalidatePendingInference(): void {
+    currentContext = undefined;
     cancelInference();
     state.invalidateInference();
     state.setSemantic(undefined);
@@ -423,7 +428,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
 
   pi.on("before_agent_start", (event, ctx) => {
     setCurrentContext(ctx);
-    startRuntimeTimer(ctx);
+    startRuntimeTimer();
     cancelInference();
     const previous = state.semantic();
     activeInferenceCount = 0;
@@ -434,7 +439,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
 
   pi.on("agent_start", (_event, ctx) => {
     setCurrentContext(ctx);
-    startRuntimeTimer(ctx);
+    startRuntimeTimer();
     cancelInference();
     if (!state.snapshot().agentActive) {
       const previous = state.semantic();
@@ -490,7 +495,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
   pi.on("ui_prompt_end", (_event, ctx) => {
     setCurrentContext(ctx);
     if (!state.snapshot().agentActive) return;
-    startRuntimeTimer(ctx);
+    startRuntimeTimer();
     scheduleRender(ctx);
   });
 
@@ -511,6 +516,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", (_event, ctx) => {
+    shutDown = true;
     for (const unsubscribe of subagentEventUnsubscribers) unsubscribe();
     cancelInference();
     const wasActive = state.snapshot().agentActive;
