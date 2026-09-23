@@ -1,6 +1,6 @@
 # Prompt History
 
-Press `Ctrl+R` or run `/prompt-history` to search prompts from saved Pi sessions. Type to filter; use Up/Down, `Ctrl+P/N`, `Ctrl+K/J`, or PageUp/PageDown to select; and press Enter to put the full prompt in the editor without sending it. Escape preserves the original editor text. Tab toggles between prompts from the current working directory (**Project**) and prompts from all saved directories (**Global**).
+Press `Ctrl+R` or run `/prompt-history` to search prompts from saved Pi sessions. Type to filter; use Up/Down, `Ctrl+P/N`, `Ctrl+K/J`, or PageUp/PageDown to select; and press Enter to put the full prompt in the editor without sending it. Escape or `Ctrl+R` closes the picker and preserves the original editor text. Tab toggles between prompts from the current working directory (**Project**) and prompts from all saved directories (**Global**).
 
 Pi binds `Ctrl+R` to rename in `/resume` by default. To avoid the shortcut-conflict warning, remap that action in `~/.pi/agent/keybindings.json` (for example, `"app.session.rename": "alt+r"`) and run `/reload`.
 

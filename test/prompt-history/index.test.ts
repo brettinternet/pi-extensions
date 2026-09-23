@@ -56,7 +56,9 @@ test("picker searches, toggles scope, restores complete selection and cancels", 
   expect(results).toEqual(["Other prompt"]);
   const canceled = new HistoryPicker(prompts, "/project", { requestRender: () => {} }, theme as any, (value) => results.push(value));
   canceled.handleInput("\x1b");
-  expect(results).toEqual(["Other prompt", undefined]);
+  const toggled = new HistoryPicker(prompts, "/project", { requestRender: () => {} }, theme as any, (value) => results.push(value));
+  toggled.handleInput("\x12");
+  expect(results).toEqual(["Other prompt", undefined, undefined]);
 });
 
 test("Ctrl+P/K and Ctrl+N/J move through history like arrows", () => {
