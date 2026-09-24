@@ -1,41 +1,49 @@
 # pi-progress
 
+Show what the agent is doing below the editor.
+
 ```text
 progress 25m · agents 42m · current: Updating the implementation inferred · ● edit src/index.ts · ✓ bun test
  touched src/index.ts · test/index.test.ts
 ```
 
-```bash
+```sh
 pi install npm:@brettinternet/pi-progress
 ```
 
-It shows observed tools, checks, successful edit-write paths, and work time. When subagents run, their cumulative runtime appears separately as `agents`; parallel child runtimes are added together. The agents value is hidden until a subagent reports runtime. These signals describe activity, not semantic proof that the result is correct.
+| Segment | Meaning |
+| --- | --- |
+| `progress 25m` | Work time |
+| `agents 42m` | Summed subagent runtime; hidden until a subagent reports |
+| `current: … inferred` | Model-inferred step; off until you set a model |
+| `● edit src/index.ts` | Running tool |
+| `✓ bun test` | Finished check |
+| `touched …` | Files edited or written successfully |
 
-Optional configuration:
+These show activity, not proof the result is correct.
+
+## Commands
+
+```text
+/progress status                        show inference state
+/progress steps                         toggle recent history   (Alt+G)
+/progress steps recent                  show the last eight steps
+/progress steps all                     show full history       (Alt+Shift+G)
+/progress model                         show the inference model
+/progress model openai/gpt-5-nano:low   enable inference
+/progress model off                     disable inference
+```
+
+## Configuration
 
 ```jsonc
 // ~/.pi/agent/pi-progress.jsonc
 {
-  "model": "provider/model",
+  "model": null,           // "provider/model[:effort]" enables inference
   "maxInputChars": 12000,
   "maxTokens": 180,
   "timeoutMs": 15000
 }
 ```
 
-The bounded, redacted advisory digest excludes reasoning, tool output, file contents, diffs, environment data, credentials, and the full transcript.
-
-```text
-/progress steps
-/progress steps recent
-/progress steps all
-/progress status
-/progress model
-/progress model <provider/model[:effort]>
-/progress model off
-```
-
-```text
-Alt+G          recent toggle
-Alt+Shift+G    full history
-```
+The inference model gets a bounded, redacted digest. It never sees reasoning, tool output, file contents, diffs, environment data, credentials, or the full transcript.

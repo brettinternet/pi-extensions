@@ -1,17 +1,28 @@
 # Workbench
 
-Workbench is a private local extension for trusted projects.
+Gives the agent a `workbench` tool that opens Neovim files, shows LazyGit, and runs visible foreground jobs in Herdr panes.
 
-Load it directly from this repository:
+```text
+open src/index.ts in a split       → editor.open
+show lazygit                       → lazygit.open
+run bun test in a pane             → job.start ["bun", "test"]
+```
 
-```bash
+Private and local. Load it from this repository:
+
+```sh
 pi -e ./extensions/workbench/index.ts
 ```
 
-Workbench requires Herdr, the plugin, and a trusted project for mutations. It opens Neovim and LazyGit panes and shows visible jobs. Jobs are scoped to their owner and session.
+Requires Herdr and its plugin. Changes require a trusted project. Jobs belong to the Pi session that started them.
 
-Recognized read-only commands and routine checks run directly. Shell or interpreter indirection, unknown commands, mutations, publishing or deployment, and destructive operations require confirmation.
+## Confirmation
 
-Cancelling an active job is confirmation-free. Force that discards unsaved editor changes or an active job requires confirmation.
+| Action | Confirmation |
+| --- | --- |
+| Read-only commands and routine checks | None |
+| Cancelling an active job | None |
+| Shell or interpreter indirection, unknown commands, mutations, publishing, deploys, destructive commands | Required |
+| Force-closing an editor with unsaved changes or an active job | Required |
 
-Voice requests are handled before TUI requests. When intent or safety is unclear, Workbench fails closed.
+Confirmations go to voice mode first (see Live Codex), then the TUI. If neither is available, or intent or safety is unclear, the action is refused.

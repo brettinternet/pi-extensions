@@ -1,24 +1,19 @@
-# herdr-agent-state
+# Herdr Agent State
 
-Reports aggregate Pi lifecycle state to Herdr so the pane stays active while async subagent children run after the parent turn settles.
+Reports Pi's state to Herdr so a pane stays active while async subagents run after the parent turn ends.
 
-## Why
+Herdr's built-in Pi integration (v8) tracks only the parent process, so async work looks idle too early. This extension replaces it. Uninstall the built-in integration first:
 
-Herdr's managed Pi integration (v8) tracks only the parent process and does not consume `herdr:busy` from pi-subagents. Async work appears idle before it finishes. This extension replaces the managed integration as the sole lifecycle reporter. Uninstall the managed integration first:
-
-```
+```sh
 herdr integration uninstall pi
 ```
 
-## State precedence
+| State | When |
+| --- | --- |
+| `blocked` | Pi waits on an input prompt, an `ask_user_question` questionnaire, or an extension confirmation |
+| `working` | Pi or any subagent is working; subagent attention and custom UI show a warning label |
+| `idle` | Otherwise |
 
-1. **blocked** — the parent is waiting in a built-in input prompt, an `ask_user_question` questionnaire, or an extension-reported root confirmation
-2. **working** — parent or any subagent is working; subagent attention and generic custom UI such as live inspectors stay working with a warning label
-3. **idle** — everything else
+It reports under `herdr:pi`, so Herdr session identity and restore keep working.
 
-Session identity and restore are preserved by reporting under `herdr:pi` before lifecycle state.
-
-## Upstream
-
-- [herdr/herdr#3796](https://github.com/herdrdev/herdr/issues/3796) (closed, classified as feature request)
-- [herdr/herdr#3323](https://github.com/herdrdev/herdr/discussions/3323) (open discussion tracking native support)
+Upstream: [herdr#3796](https://github.com/herdrdev/herdr/issues/3796) (closed as a feature request), [herdr#3323](https://github.com/herdrdev/herdr/discussions/3323) (native support discussion).

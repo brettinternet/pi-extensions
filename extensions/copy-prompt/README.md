@@ -1,15 +1,15 @@
 # pi-copy-prompt
 
-Copy the exact text in the Pi editor with `Alt+C`.
+Press `Alt+C` to copy the editor text, unchanged, to the clipboard.
 
-```bash
+```sh
 pi install npm:@brettinternet/pi-copy-prompt
 ```
 
-The extension copies editor text without changing it. An empty editor or copy error shows a notification.
+An empty editor or a clipboard error shows a notification.
 
-For local development:
+Local development:
 
-```bash
+```sh
 pi -e ./extensions/copy-prompt/index.ts
 ```

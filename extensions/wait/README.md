@@ -1,36 +1,33 @@
 # pi-wait
 
-Continue a prompt after a delay.
+Send a prompt after a delay.
 
-```bash
+```sh
 pi install npm:pi-wait
 ```
 
 ```text
-/wait <duration> <prompt>
-/wait <duration>
-/wait now
-/wait pause
-/wait resume
-/wait status
-/wait cancel
-/wait
-```
-
-Durations use `ms`, `s`, `m`, `h`, or `d`, up to 24 days. Press `Enter` to start the wait immediately. When a message is already queued, `/wait <duration>` resets its timeout, `/wait <duration> <prompt>` replaces its prompt and timeout, and `/wait now` sends it immediately. `/wait pause` freezes an active countdown and `/wait resume` continues it with the remaining time.
-
-Follow-up prompts queue after current work settles. If the timer expires while Pi is busy, the prompt waits in the queue. Active and paused waits survive `/reload` in the same session.
-
-`wait_then_continue` ends the current turn, then starts its timer after the turn settles. During an active `/loop`, the loop waits for the queued prompt and its follow-up turn before starting the next iteration.
-
-Example:
-
-```text
 /wait 10m Check whether the deployment completed
-```
-
-Chain it with a loop:
-
-```text
 /loop 10 /wait 10m Check the deployment again
 ```
+
+## Commands
+
+```text
+/wait <duration> <prompt>   queue a prompt
+/wait <duration>            reset the queued prompt's timer
+/wait now                   send it now
+/wait pause                 freeze the countdown
+/wait resume                continue the countdown
+/wait cancel                drop it
+/wait status                show it and the time left
+/wait                       same as status
+```
+
+A new `/wait <duration> <prompt>` replaces the queued prompt and timer. While the agent is busy, `Enter` starts the timer now; submitting as a follow-up starts it after the agent settles. Durations use `ms`, `s`, `m`, `h`, or `d`, up to 24 days.
+
+## Behavior
+
+The prompt waits for current work to settle. If the timer fires while Pi is busy, it stays queued. Active and paused waits survive `/reload`.
+
+The agent can call `wait_then_continue`, which ends its turn and starts the timer once the turn settles. During `/loop`, the iteration waits for the queued prompt and its turn before moving on.

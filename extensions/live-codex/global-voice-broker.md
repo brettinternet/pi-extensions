@@ -1,30 +1,42 @@
 # Future global voice broker
 
-## Idea and motivation
+## Today
 
-Today `pi-live-codex` has one cooperative active-audio owner per host. The owner is an atomic lock directory with a short-lived loopback control endpoint. Other Pi sessions may keep a paused voice surface with their transcript and drafts while their audio transport is closed. That keeps voice handoff local, explicit, and easy to recover when a process dies. A future global voice broker could make voice a shared Pi capability across sessions, workspaces, and providers: one broker would own the audio connection, route controls to the selected Pi session, and expose consistent status to other voice clients.
+One Pi session per host owns audio. Ownership is an atomic lock directory plus a short-lived loopback control endpoint.
 
-The motivation is continuity. Users should be able to move between Pi sessions without treating the voice transport as a second execution engine or interrupting work already running in the original session. A broker could also support discoverable ownership, richer handoff UX, and clients other than this extension.
+```text
+session A (owner)  ← handoff request ─  session B
+  pauses audio, releases lock            acquires lock, opens audio
+  keeps LiveSession, transcript,
+  drafts, and Pi work running
+```
 
-## Boundaries
+Handoff is refused while voice-routed confirmations are pending. Queued or active work does not block it.
 
-The broker would own voice transport, ownership, authentication, and routing. It would not own Pi turns, foreground or background jobs, tool policy, confirmation policy, session history, or workspace authority. Pi sessions would remain responsible for their own work and would explicitly report whether a handoff is safe.
+## Idea
 
-The current loopback protocol is deliberately narrower: it authenticates a same-host requester, asks the current owner to pause its audio transport and release the active-audio lock, and leaves its `LiveSession`, transcript, drafts, and Pi work running. It refuses handoff while voice-routed confirmations are pending; queued or active work is not itself a blocker.
+A broker would own the audio connection for all sessions, route controls to the selected session, and report status to any voice client. Users could move between sessions, workspaces, and providers without interrupting work in the original session.
 
-## Migration path
+| Broker owns | Pi sessions own |
+| --- | --- |
+| Voice transport | Turns and jobs |
+| Ownership and authentication | Tool and confirmation policy |
+| Routing | Session history and workspace authority |
+| | Reporting whether handoff is safe |
 
-1. Keep the directory lock and loopback protocol as the compatibility fallback for one-host installations.
-2. Define a versioned broker protocol with the same authenticated request/response and bounded-payload rules.
-3. Add a broker client behind the existing acquire/handoff boundary; do not change `LiveSession` or Pi work ownership.
-4. Let the broker advertise its endpoint and lease identity, then migrate one client at a time.
-5. Retain stale lock recovery and a local fallback until broker adoption is reliable; remove the fallback only after an explicit compatibility decision.
+## Migration
 
-## Unresolved questions
+1. Keep the lock and loopback protocol as the one-host fallback.
+2. Define a versioned broker protocol with the same authentication and bounded payloads.
+3. Add a broker client behind the existing acquire/handoff boundary without changing `LiveSession` or work ownership.
+4. Have the broker advertise its endpoint and lease identity; migrate one client at a time.
+5. Keep stale-lock recovery and the local fallback until the broker is reliable. Remove them only by explicit decision.
 
-- Should the broker be per-user, per-host, or account-backed, and how should multiple users on one host be isolated?
-- What transport and credential storage provide secure local and remote operation without making Pi startup depend on a daemon?
-- How should a broker represent a disconnected session, lease expiry, process identity, and recovery after broker restart?
-- Should handoff blockers be globally standardized, or should each Pi client provide an actionable explanation?
-- How should audio device selection, mute state, model/voice settings, and provider authentication follow the selected session?
-- What observability and audit trail are appropriate without persisting sensitive voice content?
+## Open questions
+
+- Per user, per host, or account-backed? How are users on one host isolated?
+- Which transport and credential storage work locally and remotely without making Pi startup depend on a daemon?
+- How are disconnected sessions, lease expiry, process identity, and broker restarts represented?
+- Standard handoff blockers, or per-client explanations?
+- How do audio device, mute, model, voice, and provider auth follow the selected session?
+- What observability and audit trail are appropriate without storing voice content?

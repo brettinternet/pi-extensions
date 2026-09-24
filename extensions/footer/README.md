@@ -1,25 +1,26 @@
-# Pi Footer
+# Footer
 
-A responsive two-line footer for [Pi](https://pi.dev), designed for terminals with a Nerd Font.
+A responsive footer for [Pi](https://pi.dev). Requires a Nerd Font.
 
 ```text
-~/dev/project   main  +18 -4 ●2 ✚1   +1                 Refine footer
+~/dev/project   main  +18 -4 ●2 ✚1   +1                 Refine footer
 ━━━━────── 37%/114k    ↑86k ↓4.2k R61k $0.124 openai/gpt-5.4 high
 ```
 
-It shows:
+| Line | Shows |
+| --- | --- |
+| 1 | Path, branch, diff lines, staged/unstaged/untracked counts, session commits, session title |
+| 2 | Context gauge, input/output/cache tokens, cache hit rate, cost, model, thinking level |
+| 3 | Statuses from other extensions, when any are set |
 
-- path, branch, current diff lines, staged/unstaged/untracked file counts, and session commits
-- a color-coded context gauge with percentage and total capacity
-- cumulative input/output/cache tokens, latest cache hit rate, cost, provider/model, and thinking level
-- the Pi session title and statuses published by other extensions
+Git data refreshes every two seconds. Session commits count from the first commit seen in the session and survive `/reload`; they show commits made during the session, not who made them.
 
-Git data refreshes every two seconds. The commit count is relative to the first commit recorded for the Pi session and survives reloads. It describes commits made during the session; it cannot prove which process or person authored them.
-
-The footer progressively removes lower-priority usage, cache, and cost details on narrow terminals, favoring provider/model and thinking-level information.
+Narrow terminals drop usage, cache, and cost first and keep the model and thinking level.
 
 ## Install
 
+Not published to npm. Install the repository package or load it directly:
+
 ```sh
-pi install npm:@brettinternet/pi-footer
+pi -e ./extensions/footer/index.ts
 ```

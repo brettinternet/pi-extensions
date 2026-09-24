@@ -2,25 +2,27 @@
 
 Talk to OpenAI Codex from Pi.
 
-```bash
+```sh
 pi install npm:pi-live-codex
 ```
 
-Requires Node 22.19+ and a microphone. Sign in with:
+Requires Node 22.19+ and a microphone.
 
 ```text
 /login openai-codex
+/live            start voice mode
+/live <voice>    start with a voice
 ```
 
-Use voice mode with:
+| Key | Action |
+| --- | --- |
+| `Ctrl+L` | Toggle live mode |
+| `Esc` | End voice mode |
+| `Space` (empty editor) | Mute or resume |
+| Type, then `Enter` | Send a text note |
 
-```text
-/live
-/live <voice>
-```
+Drop images into the session to share them.
 
-Press `Ctrl+L` to toggle live mode. Press `Esc` to end voice mode. When the editor is empty, press `Space` to mute or resume, or type a note and press `Enter`. You can also drop images into the session.
+Requests made while one is running are queued, with status updates and cancellation. Voice also tracks background work such as subagents, can cancel it, and can answer confirmation requests from other extensions.
 
-Concurrent requests are queued, with immediate status updates and cancellation. Audio has one owner at a time, with retained-state handoff when ownership changes.
-
-Background activity and confirmation events are integrated into the live experience.
+Only one Pi session owns the microphone at a time. Starting voice in another session pauses the first; it keeps its transcript and drafts, and its work keeps running.

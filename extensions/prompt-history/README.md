@@ -1,11 +1,34 @@
 # Prompt History
 
-Press `Ctrl+R` or run `/prompt-history` to search prompts from saved Pi sessions. Type to filter; use Up/Down, `Ctrl+P/N`, `Ctrl+K/J`, or PageUp/PageDown to select; and press Enter to put the full prompt in the editor without sending it. Escape or `Ctrl+R` closes the picker and preserves the original editor text. Tab toggles between prompts from the current working directory (**Project**) and prompts from all saved directories (**Global**).
+Press `Ctrl+R` (or run `/prompt-history`) to search prompts from saved Pi sessions. Enter puts the full prompt in the editor without sending it.
 
-Pi binds `Ctrl+R` to rename in `/resume` by default. To avoid the shortcut-conflict warning, remap that action in `~/.pi/agent/keybindings.json` (for example, `"app.session.rename": "alt+r"`) and run `/reload`.
+| Key | Action |
+| --- | --- |
+| Type | Filter |
+| `Up`/`Down`, `Ctrl+P`/`Ctrl+N`, `Ctrl+K`/`Ctrl+J`, `PageUp`/`PageDown` | Select |
+| `Enter` | Insert prompt |
+| `Tab` | Toggle **Project** (this directory) and **Global** (all directories) |
+| `Esc` or `Ctrl+R` | Close and keep the original editor text |
 
-The picker reads project session JSONL files when opened and loads global history on the first Tab. It keeps a private, owner-only index under `~/.pi/agent/prompt-history/` (or the configured Pi agent directory), refreshing changed sessions and dropping deleted ones. The index duplicates prompt text; deleting it is safe because it is rebuilt from the JSONL sessions. It includes prompts from abandoned branches, but not ephemeral or deleted sessions. Project scope matches the session's exact working directory.
+An empty query lists newest first. Search ranks exact phrases, then all words, then fuzzy matches, and highlights matches. Global results show each prompt's directory.
 
-With an empty query, results are newest first. Search ranks exact phrases, then all query words, then close fuzzy matches; matches are highlighted in the preview. Global results show the source working directory. Multi-line prompts appear as one-line previews and are restored in full on selection.
+Pi binds `Ctrl+R` to rename in `/resume`. To avoid the conflict warning, remap it and run `/reload`:
 
-The extension is included in this repository's Pi package but is not published separately to npm. During development, load it with `pi -e ./extensions/prompt-history/index.ts`.
+```jsonc
+// ~/.pi/agent/keybindings.json
+{ "app.session.rename": "alt+r" }
+```
+
+## Index
+
+Prompts come from session JSONL files, including abandoned branches but not ephemeral or deleted sessions. Project scope matches the session's exact working directory.
+
+A private, owner-only index in `~/.pi/agent/prompt-history/` caches prompt text. It refreshes changed sessions and drops deleted ones. Deleting it is safe; it rebuilds from the sessions.
+
+## Install
+
+Not published to npm. Install the repository package or load it directly:
+
+```sh
+pi -e ./extensions/prompt-history/index.ts
+```
