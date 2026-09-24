@@ -59,6 +59,7 @@ function createHarness(options: {
   const promptOptions: Array<{ expandPromptTemplates?: boolean } | undefined> = [];
   const parents: Array<string | undefined> = [];
   const herdrEvents: unknown[] = [];
+  const eventListeners = new Map<string, Array<(value: unknown) => void>>();
   let current = manager("session-0", "/tmp/session-0.jsonl", [
     { type: "custom", customType: "unrelated", data: { keep: true } },
   ]);
@@ -118,8 +119,15 @@ function createHarness(options: {
   const pi = {
     on: (name: string, handler: (...args: any[]) => any) => handlers.set(name, handler),
     events: {
+      on: (name: string, listener: (value: unknown) => void) => {
+        const listeners = eventListeners.get(name) ?? [];
+        listeners.push(listener);
+        eventListeners.set(name, listeners);
+        return () => { eventListeners.set(name, listeners.filter((item) => item !== listener)); };
+      },
       emit: (name: string, value: unknown) => {
         if (name === "herdr:blocked") herdrEvents.push(value);
+        for (const listener of eventListeners.get(name) ?? []) listener(value);
       },
     },
     registerCommand: (_name: string, value: Parameters<ExtensionAPI["registerCommand"]>[1]) => {
@@ -185,6 +193,7 @@ function createHarness(options: {
     promptOptions,
     parents,
     herdrEvents,
+    emit: (name: string, value: unknown) => pi.events.emit(name, value),
     selectedModels,
     selectModel: (id: string) => { selectedModel = models.find((model) => model.id === id); },
     get abortCount() {
@@ -774,6 +783,34 @@ describe("loop lifecycle", () => {
     expect(stopping.state()).toMatchObject({ status: "stopping", delay: 2_000 });
     await stopping.settle();
     expect(stopping.state()?.status).toBe("stopped");
+  });
+
+  test("keeps the iteration alive for until and wait wake-ups", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 check the backlog", harness.context);
+    harness.emit("pi-until:busy", true);
+    harness.emit("pi-wait:busy", true);
+    await harness.settle();
+    expect(harness.prompts).toEqual(["check the backlog"]);
+    harness.emit("pi-until:busy", false);
+    expect(harness.prompts).toHaveLength(1);
+    harness.emit("pi-wait:busy", false);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.prompts).toHaveLength(2);
+    expect(harness.state()?.currentIteration).toBe(2);
+  });
+
+  test("does not replace a session before a pending wake-up turn settles", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 check the backlog", harness.context);
+    harness.emit("pi-wait:busy", true);
+    await harness.settle();
+    harness.setIdle(false);
+    harness.emit("pi-wait:busy", false);
+    expect(harness.prompts).toHaveLength(1);
+    harness.setIdle(true);
+    await harness.settle();
+    expect(harness.prompts).toHaveLength(2);
   });
 
   test("ignores duplicate and stale settlement callbacks", async () => {

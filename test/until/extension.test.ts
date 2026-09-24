@@ -12,7 +12,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "bun:test";
 import { SimulatedClock } from "xstate";
 
-import { WATCHES_EVENT } from "../../extensions/until/index.ts";
+import { UNTIL_BUSY_EVENT, WATCHES_EVENT } from "../../extensions/until/index.ts";
 import { FakeSession, loadExtension, receiptOf, sleep } from "./fake-pi.ts";
 import type { FakeExtension } from "./fake-pi.ts";
 
@@ -164,6 +164,12 @@ describe("pi-until extension", () => {
     expect(sent?.message.content).not.toContain("stdout");
     expect(sent?.message.content).not.toContain("Survived reloads");
     expect(sent?.options).toEqual({ deliverAs: "followUp", triggerTurn: true });
+    expect(extension.emitted.filter((event) => event.channel === UNTIL_BUSY_EVENT).at(-1)?.data).toBe(true);
+    await extension.messageStart(sent!.message, ctx);
+    await extension.agentSettled(ctx);
+    await waitFor(() => {
+      expect(extension.emitted.filter((event) => event.channel === UNTIL_BUSY_EVENT).at(-1)?.data).toBe(false);
+    });
 
     const firstStatus = await extension.tool(
       "status-1",
@@ -240,10 +246,11 @@ describe("pi-until extension", () => {
       ctx
     );
     const { id } = receiptOf(started);
-    expect(extension.emitted.at(-1)).toMatchObject({
+    expect(extension.emitted.filter((event) => event.channel === WATCHES_EVENT).at(-1)).toMatchObject({
       channel: WATCHES_EVENT,
       data: [{ id, label: "e" }],
     });
+    expect(extension.emitted.filter((event) => event.channel === UNTIL_BUSY_EVENT).at(-1)?.data).toBe(true);
 
     await extension.tool(
       "cancel",
@@ -252,10 +259,12 @@ describe("pi-until extension", () => {
       undefined,
       ctx
     );
-    expect(extension.emitted.at(-1)).toEqual({
+    expect(extension.emitted.filter((event) => event.channel === WATCHES_EVENT).at(-1)).toEqual({
       channel: WATCHES_EVENT,
       data: [],
     });
+    await Promise.resolve();
+    expect(extension.emitted.filter((event) => event.channel === UNTIL_BUSY_EVENT).at(-1)?.data).toBe(false);
   });
 
   it("does not re-emit watches when a refresh changes nothing", async () => {
@@ -270,13 +279,13 @@ describe("pi-until extension", () => {
       undefined,
       ctx
     );
-    const emittedBefore = extension.emitted.length;
+    const emittedBefore = extension.emitted.filter((event) => event.channel === WATCHES_EVENT).length;
 
     // session_start refreshes the indicator without touching any watch.
     await extension.sessionStart("startup", ctx);
     await extension.sessionStart("startup", ctx);
 
-    expect(extension.emitted.length).toBe(emittedBefore);
+    expect(extension.emitted.filter((event) => event.channel === WATCHES_EVENT).length).toBe(emittedBefore);
   });
 
   it("records a cancel in telemetry but not as a finished receipt", async () => {

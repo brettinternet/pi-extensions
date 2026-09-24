@@ -196,6 +196,22 @@ export default function waitExtension(pi: ExtensionAPI): void {
   let countdownTimer: ReturnType<typeof setInterval> | undefined;
   let sessionContext: ExtensionContext | undefined;
   let widgetVisible = false;
+  let delivering = false;
+  let deliveryStarted = false;
+  let lastBusy: boolean | undefined;
+  let busyQueued = false;
+  function emitBusy(): void {
+    if (busyQueued) return;
+    busyQueued = true;
+    queueMicrotask(() => {
+      busyQueued = false;
+      if (!sessionContext) return;
+      const busy = pending !== undefined || delivering;
+      if (lastBusy === busy) return;
+      lastBusy = busy;
+      pi.events.emit("pi-wait:busy", busy);
+    });
+  }
   let requestWidgetRender: (() => void) | undefined;
 
   function notify(ctx: ExtensionContext, message: string, type: "info" | "warning" | "error" = "info"): void {
@@ -244,6 +260,7 @@ export default function waitExtension(pi: ExtensionAPI): void {
 
   function persist(wait: PendingWait | undefined): void {
     pi.appendEntry(WAIT_STATE_ENTRY, { version: 1, pending: wait ?? null } satisfies WaitState);
+    emitBusy();
   }
 
   function cancel(ctx: ExtensionContext, announce: boolean, save = true): boolean {
@@ -263,6 +280,8 @@ export default function waitExtension(pi: ExtensionAPI): void {
   function deliver(ctx: ExtensionContext, expected: PendingWait): void {
     if (pending !== expected) return;
     pending = undefined;
+    delivering = true;
+    deliveryStarted = false;
     clearTimers();
     clearWidget(ctx);
     persist(undefined);
@@ -275,6 +294,8 @@ export default function waitExtension(pi: ExtensionAPI): void {
         });
       }
     } catch (error) {
+      delivering = false;
+      emitBusy();
       notify(ctx, `could not send queued message: ${error instanceof Error ? error.message : String(error)}`, "error");
     }
   }
@@ -426,7 +447,7 @@ export default function waitExtension(pi: ExtensionAPI): void {
   pi.registerTool({
     name: "wait_then_continue",
     label: "Wait Then Continue",
-    description: "Schedule a prompt after a delay and end the current turn. Use for standalone, same-session polling; do not use during an active /loop, which replaces the session after the agent settles.",
+    description: "Schedule a prompt after a delay and end the current turn. During an active /loop, the iteration stays in this session until the wait and its follow-up turn finish.",
     executionMode: "sequential",
     parameters: Type.Object({
       duration: Type.String({
@@ -455,14 +476,26 @@ export default function waitExtension(pi: ExtensionAPI): void {
     pending = undefined;
     clearTimers();
     clearWidget(ctx);
+    delivering = false;
+    deliveryStarted = false;
+    lastBusy = undefined;
     if (event.reason === "reload") {
       const state = readWaitState(ctx.sessionManager.getBranch());
       if (state?.pending) restore(ctx, state.pending);
     }
+    emitBusy();
     if (ctx.hasUI) ctx.ui.addAutocompleteProvider((current) => createWaitAutocompleteProvider(current));
   });
 
+  pi.on("before_agent_start", () => {
+    if (delivering) deliveryStarted = true;
+  });
+
   pi.on("agent_settled", (_event, ctx) => {
+    if (delivering && deliveryStarted) {
+      delivering = false;
+      emitBusy();
+    }
     if (!pending || pending.dueAt !== undefined || pending.paused) return;
     const wait = pending;
     arm(ctx, wait, wait.delay);
@@ -488,5 +521,8 @@ export default function waitExtension(pi: ExtensionAPI): void {
       cancel(ctx, false);
     }
     sessionContext = undefined;
+    delivering = false;
+    deliveryStarted = false;
+    lastBusy = undefined;
   });
 }

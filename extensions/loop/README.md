@@ -26,6 +26,8 @@ pi install npm:@brettinternet/pi-loop
 
 Durations use `ms`, `s`, `m`, `h`, or `d`. Delays range from 1 second to 24 hours. Timed loops run for at most 30 days. During a loop, `/loop time <duration>` switches to a deadline from now or resets the current deadline; timed mode requires a non-zero delay. `/loop <count>` switches back to a count of future iterations.
 
+A pending `/wait` or `until` watch keeps the current iteration's session alive until its wake-up turn settles (or it is cancelled). A paused wait or recurring watch holds the iteration until resumed or completed. Use `/loop delay` for a simple fixed gap between iterations; use `/wait` for a same-session follow-up and `until` for a condition that might become true earlier than a fixed deadline.
+
 Errors retry after 30 seconds, 1 minute, and 2 minutes, then pause. Aborting pauses the loop. `/loop pause` pauses after the active iteration settles; if the loop is between iterations, it pauses immediately. Resuming then starts the next iteration. An agent `loop_pause` request pauses mid-iteration for human blockers, and resuming continues that iteration. Recovery preserves the loop so you can resume or advance it.
 
 Chain commands in the prompt:

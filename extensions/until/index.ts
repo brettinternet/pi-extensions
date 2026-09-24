@@ -71,6 +71,7 @@ export { prepareUntilArguments, untilParameters } from "./command.ts";
 const MAX_TERMINAL_RECEIPTS = 50;
 const WIDGET_KEY = "pi-until-watches";
 export const WATCHES_EVENT = "pi-until:watches";
+export const UNTIL_BUSY_EVENT = "pi-until:busy";
 const PANEL_PAGE_SIZE = 6;
 const INDICATOR_REFRESH_MS = 1_000;
 
@@ -361,6 +362,21 @@ export default function piUntil(
   const track = telemetry.record;
 
   const activeWatches = () => [...watches.values()];
+  let lastBusy: boolean | undefined;
+  let busyQueued = false;
+  const emitBusy = () => {
+    if (busyQueued) return;
+    busyQueued = true;
+    queueMicrotask(() => {
+      busyQueued = false;
+      if (shuttingDown) return;
+      const snapshot = followUps.getSnapshot();
+      const busy = watches.size > 0 || snapshot.context.active !== undefined || snapshot.context.queue.length > 0;
+      if (lastBusy === busy) return;
+      lastBusy = busy;
+      pi.events.emit(UNTIL_BUSY_EVENT, busy);
+    });
+  };
 
   const allReceipts = () => [
     ...activeWatches().map(toReceipt),
@@ -423,6 +439,7 @@ export default function piUntil(
 
   const refreshIndicator = () => {
     emitWatches();
+    emitBusy();
     const ctx = currentContext;
     if (ctx?.mode !== "tui") return;
 
@@ -686,6 +703,7 @@ export default function piUntil(
       }),
       { clock, input: { restored, sessionBusy } }
     );
+    actor.subscribe(emitBusy);
     actor.start();
     if (restored?.phase === "awaitingSettlement" && !sessionBusy) {
       actor.send({ type: "SESSION_SETTLED" });
@@ -1226,6 +1244,7 @@ export default function piUntil(
       restoreTerminalReceipts(ctx);
       resumeWatches(suspended.watches, ctx);
     }
+    lastBusy = undefined;
     refreshIndicator();
   });
 

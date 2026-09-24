@@ -51,7 +51,11 @@ function createHarness(entries: WaitEntry[] = []) {
     isIdle: () => idle,
   } as unknown as ExtensionContext;
 
+  const busyEvents: boolean[] = [];
   const pi = {
+    events: { emit: (name: string, value: unknown) => {
+      if (name === "pi-wait:busy") busyEvents.push(value as boolean);
+    } },
     on: (name: string, handler: (...args: any[]) => any) => handlers.set(name, handler),
     registerTool: (tool: any) => tools.set(tool.name, tool),
     appendEntry: (customType: string, data: unknown) => entries.push({ type: "custom", customType, data }),
@@ -79,6 +83,7 @@ function createHarness(entries: WaitEntry[] = []) {
     widgets,
     get widgetRenderRequests() { return widgetRenderRequests; },
     messages,
+    busyEvents,
     submit: (args: string, streamingBehavior?: "steer" | "followUp") => handlers.get("input")?.({
       text: `/wait${args ? ` ${args}` : ""}`,
       source: "interactive",
@@ -206,6 +211,21 @@ describe("wait lifecycle", () => {
     expect(harness.widgets.at(-1)).toEqual({ key: WAIT_WIDGET_KEY, value: undefined });
   });
 
+  test("holds a loop boundary until the delivered turn settles", async () => {
+    const harness = createHarness();
+    await harness.submit("5ms check later");
+    await Promise.resolve();
+    expect(harness.busyEvents.at(-1)).toBe(true);
+    await sleep(15);
+    harness.settle(); // The preceding turn may settle before the follow-up starts.
+    await Promise.resolve();
+    expect(harness.busyEvents.at(-1)).toBe(true);
+    harness.handlers.get("before_agent_start")?.({}, harness.context);
+    harness.settle();
+    await Promise.resolve();
+    expect(harness.busyEvents.at(-1)).toBe(false);
+  });
+
   test("starts an Enter-steered timer immediately while busy", async () => {
     const harness = createHarness();
     harness.setIdle(false);
@@ -273,7 +293,7 @@ describe("wait lifecycle", () => {
     const harness = createHarness();
     const tool = harness.tools.get("wait_then_continue");
 
-    expect(tool.description).toContain("do not use during an active /loop");
+    expect(tool.description).toContain("During an active /loop");
     await expect(tool.execute(
       "call-1",
       { duration: "forever", prompt: "continue" },

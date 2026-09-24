@@ -21,7 +21,7 @@ Durations use `ms`, `s`, `m`, `h`, or `d`, up to 24 days. Press `Enter` to start
 
 Follow-up prompts queue after current work settles. If the timer expires while Pi is busy, the prompt waits in the queue. Active and paused waits survive `/reload` in the same session.
 
-`wait_then_continue` ends the current turn, then starts its timer after the turn settles. Do not use it during an active `/loop`.
+`wait_then_continue` ends the current turn, then starts its timer after the turn settles. During an active `/loop`, the loop waits for the queued prompt and its follow-up turn before starting the next iteration.
 
 Example:
 

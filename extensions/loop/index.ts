@@ -639,6 +639,24 @@ export default function loopExtension(pi: ExtensionAPI): void {
   let pendingFailure: PendingFailure | undefined;
   let currentSessionManagerRef: unknown;
   let herdrBlocked = false;
+  const pendingWakes = new Map<string, boolean>();
+  let waitingForWake = false;
+  let wakeContext: ExtensionContext | undefined;
+
+  for (const channel of ["pi-until:busy", "pi-wait:busy"]) {
+    pi.events.on(channel, (value) => {
+      if (typeof value !== "boolean") return;
+      pendingWakes.set(channel, value);
+      if (!waitingForWake || [...pendingWakes.values()].some(Boolean)) return;
+      const ctx = wakeContext;
+      if (!ctx || !ctx.isIdle()) return;
+      const state = currentState(ctx);
+      if (!state || !statusIsActive(state) || transitionInFlight) return;
+      waitingForWake = false;
+      handledSettlementKey = stateKey(ctx, state);
+      scheduleContinuation(ctx, state);
+    });
+  }
 
   function reportHerdrBlocked(state: LoopState | undefined): void {
     const blocked = state?.status === "paused";
@@ -1523,6 +1541,9 @@ export default function loopExtension(pi: ExtensionAPI): void {
     clearCommandInterruption();
     pendingFailure = undefined;
     currentSessionManagerRef = ctx.sessionManager;
+    pendingWakes.clear();
+    waitingForWake = false;
+    wakeContext = ctx;
     transitionInFlight = false;
     handledSettlementKey = undefined;
     const loaded = latestStateFromContext(ctx);
@@ -1593,6 +1614,12 @@ export default function loopExtension(pi: ExtensionAPI): void {
       return;
     }
     if (handledSettlementKey === key) return;
+    if ([...pendingWakes.values()].some(Boolean)) {
+      waitingForWake = true;
+      wakeContext = ctx;
+      return;
+    }
+    waitingForWake = false;
     handledSettlementKey = key;
     scheduleContinuation(ctx, loaded);
   });
@@ -1604,6 +1631,9 @@ export default function loopExtension(pi: ExtensionAPI): void {
     clearCommandInterruption();
     pendingFailure = undefined;
     currentSessionManagerRef = ctx.sessionManager;
+    pendingWakes.clear();
+    waitingForWake = false;
+    wakeContext = ctx;
     handledSettlementKey = undefined;
     const loaded = latestStateFromContext(ctx);
     const owned = loaded && stateBelongsToContext(loaded, ctx) ? loaded : undefined;
@@ -1633,6 +1663,9 @@ export default function loopExtension(pi: ExtensionAPI): void {
     reportHerdrBlocked(undefined);
     clearWidget(ctx);
     currentSessionManagerRef = undefined;
+    waitingForWake = false;
+    wakeContext = undefined;
+    pendingWakes.clear();
   });
 
   pi.registerCommand("loop", {
