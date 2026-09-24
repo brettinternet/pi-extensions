@@ -142,6 +142,7 @@ export interface FakeExtension {
   readonly shutdown: (reason: ShutdownReason) => Promise<void>;
   readonly telemetry: TelemetryEventInput[];
   readonly tool: UntilToolExecute;
+  readonly toolGuidance: { readonly description: string; readonly promptGuidelines: readonly string[] };
 }
 
 /** Instantiate the extension against a fake Pi bound to `session`. */
@@ -161,6 +162,7 @@ export const loadExtension = (
   const commands = new Map<string, FakeCommand>();
   const handlers = new Map<string, SessionHandler>();
   let tool: UntilToolExecute | undefined;
+  let toolGuidance: FakeExtension["toolGuidance"] | undefined;
   let lastContext = session.context().ctx;
 
   const appendEntry = (customType: string, data: CustomEntry["data"]): void => {
@@ -215,7 +217,8 @@ export const loadExtension = (
         commands.set(name, definition);
       }
     ),
-    registerTool: vi.fn((definition: { execute: UntilToolExecute }) => {
+    registerTool: vi.fn((definition: { execute: UntilToolExecute; description: string; promptGuidelines: readonly string[] }) => {
+      toolGuidance = { description: definition.description, promptGuidelines: definition.promptGuidelines };
       tool = async (toolCallId, params, signal, onUpdate, context) => {
         lastContext = context;
         return definition.execute(
@@ -244,7 +247,7 @@ export const loadExtension = (
     },
   });
 
-  if (!tool) {
+  if (!tool || !toolGuidance) {
     throw new Error("until tool was not registered");
   }
 
@@ -297,6 +300,7 @@ export const loadExtension = (
       emit({ reason, type: "session_shutdown" }, shutdownContext),
     telemetry,
     tool,
+    toolGuidance,
   };
 };
 

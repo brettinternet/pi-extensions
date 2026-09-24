@@ -29,6 +29,14 @@ afterEach(async () => {
 });
 
 describe("pi-until extension", () => {
+  it("discourages clock-only watches without assuming other extensions are installed", () => {
+    const extension = loadExtension(new FakeSession());
+    live.push(extension);
+    expect(extension.toolGuidance.description).toContain("not clock-only delays");
+    expect(extension.toolGuidance.promptGuidelines.join(" ")).toContain("Do not use a clock or date comparison");
+    expect(JSON.stringify(extension.toolGuidance)).not.toMatch(/\/wait|\/loop/);
+  });
+
   it("completes command arguments with predicates and active watch IDs", async () => {
     const session = new FakeSession();
     const extension = loadExtension(session);

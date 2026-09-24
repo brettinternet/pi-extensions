@@ -939,7 +939,7 @@ export default function piUntil(
 
   pi.registerTool({
     description:
-      "Start session-scoped shell-condition watches or recurring agent follow-ups. One session arbiter serializes every pi-until wake. Recurrences use fixed cadence, immutable task snapshots, explicit completion, and /reload-only restoration.",
+      "Start session-scoped shell-condition watches or recurring agent follow-ups. Watches are for conditions that might become true before a deadline, not clock-only delays. One session arbiter serializes every pi-until wake. Recurrences use fixed cadence, immutable task snapshots, explicit completion, and /reload-only restoration.",
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
       currentContext = ctx;
       const command = parseCommand(params, ctx);
@@ -1024,7 +1024,7 @@ export default function piUntil(
     parameters: untilParameters,
     prepareArguments: prepareUntilArguments,
     promptGuidelines: [
-      "Use until action=start when work should resume after a side-effect-free shell condition exits 0. Do not block bash with polling or sleep loops.",
+      "Use until action=start when work should resume after a side-effect-free shell condition exits 0. Do not use a clock or date comparison to implement a fixed delay; choose a delay mechanism instead. Do not block bash with polling or sleep loops.",
       "Use until action=repeat when the same agent must do work on a fixed cadence. Supply timeoutSeconds, instruction, and quickRef.",
       "Treat contextRefs as opaque pointers. Read a target only when the recurring instruction requires it.",
       "Keep recurring snapshots short and secret-free. The instruction, quickRef, and contextRefs are immutable private session data.",

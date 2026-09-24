@@ -1,6 +1,6 @@
 # pi-until
 
-When used inside `/loop`, an active watch keeps the current iteration's session alive until the watch completes and any agent wake-up turn settles. Use `/wait` instead when only a fixed delay is needed.
+Use a watch when a real condition may become true before its timeout. For a fixed delay, use a timer rather than polling the clock with a shell condition.
 
 Watch shell conditions and schedule recurring follow-ups without blocking Pi. Exit code `0` indicates success. Background checks run without model turns.
 
