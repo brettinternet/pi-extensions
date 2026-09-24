@@ -30,4 +30,4 @@ A new `/wait <duration> <prompt>` replaces the queued prompt and timer. While th
 
 The prompt waits for current work to settle. If the timer fires while Pi is busy, it stays queued. Active and paused waits survive `/reload`.
 
-The agent can call `wait_then_continue`, which ends its turn and starts the timer once the turn settles. During `/loop`, the iteration waits for the queued prompt and its turn before moving on.
+The agent can call `wait_then_continue`, which ends its turn and starts the timer once the turn settles. It can call `cancel_wait` to drop a queued wait without ending its turn. During `/loop`, the iteration waits for the queued prompt and its turn before moving on.

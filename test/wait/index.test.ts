@@ -289,6 +289,51 @@ describe("wait lifecycle", () => {
     }]);
   });
 
+  test("lets the agent cancel a deferred wait without ending its turn", async () => {
+    const harness = createHarness();
+    const start = harness.tools.get("wait_then_continue");
+    const stop = harness.tools.get("cancel_wait");
+
+    await start.execute("call-1", { duration: "5ms", prompt: "do not send" }, new AbortController().signal, () => {}, harness.context);
+    await Promise.resolve();
+    expect(harness.busyEvents.at(-1)).toBe(true);
+
+    const result = await stop.execute("call-2", {}, new AbortController().signal, () => {}, harness.context);
+    expect(result).toEqual({
+      content: [{ type: "text", text: "Queued wait cancelled." }],
+      details: { cancelled: true },
+    });
+    expect(readWaitState(harness.entries)).toEqual({ version: 1, pending: null });
+    expect(harness.widgets.at(-1)).toEqual({ key: WAIT_WIDGET_KEY, value: undefined });
+    await Promise.resolve();
+    expect(harness.busyEvents.at(-1)).toBe(false);
+    harness.settle();
+    await sleep(15);
+    expect(harness.messages).toEqual([]);
+
+    expect(await stop.execute("call-3", {}, new AbortController().signal, () => {}, harness.context)).toEqual({
+      content: [{ type: "text", text: "No wait is queued." }],
+      details: { cancelled: false },
+    });
+  });
+
+  test("lets the agent cancel an active or paused countdown", async () => {
+    const harness = createHarness();
+    const stop = harness.tools.get("cancel_wait");
+
+    await harness.submit("10ms active prompt");
+    await stop.execute("call-1", {}, new AbortController().signal, () => {}, harness.context);
+    await sleep(15);
+    expect(harness.messages).toEqual([]);
+
+    await harness.submit("10ms paused prompt");
+    await harness.submit("pause");
+    await stop.execute("call-2", {}, new AbortController().signal, () => {}, harness.context);
+    expect(readWaitState(harness.entries)).toEqual({ version: 1, pending: null });
+    await sleep(15);
+    expect(harness.messages).toEqual([]);
+  });
+
   test("rejects invalid agent wait arguments", async () => {
     const harness = createHarness();
     const tool = harness.tools.get("wait_then_continue");

@@ -471,6 +471,21 @@ export default function waitExtension(pi: ExtensionAPI): void {
     },
   });
 
+  pi.registerTool({
+    name: "cancel_wait",
+    label: "Cancel Wait",
+    description: "Cancel the queued wait and prevent its continuation prompt from being sent. Does not end the current turn.",
+    executionMode: "sequential",
+    parameters: Type.Object({}),
+    async execute(_toolCallId, _params, _signal, _onUpdate, ctx) {
+      const cancelled = cancel(ctx, false);
+      return {
+        content: [{ type: "text", text: cancelled ? "Queued wait cancelled." : "No wait is queued." }],
+        details: { cancelled },
+      };
+    },
+  });
+
   pi.on("session_start", (event, ctx) => {
     sessionContext = ctx;
     pending = undefined;
