@@ -71,6 +71,8 @@ function createHarness(options: {
   let selectedModel: { provider: string; id: string } | undefined;
   const models = [{ provider: "test", id: "default" }, { provider: "test", id: "custom" }];
   const selectedModels: string[] = [];
+  let thinkingLevel: "off" | "low" | "high" = "low";
+  const selectedThinkingLevels: string[] = [];
 
   const ui = {
     setWidget: (key: string, value: unknown) => widgets.push({ key, value }),
@@ -140,8 +142,14 @@ function createHarness(options: {
     setModel: async (model: { provider: string; id: string }) => {
       if (options.modelAvailable === false && model.id === "custom") return false;
       selectedModel = model;
+      thinkingLevel = "low"; // Model selection applies the new session's default effort.
       selectedModels.push(model.id);
       return true;
+    },
+    getThinkingLevel: () => thinkingLevel,
+    setThinkingLevel: (level: "off" | "low" | "high") => {
+      thinkingLevel = level;
+      selectedThinkingLevels.push(level);
     },
     sendUserMessage: (content: string, opts?: { expandPromptTemplates?: boolean }) => {
       if (opts?.expandPromptTemplates && content.startsWith("/loop ")) {
@@ -163,6 +171,7 @@ function createHarness(options: {
     if (options.cancelReplacement) return { cancelled: true };
     const next = manager(`session-${++replacementNumber}`, `/tmp/session-${replacementNumber}.jsonl`);
     selectedModel = models[0];
+    thinkingLevel = "low";
     const nextContext = contextFor(next);
     (nextContext as any).newSession = originalNewSession;
     current = next;
@@ -195,6 +204,9 @@ function createHarness(options: {
     herdrEvents,
     emit: (name: string, value: unknown) => pi.events.emit(name, value),
     selectedModels,
+    selectedThinkingLevels,
+    get thinkingLevel() { return thinkingLevel; },
+    selectThinkingLevel: (level: "off" | "low" | "high") => { thinkingLevel = level; },
     selectModel: (id: string) => { selectedModel = models.find((model) => model.id === id); },
     get abortCount() {
       return abortCount;
@@ -535,6 +547,27 @@ describe("loop lifecycle", () => {
     expect(harness.state()?.model).toEqual({ provider: "test", id: "default" });
     expect(harness.selectedModels).toEqual(["custom", "custom", "default"]);
     expect(harness.prompts).toEqual(Array(3).fill("inspect the repository"));
+  });
+
+  test("preserves thinking level from the invoking session and follows mid-loop changes", async () => {
+    const harness = createHarness();
+    harness.selectModel("custom");
+    harness.selectThinkingLevel("high");
+    await harness.command.handler("3 inspect the repository", harness.context);
+    expect(harness.state()?.thinkingLevel).toBe("high");
+    expect(harness.thinkingLevel).toBe("high");
+    expect(harness.selectedThinkingLevels).toEqual(["high"]);
+
+    await harness.settle();
+    expect(harness.state()?.thinkingLevel).toBe("high");
+    expect(harness.thinkingLevel).toBe("high");
+
+    harness.selectThinkingLevel("off");
+    await harness.settle();
+    expect(harness.state()?.thinkingLevel).toBe("off");
+    expect(harness.thinkingLevel).toBe("off");
+    expect(harness.selectedThinkingLevels).toEqual(["high", "high", "off"]);
+    expect(harness.prompts).toHaveLength(3);
   });
 
   test("pauses rather than running on the default when the selected model is unavailable", async () => {

@@ -9,6 +9,8 @@ import type {
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
 
+type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
+
 export const LOOP_STATE_ENTRY = "pi-loop-state-v1";
 export const LOOP_WIDGET_KEY = "pi-loop";
 export const LOOP_RUN_ID_ENV = "PI_LOOP_RUN_ID";
@@ -49,6 +51,7 @@ export interface LoopState {
   ownerSessionId?: string;
   ownerSessionFile?: string;
   model?: { provider: string; id: string };
+  thinkingLevel?: ThinkingLevel;
 }
 
 export type ParsedLoopCommand =
@@ -445,6 +448,11 @@ export function parseLoopState(value: unknown): LoopState | undefined {
   if (value.ownerSessionId !== undefined && typeof value.ownerSessionId !== "string") return undefined;
   if (value.ownerSessionFile !== undefined && typeof value.ownerSessionFile !== "string") return undefined;
   const model = value.model;
+  const thinkingLevel = value.thinkingLevel;
+  if (
+    thinkingLevel !== undefined &&
+    !["off", "minimal", "low", "medium", "high", "xhigh", "max"].includes(thinkingLevel as string)
+  ) return undefined;
   if (
     model !== undefined &&
     (!isRecord(model) || typeof model.provider !== "string" || !model.provider ||
@@ -472,6 +480,7 @@ export function parseLoopState(value: unknown): LoopState | undefined {
     ...(isRecord(model) && typeof model.provider === "string" && typeof model.id === "string"
       ? { model: { provider: model.provider, id: model.id } }
       : {}),
+    ...(thinkingLevel !== undefined ? { thinkingLevel: thinkingLevel as ThinkingLevel } : {}),
   };
 }
 
@@ -964,14 +973,14 @@ export default function loopExtension(pi: ExtensionAPI): void {
     replacement: ReplacementContext,
     state: LoopState,
   ): Promise<void> {
-    // The replacement owns the new extension runtime. Restore its model before
-    // starting a turn, rather than using the invalidated previous runtime.
-    if (state.model) {
+    // The replacement owns the new extension runtime. Restore its model and
+    // thinking level before starting a turn, rather than using the previous runtime.
+    if (state.model || state.thinkingLevel !== undefined) {
       await replacement.sendUserMessage(
         `/loop __restore_model ${state.runId} ${state.currentIteration}`,
         { expandPromptTemplates: true },
       );
-      if (replacement.model?.provider !== state.model.provider || replacement.model.id !== state.model.id) {
+      if (state.model && (replacement.model?.provider !== state.model.provider || replacement.model.id !== state.model.id)) {
         throw new Error(`loop model unavailable: ${state.model.provider}/${state.model.id}`);
       }
     }
@@ -1149,6 +1158,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     const next: LoopState = {
       ...withoutPause,
       ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : {}),
+      thinkingLevel: pi.getThinkingLevel(),
       currentIteration: state.currentIteration + 1,
       remainingBudget: state.endsAt === undefined ? nextBudget - 1 : 0,
       pendingRetune: null,
@@ -1202,11 +1212,14 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
     if (parsed.kind === "restoreModel") {
       const state = currentState(ctx);
-      if (!state || state.runId !== parsed.runId || state.currentIteration !== parsed.iteration || !state.model) return;
-      const model = ctx.modelRegistry.find(state.model.provider, state.model.id);
-      if (!model || !(await pi.setModel(model))) {
-        throw new Error(`loop model unavailable: ${state.model.provider}/${state.model.id}`);
+      if (!state || state.runId !== parsed.runId || state.currentIteration !== parsed.iteration) return;
+      if (state.model) {
+        const model = ctx.modelRegistry.find(state.model.provider, state.model.id);
+        if (!model || !(await pi.setModel(model))) {
+          throw new Error(`loop model unavailable: ${state.model.provider}/${state.model.id}`);
+        }
       }
+      if (state.thinkingLevel !== undefined) pi.setThinkingLevel(state.thinkingLevel);
       return;
     }
 
@@ -1494,6 +1507,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
       retryCount: 0,
       phase: "running",
       ...(ctx.model ? { model: { provider: ctx.model.provider, id: ctx.model.id } } : {}),
+      thinkingLevel: pi.getThinkingLevel(),
       ...(timed ? { endsAt: Date.now() + parsed.duration } : {}),
       ...(contextIdentity(ctx).id ? { ownerSessionId: contextIdentity(ctx).id } : {}),
       ...(contextIdentity(ctx).file ? { ownerSessionFile: contextIdentity(ctx).file } : {}),

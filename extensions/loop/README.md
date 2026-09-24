@@ -39,7 +39,7 @@ Durations use `ms`, `s`, `m`, `h`, or `d`. Delays range from 1s to 24h. Timed lo
 
 | Event | Result |
 | --- | --- |
-| Model changed mid-loop | The next iteration uses it |
+| Model or thinking level changed mid-loop | The next iteration uses it; both initially match the session that invoked `/loop` |
 | Model unavailable | Loop pauses; no fallback to the default |
 | Error | Retries after 30s, 1m, and 2m, then pauses |
 | Abort | Loop pauses |
