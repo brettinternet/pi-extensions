@@ -20,7 +20,7 @@ pi install npm:@brettinternet/pi-progress
 | `✓ bun test` | Finished check |
 | `touched …` | Files edited or written successfully |
 
-These show activity, not proof the result is correct.
+These show activity, not proof the result is correct. Inferred claims that something was "verified" are dropped without discarding other progress labels.
 
 ## Commands
 

@@ -76,6 +76,7 @@ describe("progress inference contract", () => {
     expect(INFERENCE_SYSTEM_PROMPT).toContain("phase is a 1-48 character");
     expect(INFERENCE_SYSTEM_PROMPT).toContain("current is an optional 1-96 character");
     expect(INFERENCE_SYSTEM_PROMPT).toContain("arrays of at most three 1-96 character labels");
+    expect(INFERENCE_SYSTEM_PROMPT).toContain("Never use 'verified' in a label");
   });
 
   test("normalizes and bounds recoverable output", () => {
@@ -94,13 +95,25 @@ describe("progress inference contract", () => {
       confidence: 0.9,
     });
     expect(parseInference({ ...valid, phase: "   " }).phase).toBe("Progress");
+    expect(parseInference({
+      ...valid,
+      phase: "Verified release",
+      current: "Verified npm response",
+      completed: ["Ran bun test", "Verified release", "Registry returned version 0.1.4"],
+      blocked: ["Verified blocker", "Awaiting approval"],
+    })).toEqual({
+      ...valid,
+      phase: "Progress",
+      current: "",
+      completed: ["Ran bun test", "Registry returned version 0.1.4"],
+      blocked: ["Awaiting approval"],
+    });
     expect(inferenceFromCompletion({ content: [{ type: "text", text: `\`\`\`json\n${JSON.stringify(valid)}\n\`\`\`` }], stopReason: "stop" })).toEqual(valid);
   });
 
   test("rejects unsafe or malformed output", () => {
     expect(() => parseInference({ ...valid, completed: "Configured FleetView" })).toThrow("must be an array");
     expect(() => parseInference({ ...valid, confidence: -0.1 })).toThrow("number from 0 to 1");
-    expect(() => parseInference({ ...valid, phase: "Verified" })).toThrow("cannot claim verification");
     expect(() => parseInference({ ...valid, phase: "\u001b[2JVerification" })).toThrow("terminal control");
     expect(() => inferenceFromCompletion({ content: [{ type: "text", text: "not json" }], stopReason: "stop" })).toThrow("invalid JSON");
     expect(() => inferenceFromCompletion({ content: [{ type: "text", text: JSON.stringify(valid) }], stopReason: "error" })).toThrow("did not complete successfully");

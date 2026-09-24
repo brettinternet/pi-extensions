@@ -24,6 +24,7 @@ function harness(completions: Array<Promise<any>> = []) {
   const entries: Array<{ type: string; data: unknown }> = [];
   const requests: unknown[] = [];
   const signals: AbortSignal[] = [];
+  const notifications: string[] = [];
   let calls = 0;
   let registerToolCalls = 0;
   const pi = {
@@ -37,7 +38,7 @@ function harness(completions: Array<Promise<any>> = []) {
   const ctx = {
     cwd: "/repo",
     hasUI: true,
-    ui: { setWidget: () => {}, notify: () => {} },
+    ui: { setWidget: () => {}, notify: (message: string) => notifications.push(message) },
     sessionManager: { getBranch: () => [] },
     modelRegistry: {
       find: (provider: string, id: string) => provider === model.provider && id === model.id ? model : undefined,
@@ -54,7 +55,7 @@ function harness(completions: Array<Promise<any>> = []) {
     },
   } as unknown as ExtensionContext;
   progressExtension(pi);
-  return { handlers, entries, requests, signals, get calls() { return calls; }, get registerToolCalls() { return registerToolCalls; }, ctx };
+  return { handlers, entries, requests, signals, notifications, get calls() { return calls; }, get registerToolCalls() { return registerToolCalls; }, ctx };
 }
 
 function inferenceEntries(run: ReturnType<typeof harness>): Array<{ type: string; data: unknown }> {
@@ -215,6 +216,34 @@ describe("progress inference lifecycle", () => {
       expect(inferenceEntries(run)).toEqual([{ type: INFERENCE_ENTRY, data: semantic }]);
       const request = run.requests.at(-1) as { messages: Array<{ content: Array<{ text: string }> }> };
       expect(request.messages[0].content[0].text).toContain('"status":"settled"');
+    } finally {
+      if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previous;
+    }
+  });
+
+  test("keeps safe progress when a model claims verification", async () => {
+    const previous = process.env.PI_CODING_AGENT_DIR;
+    const agentDir = `/tmp/pi-progress-claim-${randomUUID()}`;
+    process.env.PI_CODING_AGENT_DIR = agentDir;
+    await mkdir(agentDir, { recursive: true });
+    await writeFile(`${agentDir}/pi-progress.json`, JSON.stringify({ model: "openai/gpt-5-nano" }));
+    try {
+      const run = harness([Promise.resolve({
+        content: [{ type: "text", text: JSON.stringify({
+          ...semantic,
+          completed: ["Ran tests", "Verified release"],
+        }) }],
+        stopReason: "stop",
+      })]);
+      run.handlers.get("session_start")!({}, run.ctx);
+      settleMeaningful(run);
+      await flushAsync();
+      expect(inferenceEntries(run)).toEqual([{
+        type: INFERENCE_ENTRY,
+        data: { ...semantic, completed: ["Ran tests"] },
+      }]);
+      expect(run.notifications).toEqual([]);
     } finally {
       if (previous === undefined) delete process.env.PI_CODING_AGENT_DIR;
       else process.env.PI_CODING_AGENT_DIR = previous;
