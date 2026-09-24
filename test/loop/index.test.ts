@@ -14,6 +14,8 @@ import loopExtension, {
   type LoopState,
 } from "../../extensions/loop/index.ts";
 
+const plainTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+
 type TestEntry = { type: "custom"; customType: string; data: unknown };
 
 type Manager = {
@@ -258,7 +260,7 @@ function latestWidgetLines(harness: Harness, width = 80): string[] | undefined {
   const value = harness.widgets.at(-1)?.value;
   if (Array.isArray(value)) return value as string[];
   if (typeof value !== "function") return undefined;
-  return (value({ requestRender: harness.requestWidgetRender }, {}) as { render: (width: number) => string[] }).render(width);
+  return (value({ requestRender: harness.requestWidgetRender }, plainTheme) as { render: (width: number) => string[] }).render(width);
 }
 
 describe("loop parser and state", () => {
@@ -417,24 +419,32 @@ describe("loop parser and state", () => {
       delay: 0,
       status: "active",
     };
-    expect(formatLoopWidget(state, 80)).toBe(
-      "loop active 4/4 · inspect the repository and fix the failing tests",
+    expect(formatLoopWidget(state, 120)).toBe(
+      "↻ LOOP 4/4 · inspect the repository and fix the failing tests · /loop pause · /loop end",
     );
     const narrow = formatLoopWidget(state, 32);
-    expect(stripTerminalSequences(narrow)).toBe("loop active 4/4 · inspect the r…");
+    expect(stripTerminalSequences(narrow)).toBe("↻ LOOP 4/4 · inspect the reposi…");
     expect(visibleWidth(narrow)).toBe(32);
 
     expect(formatLoopWidget({ ...state, status: "stopping" }, 80)).toBe(
-      "loop stopping · inspect the repository and fix the failing tests",
+      "■ LOOP stopping · inspect the repository and fix the failing tests",
     );
     expect(formatLoopWidget({ ...state, status: "pausing" }, 80)).toBe(
-      "loop pausing · inspect the repository and fix the failing tests",
+      "⏸ LOOP pausing · inspect the repository and fix the failing tests",
     );
-    expect(formatLoopWidget({ ...state, delay: 2_000 }, 80)).toBe(
-      "loop active 4/4 · delay 2s · inspect the repository and fix the failing tests",
+    expect(formatLoopWidget({ ...state, delay: 2_000 }, 120)).toBe(
+      "↻ LOOP 4/4 · delay 2s · inspect the repository and fix the failing tests · /loop pause · /loop end",
     );
-    expect(formatLoopWidget({ ...state, retryCount: 2 }, 80)).toBe(
-      "loop active 4/4 · retry 2/3 · inspect the repository and fix the failing tests",
+    expect(formatLoopWidget({ ...state, status: "paused" }, 120)).toBe(
+      "⏸ LOOP paused 4/4 · inspect the repository and fix the failing tests · /loop resume · /loop end",
+    );
+    const themed = formatLoopWidget(state, 120, Date.now(), {
+      fg: (color: string, text: string) => `[${color}]${text}`,
+      bold: (text: string) => `*${text}*`,
+    });
+    expect(themed.startsWith("[accent]↻ [accent]*LOOP* [muted]4/4")).toBe(true);
+    expect(formatLoopWidget({ ...state, retryCount: 2 }, 120)).toBe(
+      "↻ LOOP 4/4 · retry 2/3 · inspect the repository and fix the failing tests · /loop pause · /loop end",
     );
   });
 
@@ -528,7 +538,7 @@ describe("loop lifecycle", () => {
     expect(harness.promptOptions).toEqual([{ expandPromptTemplates: true }]);
     expect(harness.current.entries.every((entry) => entry.customType === LOOP_STATE_ENTRY)).toBeTrue();
     expect(stateOf(harness.current)).toMatchObject({ currentIteration: 1, remainingBudget: 1, status: "active" });
-    expect(latestWidgetLines(harness)).toEqual(["loop active 2/2 · inspect the repository"]);
+    expect(latestWidgetLines(harness)).toEqual(["↻ LOOP 2/2 · inspect the repository · /loop pause · /loop end"]);
   });
 
   test("preserves the selected model across fresh sessions and follows mid-loop changes", async () => {
@@ -592,7 +602,7 @@ describe("loop lifecycle", () => {
     expect(harness.state()?.endsAt).toBeGreaterThan(Date.now() + 3 * 60 * 60 * 1_000);
     expect(formatLoopStatus(harness.state())).toContain("ends at:");
     expect(formatLoopWidget(harness.state()!, 100, harness.state()!.endsAt! - 4 * 60 * 60 * 1_000)).toBe(
-      "loop active · #1 · 4h left · delay 5m · watch the queue",
+      "↻ LOOP #1 · 4h left · delay 5m · watch the queue · /loop pause · /loop end",
     );
 
     const first = harness.state()!;
@@ -865,22 +875,22 @@ describe("loop lifecycle", () => {
     await harness.command.handler("2 repeat the check", harness.context);
     await harness.command.handler("4", commandContext(harness));
     expect(harness.state()).toMatchObject({ remainingBudget: 1, pendingRetune: 4 });
-    expect(latestWidgetLines(harness)).toEqual(["loop active 5/5 · repeat the check"]);
+    expect(latestWidgetLines(harness)).toEqual(["↻ LOOP 5/5 · repeat the check · /loop pause · /loop end"]);
     await harness.settle();
     expect(harness.state()).toMatchObject({ currentIteration: 2, remainingBudget: 3, pendingRetune: null });
-    expect(latestWidgetLines(harness)).toEqual(["loop active 4/5 · repeat the check"]);
+    expect(latestWidgetLines(harness)).toEqual(["↻ LOOP 4/5 · repeat the check · /loop pause · /loop end"]);
   });
 
   test("replaces and cumulatively appends to future iteration prompts", async () => {
     const harness = createHarness();
     await harness.command.handler("3 broad review", harness.context);
-    expect(latestWidgetLines(harness)).toEqual(["loop active 3/3 · broad review"]);
+    expect(latestWidgetLines(harness)).toEqual(["↻ LOOP 3/3 · broad review · /loop pause · /loop end"]);
     const mountedWidgetCount = harness.widgets.length;
 
     await harness.command.handler("prompt fix the failing tests", commandContext(harness));
     expect(harness.widgets).toHaveLength(mountedWidgetCount + 1);
     expect(harness.widgetRenderRequests).toBe(0);
-    expect(latestWidgetLines(harness)).toEqual(["loop active 3/3 · fix the failing tests"]);
+    expect(latestWidgetLines(harness)).toEqual(["↻ LOOP 3/3 · fix the failing tests · /loop pause · /loop end"]);
     await harness.command.handler("append preserve public APIs", commandContext(harness));
     await harness.command.handler("append update relevant docs", commandContext(harness));
 
@@ -1069,7 +1079,7 @@ describe("loop lifecycle", () => {
     await harness.command.handler("3 repeat the check", harness.context);
     await harness.command.handler("+2", commandContext(harness));
     expect(harness.state()?.pendingRetune).toBe(4);
-    expect(latestWidgetLines(harness)).toEqual(["loop active 5/5 · repeat the check"]);
+    expect(latestWidgetLines(harness)).toEqual(["↻ LOOP 5/5 · repeat the check · /loop pause · /loop end"]);
 
     await harness.command.handler("-4", commandContext(harness));
     expect(harness.state()?.pendingRetune).toBe(0);
@@ -1086,7 +1096,7 @@ describe("loop lifecycle", () => {
     await harness.command.handler("2 work", harness.context);
     await harness.command.handler("end", commandContext(harness));
     expect(harness.state()?.status).toBe("stopping");
-    expect(latestWidgetLines(harness)).toEqual(["loop stopping · work"]);
+    expect(latestWidgetLines(harness)).toEqual(["■ LOOP stopping · work"]);
     await harness.settle();
     expect(harness.state()?.status).toBe("stopped");
 
@@ -1115,7 +1125,7 @@ describe("loop lifecycle", () => {
     await retuned.command.handler("end", commandContext(retuned));
     await retuned.command.handler("3", commandContext(retuned));
     expect(retuned.state()).toMatchObject({ status: "active", pendingRetune: 3 });
-    expect(latestWidgetLines(retuned)).toEqual(["loop active 4/4 · work"]);
+    expect(latestWidgetLines(retuned)).toEqual(["↻ LOOP 4/4 · work · /loop pause · /loop end"]);
     await retuned.settle();
     expect(retuned.state()).toMatchObject({ status: "active", currentIteration: 2, remainingBudget: 2 });
   });

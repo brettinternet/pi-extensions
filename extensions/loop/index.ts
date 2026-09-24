@@ -5,6 +5,7 @@ import type {
   ExtensionContext,
   SessionEntry,
   SessionManager,
+  Theme,
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -586,33 +587,56 @@ function formatTimeRemaining(milliseconds: number): string {
   return `${seconds}s`;
 }
 
-export function formatLoopWidget(state: LoopState, width: number, now = Date.now()): string {
+export type WidgetTheme = Pick<Theme, "fg" | "bold">;
+
+const PLAIN_THEME: WidgetTheme = { fg: (_color, text) => text, bold: (text) => text };
+
+function loopWidgetIcon(state: LoopState, theme: WidgetTheme): string {
+  if (state.status === "stopping") return theme.fg("warning", "■");
+  if (state.status === "pausing") return theme.fg("warning", "⏸");
+  if (state.status === "paused") return theme.fg("muted", "⏸");
+  if (state.phase === "waiting") return theme.fg("warning", "◷");
+  if (state.phase === "retrying") return theme.fg("warning", "↻");
+  return theme.fg("accent", "↻");
+}
+
+function loopWidgetHints(state: LoopState): string | undefined {
+  if (state.status === "active") return "/loop pause · /loop end";
+  if (state.status === "paused") return "/loop resume · /loop end";
+  return undefined;
+}
+
+export function formatLoopWidget(
+  state: LoopState,
+  width: number,
+  now = Date.now(),
+  theme: WidgetTheme = PLAIN_THEME,
+): string {
   const prompt = state.prompt.replace(/\s+/g, " ").trim();
-  const delay = state.delay > 0 ? ` · delay ${formatLoopDelay(state.delay)}` : "";
-  const timeframe = state.endsAt === undefined
-    ? ""
-    : state.endsAt <= now
-      ? " · deadline reached"
-      : ` · ${formatTimeRemaining(state.endsAt - now)} left`;
-  const retries = (state.retryCount ?? 0) > 0
-    ? ` · retry ${state.retryCount}/${DEFAULT_LOOP_RETRIES}`
-    : "";
-  const iteration = state.endsAt === undefined ? "" : ` · #${state.currentIteration}`;
+  const status = state.status === "active" ? [] : [state.status];
+  let progress: string[];
   if (state.status === "pausing" || state.status === "stopping") {
-    return truncateToWidth(`loop ${state.status}${iteration}${timeframe}${delay}${retries} · ${prompt}`, width, "…");
+    progress = state.endsAt === undefined ? [] : [`#${state.currentIteration}`];
+  } else if (state.endsAt !== undefined) {
+    progress = [`#${state.currentIteration}`];
+  } else {
+    const futureIterations = state.pendingRetune ?? state.remainingBudget;
+    progress = [`${futureIterations + 1}/${state.currentIteration + futureIterations}`];
   }
-  if (state.endsAt !== undefined) {
-    return truncateToWidth(
-      `loop ${state.status}${iteration}${timeframe}${delay}${retries} · ${prompt}`,
-      width,
-      "…",
-    );
-  }
-  const futureIterations = state.pendingRetune ?? state.remainingBudget;
-  const remainingIterations = futureIterations + 1;
-  const totalIterations = state.currentIteration + futureIterations;
+  const details = [
+    ...(state.endsAt === undefined
+      ? []
+      : [state.endsAt <= now ? "deadline reached" : `${formatTimeRemaining(state.endsAt - now)} left`]),
+    ...(state.delay > 0 ? [`delay ${formatLoopDelay(state.delay)}`] : []),
+    ...((state.retryCount ?? 0) > 0 ? [`retry ${state.retryCount}/${DEFAULT_LOOP_RETRIES}`] : []),
+  ];
+  const separator = theme.fg("dim", " · ");
+  const summary = [[...status, ...progress].join(" "), ...details].filter(Boolean).join(" · ");
+  const hints = loopWidgetHints(state);
   return truncateToWidth(
-    `loop ${state.status} ${remainingIterations}/${totalIterations}${delay}${retries} · ${prompt}`,
+    `${loopWidgetIcon(state, theme)} ${theme.fg("accent", theme.bold("LOOP"))}`
+      + `${summary ? ` ${theme.fg("muted", summary)}` : ""}${separator}${theme.fg("text", prompt)}`
+      + `${hints ? `${separator}${theme.fg("dim", hints)}` : ""}`,
     width,
     "…",
   );
@@ -718,8 +742,8 @@ export default function loopExtension(pi: ExtensionAPI): void {
     }
     // Replacing the widget invalidates Pi's parent layout caches. Requesting a
     // render alone can leave the previous line visible until another UI event.
-    ctx.ui.setWidget(LOOP_WIDGET_KEY, (_tui, _theme) => ({
-      render: (width) => [formatLoopWidget(state, width)],
+    ctx.ui.setWidget(LOOP_WIDGET_KEY, (_tui, theme) => ({
+      render: (width) => [formatLoopWidget(state, width, Date.now(), theme)],
       invalidate: () => {},
     }), { placement: "belowEditor" });
   }

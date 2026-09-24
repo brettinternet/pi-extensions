@@ -13,6 +13,8 @@ import waitExtension, {
   readWaitState,
 } from "../../extensions/wait/index.ts";
 
+const plainTheme = { fg: (_color: string, text: string) => text, bold: (text: string) => text };
+
 type WaitEntry = { type: "custom"; customType: string; data: unknown };
 
 function createHarness(entries: WaitEntry[] = []) {
@@ -37,7 +39,7 @@ function createHarness(entries: WaitEntry[] = []) {
     ui: {
       setWidget: (key: string, value: unknown) => {
         widgets.push({ key, value });
-        if (typeof value === "function") value({ requestRender: () => { widgetRenderRequests += 1; } }, {});
+        if (typeof value === "function") value({ requestRender: () => { widgetRenderRequests += 1; } }, plainTheme);
       },
       notify: (message: string) => notifications.push(message),
       addAutocompleteProvider: (factory: (current: AutocompleteProvider) => AutocompleteProvider) => {
@@ -98,7 +100,7 @@ function latestWidgetLines(harness: ReturnType<typeof createHarness>, width = 80
   const value = [...harness.widgets].reverse().find(({ key }) => key === WAIT_WIDGET_KEY)?.value;
   if (Array.isArray(value)) return value as string[];
   if (typeof value !== "function") return undefined;
-  return (value({ requestRender: () => {} }, {}) as { render: (width: number) => string[] }).render(width);
+  return (value({ requestRender: () => {} }, plainTheme) as { render: (width: number) => string[] }).render(width);
 }
 
 function sleep(milliseconds: number): Promise<void> {
@@ -131,11 +133,17 @@ describe("wait parser and formatting", () => {
     expect(formatRemaining(61_000)).toBe("1m 1s");
     expect(formatRemaining(3_600_000)).toBe("1h");
     const line = formatWaitWidget({ prompt: "check\nall deployment environments", dueAt: 62_000 }, 36, 1_000);
-    expect(stripTerminalSequences(line)).toBe("wait 1m 1s · /wait pause · /wait ca…");
+    expect(stripTerminalSequences(line)).toBe("◷ WAIT 1m 1s · check all deployment…");
     expect(visibleWidth(line)).toBe(36);
 
+    const themed = formatWaitWidget({ prompt: "check", dueAt: 62_000 }, 200, 1_000, {
+      fg: (color: string, text: string) => `[${color}]${text}`,
+      bold: (text: string) => `*${text}*`,
+    });
+    expect(themed.startsWith("[warning]◷ [accent]*WAIT* [muted]1m 1s")).toBe(true);
+
     const paused = formatWaitWidget({ prompt: "check again", remaining: 61_000, paused: true }, 80);
-    expect(stripTerminalSequences(paused)).toBe("wait paused (1m 1s) · /wait resume · /wait cancel · check again");
+    expect(stripTerminalSequences(paused)).toBe("⏸ WAIT paused 1m 1s · check again · /wait resume · /wait cancel");
   });
 
   test("reads the latest persisted state", () => {
@@ -246,7 +254,7 @@ describe("wait lifecycle", () => {
     harness.setIdle(false);
 
     await harness.submit("10ms inspect after settling", "followUp");
-    expect(latestWidgetLines(harness)?.[0]).toContain("wait queued");
+    expect(latestWidgetLines(harness)?.[0]).toContain("WAIT queued");
     await sleep(15);
     expect(harness.messages).toEqual([]);
 
@@ -277,7 +285,7 @@ describe("wait lifecycle", () => {
       details: { duration: "10ms", delay: 10, prompt: "check for review feedback" },
       terminate: true,
     });
-    expect(latestWidgetLines(harness)?.[0]).toContain("wait queued");
+    expect(latestWidgetLines(harness)?.[0]).toContain("WAIT queued");
     await sleep(15);
     expect(harness.messages).toEqual([]);
 

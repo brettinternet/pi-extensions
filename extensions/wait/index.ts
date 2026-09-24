@@ -1,4 +1,4 @@
-import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
 import type { AutocompleteProvider, AutocompleteSuggestions } from "@earendil-works/pi-tui";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
@@ -34,6 +34,9 @@ export type WaitState = { version: 1; pending: PendingWait | null };
 
 type WaitEntry = { type?: string; customType?: string; data?: unknown };
 type ArgumentCompletion = { value: string; label: string; description?: string };
+export type WidgetTheme = Pick<Theme, "fg" | "bold">;
+
+const PLAIN_THEME: WidgetTheme = { fg: (_color, text) => text, bold: (text) => text };
 
 export function parseWaitDuration(value: string): number {
   const match = DURATION_PATTERN.exec(value.trim());
@@ -120,16 +123,22 @@ export function readWaitState(entries: readonly WaitEntry[] | readonly unknown[]
   return undefined;
 }
 
-export function formatWaitWidget(wait: PendingWait, width: number, now = Date.now()): string {
+export function formatWaitWidget(
+  wait: PendingWait,
+  width: number,
+  now = Date.now(),
+  theme: WidgetTheme = PLAIN_THEME,
+): string {
   const prompt = wait.prompt.replace(/\s+/g, " ").trim();
-  const state = wait.paused
-    ? `paused (${formatRemaining(wait.remaining)})`
+  const [icon, state, hints] = wait.paused
+    ? [theme.fg("muted", "⏸"), `paused ${formatRemaining(wait.remaining)}`, "/wait resume · /wait cancel"]
     : wait.dueAt === undefined
-      ? "queued"
-      : formatRemaining(wait.dueAt - now);
-  const action = wait.paused ? "/wait resume" : wait.dueAt === undefined ? "" : "/wait pause";
+      ? [theme.fg("muted", "◌"), "queued", "/wait cancel"]
+      : [theme.fg("warning", "◷"), formatRemaining(wait.dueAt - now), "/wait pause · /wait cancel"];
+  const separator = theme.fg("dim", " · ");
   return truncateToWidth(
-    `wait ${state} · ${action ? `${action} · ` : ""}/wait cancel · ${prompt}`,
+    `${icon} ${theme.fg("accent", theme.bold("WAIT"))} ${theme.fg("muted", state)}${separator}`
+      + `${theme.fg("text", prompt)}${separator}${theme.fg("dim", hints)}`,
     width,
     "…",
   );
@@ -247,10 +256,10 @@ export default function waitExtension(pi: ExtensionAPI): void {
       requestWidgetRender?.();
       return;
     }
-    ctx.ui.setWidget(WAIT_WIDGET_KEY, (tui, _theme) => {
+    ctx.ui.setWidget(WAIT_WIDGET_KEY, (tui, theme) => {
       requestWidgetRender = () => tui.requestRender();
       return {
-        render: (width) => pending ? [formatWaitWidget(pending, width)] : [],
+        render: (width) => pending ? [formatWaitWidget(pending, width, Date.now(), theme)] : [],
         invalidate: () => {},
         dispose: () => { requestWidgetRender = undefined; },
       };
