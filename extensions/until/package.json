@@ -1,6 +1,6 @@
 {
   "name": "pi-until",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Session-scoped shell-condition watches and recurring agent follow-ups for Pi.",
   "type": "module",
   "license": "MIT",
