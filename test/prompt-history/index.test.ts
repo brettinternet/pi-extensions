@@ -132,6 +132,24 @@ test("picker searches, toggles scope, restores complete selection and cancels", 
   expect(results).toEqual(["Other prompt", undefined, undefined]);
 });
 
+test("Ctrl+C clears the populated search without closing history", () => {
+  const prompts: Prompt[] = [
+    { cwd: "/project", text: "Newest", timestamp: 2 },
+    { cwd: "/project", text: "Older", timestamp: 1 },
+  ];
+  const results: Array<string | undefined> = [];
+  let renders = 0;
+  const theme = { fg: (_color: string, value: string) => value };
+  const picker = new HistoryPicker(prompts, "/project", { requestRender: () => { renders++; } }, theme as any, (value) => results.push(value), "Older");
+  expect(picker.render(80).join("\n")).not.toContain("Newest");
+  picker.handleInput("\x03");
+  expect(renders).toBe(1);
+  expect(results).toEqual([]);
+  expect(picker.render(80).join("\n")).toContain("Newest");
+  picker.handleInput("\r");
+  expect(results).toEqual(["Newest"]);
+});
+
 test("picker highlights matches, shows deep snippets and global source directories", () => {
   const prompts: Prompt[] = [
     { cwd: "/project", text: `${"prefix ".repeat(25)}distinctive phrase`, timestamp: Date.now() },

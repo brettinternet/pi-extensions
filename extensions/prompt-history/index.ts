@@ -76,11 +76,15 @@ export class HistoryPicker {
   }
 
   handleInput(data: string): void {
-    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+c") || matchesKey(data, "ctrl+r")) {
+    if (matchesKey(data, "escape") || matchesKey(data, "ctrl+r")) {
       this.done(undefined);
       return;
     }
-    if (matchesKey(data, "tab")) {
+    if (matchesKey(data, "ctrl+c")) {
+      this.input.setValue("");
+      this.selected = 0;
+      this.offset = 0;
+    } else if (matchesKey(data, "tab")) {
       this.scope = this.scope === "project" ? "global" : "project";
       this.selected = 0;
       this.offset = 0;
@@ -155,7 +159,7 @@ export class HistoryPicker {
       }
     }
     lines.push(row(""));
-    lines.push(row(this.theme.fg("dim", ` ↑↓/C-p,n/C-k,j navigate · enter insert · tab ${this.scope === "project" ? "global" : "project"} · esc/C-r close · ${results.length} matches`)));
+    lines.push(row(this.theme.fg("dim", ` ↑↓/C-p,n/C-k,j navigate · enter insert · tab ${this.scope === "project" ? "global" : "project"} · C-c clear · esc/C-r close · ${results.length} matches`)));
     lines.push(border("╰" + "─".repeat(inner) + "╯"));
     return lines;
   }

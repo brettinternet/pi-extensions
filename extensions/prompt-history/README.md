@@ -8,6 +8,7 @@ Press `Ctrl+R` (or run `/prompt-history`) to search prompts from saved Pi sessio
 | `Up`/`Down`, `Ctrl+P`/`Ctrl+N`, `Ctrl+K`/`Ctrl+J`, `PageUp`/`PageDown` | Select |
 | `Enter` | Insert prompt |
 | `Tab` | Toggle **Project** (this directory) and **Global** (all directories) |
+| `Ctrl+C` | Clear the search input without closing history |
 | `Esc` or `Ctrl+R` | Close and keep the original editor text |
 
 An empty query lists newest first. Search ranks exact phrases, then all words, then fuzzy matches, and highlights matches. Global results show each prompt's directory.
