@@ -1,6 +1,7 @@
 {
   "name": "@brettinternet/pi-footer",
   "version": "0.1.0",
+  "private": true,
   "description": "Responsive Nerd Font footer for the Pi coding agent",
   "type": "module",
   "license": "MIT",

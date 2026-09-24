@@ -39,7 +39,6 @@ Or install a published extension:
 pi install npm:@brettinternet/pi-copy-prompt
 pi install npm:pi-live-codex
 pi install npm:@brettinternet/pi-progress
-pi install npm:@brettinternet/pi-footer
 pi install npm:@brettinternet/pi-loop
 pi install npm:pi-wait
 pi install npm:pi-until
