@@ -1,5 +1,5 @@
 import { randomUUID } from "node:crypto";
-import { describe, expect, test } from "bun:test";
+import { describe, expect, spyOn, test } from "bun:test";
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { DEFAULT_CONFIG, type Config } from "../../extensions/title/config.js";
 import titleExtension, {
@@ -212,7 +212,92 @@ describe("title command", () => {
   });
 });
 
+test("a deferred terminal update ignores a context invalidated by session replacement", () => {
+  const handlers = new Map<string, (...args: unknown[]) => unknown>();
+  const callbacks: Array<() => void> = [];
+  const timer = spyOn(globalThis, "setTimeout").mockImplementation(((callback: () => void) => {
+    callbacks.push(callback);
+    return 1 as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout);
+  let stale = false;
+  const terminalTitles: string[] = [];
+  const pi = {
+    on: (name: string, handler: unknown) => handlers.set(name, handler as (...args: unknown[]) => unknown),
+    registerCommand: () => {},
+    getSessionName: () => {
+      if (stale) throw new Error("This extension ctx is stale after session replacement or reload.");
+      return "Old title";
+    },
+  } as unknown as ExtensionAPI;
+  const ctx = {
+    get hasUI() {
+      if (stale) throw new Error("This extension ctx is stale after session replacement or reload.");
+      return true;
+    },
+    ui: { setTitle: (title: string) => terminalTitles.push(title) },
+  } as unknown as ExtensionCommandContext;
+
+  try {
+    titleExtension(pi);
+    handlers.get("session_start")!({ type: "session_start" }, ctx);
+    callbacks.shift()!();
+    expect(terminalTitles).toEqual(["Old title"]);
+
+    handlers.get("session_info_changed")!({ type: "session_info_changed" }, ctx);
+    stale = true;
+    expect(() => callbacks.shift()!()).not.toThrow();
+    expect(terminalTitles).toEqual(["Old title"]);
+  } finally {
+    timer.mockRestore();
+  }
+});
+
 describe("automatic title generation", () => {
+  test("ignores a completion from an invalidated session", async () => {
+    const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
+    process.env.PI_CODING_AGENT_DIR = `/tmp/pi-title-test-${randomUUID()}`;
+    try {
+      const handlers = new Map<string, (...args: unknown[]) => unknown>();
+      let stale = false;
+      let resolveCompletion!: (response: { content: Array<{ type: string; text: string }>; stopReason: string }) => void;
+      const completion = new Promise<{ content: Array<{ type: string; text: string }>; stopReason: string }>((resolve) => {
+        resolveCompletion = resolve;
+      });
+      let markStarted!: () => void;
+      const started = new Promise<void>((resolve) => { markStarted = resolve; });
+      const pi = {
+        on: (name: string, handler: unknown) => handlers.set(name, handler as (...args: unknown[]) => unknown),
+        registerCommand: () => {},
+        getSessionName: () => {
+          if (stale) throw new Error("This extension ctx is stale after session replacement or reload.");
+          return undefined;
+        },
+        setSessionName: () => { throw new Error("old session must not be titled"); },
+      } as unknown as ExtensionAPI;
+      const ctx = {
+        model: activeModel,
+        modelRegistry: { streamSimple: () => {
+          markStarted();
+          return { result: () => completion };
+        } },
+        get hasUI() {
+          if (stale) throw new Error("This extension ctx is stale after session replacement or reload.");
+          return true;
+        },
+        ui: { notify: () => { throw new Error("old session must not be notified"); } },
+      } as unknown as ExtensionCommandContext;
+      titleExtension(pi);
+      handlers.get("before_agent_start")!({ prompt: "Old session request" }, ctx);
+      await started;
+      stale = true;
+      resolveCompletion({ content: [{ type: "text", text: "Old session title" }], stopReason: "stop" });
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    } finally {
+      if (previousAgentDir === undefined) delete process.env.PI_CODING_AGENT_DIR;
+      else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
+    }
+  });
+
   test("starts from the request without delaying the main agent", async () => {
     const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
     process.env.PI_CODING_AGENT_DIR = `/tmp/pi-title-test-${randomUUID()}`;

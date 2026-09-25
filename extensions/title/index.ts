@@ -191,6 +191,11 @@ export default function titleExtension(pi: ExtensionAPI) {
   let backgroundGeneration: Promise<string | undefined> | undefined;
   let lifecycle = 0;
   let completionContext: ExtensionContext | undefined;
+  let titleTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function isStaleContextError(error: unknown): boolean {
+    return error instanceof Error && error.message.startsWith("This extension ctx is stale");
+  }
 
   function applyTerminalTitle(ctx: ExtensionContext, title = pi.getSessionName()): void {
     if (ctx.hasUI && title) ctx.ui.setTitle(title);
@@ -204,9 +209,17 @@ export default function titleExtension(pi: ExtensionAPI) {
   }
 
   function deferTerminalTitle(ctx: ExtensionContext): void {
+    if (titleTimer) clearTimeout(titleTimer);
     const expectedLifecycle = lifecycle;
-    setTimeout(() => {
-      if (lifecycle === expectedLifecycle) applyTerminalTitle(ctx);
+    titleTimer = setTimeout(() => {
+      titleTimer = undefined;
+      if (lifecycle !== expectedLifecycle) return;
+      try {
+        applyTerminalTitle(ctx);
+      } catch (error) {
+        // Session replacement can invalidate ctx before the next session event cancels this timer.
+        if (!isStaleContextError(error)) throw error;
+      }
     }, 0);
   }
 
@@ -285,7 +298,7 @@ export default function titleExtension(pi: ExtensionAPI) {
     backgroundGeneration = request;
     void request
       .catch((error) => {
-        if (lifecycle !== expectedLifecycle) return;
+        if (lifecycle !== expectedLifecycle || isStaleContextError(error)) return;
         const message = error instanceof Error ? error.message : String(error);
         if (ctx.hasUI) ctx.ui.notify(message, "error");
         else console.warn(`[pi-title] ${message}`);
@@ -297,6 +310,8 @@ export default function titleExtension(pi: ExtensionAPI) {
 
   function resetGeneration(): void {
     lifecycle += 1;
+    if (titleTimer) clearTimeout(titleTimer);
+    titleTimer = undefined;
     generationController?.abort();
     generationController = undefined;
     backgroundGeneration = undefined;
