@@ -1,6 +1,6 @@
 {
   "name": "pi-wait",
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Send a queued Pi message after a timeout",
   "type": "module",
   "license": "MIT",
