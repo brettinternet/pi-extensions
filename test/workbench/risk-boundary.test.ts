@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import {
   CONFIRMATION_ACKNOWLEDGED_PREFIX,
   CONFIRMATION_RELEASED_PREFIX,
@@ -61,6 +61,8 @@ async function createHarness(options: {
   const mode = options.tuiDecision === undefined ? "print" : "tui";
   const ctx = {
     cwd: "/repo",
+    tools: [],
+    executeTool: async () => { throw new Error("unexpected nested tool call"); },
     mode,
     hasUI: mode === "tui",
     isProjectTrusted: () => options.trusted ?? true,
@@ -70,7 +72,7 @@ async function createHarness(options: {
       getBranch: () => [],
     },
     ui: { confirm: async () => options.tuiDecision ?? false, notify: () => {} },
-  } as unknown as ExtensionContext;
+  } as unknown as ExtensionToolContext;
   const voiceDecisions = options.voiceDecisions ??
     (options.voiceDecision ? [options.voiceDecision] : []);
   if (voiceDecisions.length > 0) {

@@ -2,7 +2,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
-import type { ExtensionAPI, ExtensionContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionToolContext, ToolDefinition } from "@earendil-works/pi-coding-agent";
 import workbenchExtension from "../../extensions/workbench/index.ts";
 import {
   CONFIRMATION_ACKNOWLEDGED_PREFIX,
@@ -193,6 +193,8 @@ async function createHarness(options: {
   const mode = options.voiceDecision ? "print" : "print";
   const ctx = {
     cwd: "/repo",
+    tools: [],
+    executeTool: async () => { throw new Error("unexpected nested tool call"); },
     mode,
     hasUI: false,
     isProjectTrusted: () => true,
@@ -202,7 +204,7 @@ async function createHarness(options: {
       getBranch: () => branch,
     },
     ui: { confirm: async () => false, notify: () => {} },
-  } as unknown as ExtensionContext;
+  } as unknown as ExtensionToolContext;
 
   workbenchExtension(pi);
   lifecycle.get("session_start")!({}, ctx);

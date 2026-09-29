@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { describe, expect, test } from "bun:test";
 import type {
   ExtensionAPI,
-  ExtensionContext,
+  ExtensionToolContext,
   ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import workbenchExtension from "../../extensions/workbench/index.ts";
@@ -73,6 +73,8 @@ describe("workbench extension", () => {
     } as unknown as ExtensionAPI;
     const ctx = {
       cwd: "/repo",
+      tools: [],
+      executeTool: async () => { throw new Error("unexpected nested tool call"); },
       hasUI: false,
       isProjectTrusted: () => true,
       sessionManager: {
@@ -80,7 +82,7 @@ describe("workbench extension", () => {
         getSessionFile: () => "/tmp/session.jsonl",
         getBranch: () => [],
       },
-    } as unknown as ExtensionContext;
+    } as unknown as ExtensionToolContext;
 
     workbenchExtension(pi);
     lifecycle.get("session_start")!({}, ctx);
