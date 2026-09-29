@@ -46,6 +46,7 @@
   },
   "pi": {
     "extensions": [
+      "./extensions/ask-user-question/index.ts",
       "./extensions/copy-prompt/index.ts",
       "./extensions/live-codex/index.ts",
       "./extensions/loop/index.ts",

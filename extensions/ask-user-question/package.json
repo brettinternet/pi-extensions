@@ -1,0 +1,21 @@
+{
+  "name": "ask-user-question",
+  "version": "0.1.0",
+  "description": "Structured user questions for Pi with choices, custom answers, and previews",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/brettinternet/pi-extensions.git",
+    "directory": "extensions/ask-user-question"
+  },
+  "files": ["*.ts", "README.md"],
+  "keywords": ["pi-package", "pi-extension"],
+  "engines": { "node": ">=22.19.0" },
+  "peerDependencies": {
+    "@earendil-works/pi-coding-agent": ">=0.99.1",
+    "@earendil-works/pi-tui": ">=0.99.1",
+    "typebox": "*"
+  },
+  "pi": { "extensions": ["./index.ts"] }
+}
