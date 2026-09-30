@@ -52,7 +52,8 @@ The questionnaire stays in the bottom editor dock, not an overlay, and uses at m
 | --- | --- |
 | Tab / Shift+Tab or ← / → | Change question tab |
 | ↑ / ↓ or j / k | Choose an option |
-| Enter / Space | Select or toggle an option |
+| Space | Select an authored single option or toggle an authored multi-select option without advancing; ignored on the custom row |
+| Enter | Select and advance on an authored single option; toggle a multi-select option; required on the custom row and Submit |
 | Continue | Advance a multi-select question |
 | Submit, then Enter | Submit, including for a single question |
 | Escape | Discard all answers |
@@ -61,6 +62,8 @@ The questionnaire stays in the bottom editor dock, not an overlay, and uses at m
 | Alt+PgUp / Alt+PgDn | Scroll the question or preview in either mode |
 | PgUp / PgDn | Scroll the conversation in fullscreen; scroll the question in regular mode |
 | Ctrl+] | Collapse to a one-line hint or restore the questionnaire; Escape still cancels while collapsed |
+
+The dock height stays steady when selecting or changing tabs; only Ctrl+] collapses it.
 
 In fullscreen, the mouse wheel scrolls the questionnaire when over it and the conversation when over a reply. In multi-select questions, saved custom text and selected options can coexist.
 

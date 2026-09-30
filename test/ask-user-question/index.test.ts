@@ -111,6 +111,34 @@ describe("terminal questionnaire", () => {
     }
     ui.dispose();
   });
+  test("Space selects in place and Enter advances without shrinking the dock", () => {
+    const { ui, results } = dialog();
+    const height = ui.render(80).length;
+    ui.handleInput(" ");
+    expect(ui.render(80).join("\n")).toContain("[✓ Store]");
+    expect(ui.render(80).join("\n")).toContain("❯ [✓] SQLite");
+    expect(ui.render(80).join("\n")).not.toContain("Review your answers");
+    ui.handleInput(down); ui.handleInput(" ");
+    expect(ui.render(80).join("\n")).toContain("❯ [✓] Postgres");
+    expect(ui.render(80).length).toBe(height);
+    ui.handleInput(enter);
+    expect(ui.render(80).join("\n")).toContain("Review your answers");
+    expect(ui.render(80).length).toBe(height);
+    ui.handleInput(" ");
+    expect(results).toHaveLength(0);
+    ui.handleInput(enter);
+    expect(results[0]?.answers[0]?.selected).toEqual(["Postgres"]);
+  });
+  test("Space cannot accidentally activate custom editing or Continue", () => {
+    const { ui } = dialog([{ ...question, multiSelect: true }]);
+    ui.handleInput(" "); ui.handleInput(down); ui.handleInput(down); ui.handleInput(" ");
+    expect(ui.render(80).join("\n")).not.toContain("Your answer");
+    ui.handleInput(down); ui.handleInput(" ");
+    expect(ui.render(80).join("\n")).not.toContain("Review your answers");
+    ui.handleInput(enter);
+    expect(ui.render(80).join("\n")).toContain("Review your answers");
+    ui.dispose();
+  });
   test("requires explicit review and submission", () => {
     const { ui, results } = dialog();
     ui.handleInput(enter);

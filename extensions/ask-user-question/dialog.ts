@@ -112,12 +112,12 @@ export class Questionnaire implements Focusable {
           const draft = this.drafts[this.tab]!;
           if (this.cursor < q.options.length) {
             select(q, draft, this.cursor);
-            if (!q.multiSelect) this.moveTab(1);
-          } else if (this.cursor === q.options.length) {
+            if (!q.multiSelect && matchesKey(data, Key.enter)) this.moveTab(1);
+          } else if (this.cursor === q.options.length && matchesKey(data, Key.enter)) {
             this.editing = true;
             this.followCursor = true;
             this.editor.setText(draft.custom);
-          } else if (answered(draft)) this.moveTab(1);
+          } else if (this.cursor > q.options.length && matchesKey(data, Key.enter) && answered(draft)) this.moveTab(1);
         }
       }
     }
@@ -174,9 +174,14 @@ export class Questionnaire implements Focusable {
     }
     this.maxOffset = Math.max(0, lines.length - height);
     this.offset = Math.max(0, Math.min(this.offset, this.maxOffset));
-    const help = this.editing ? "Ctrl+] hide · Enter save · Shift+Enter newline · Esc cancel" : "Ctrl+] hide · Tab tabs · ↑↓/j/k choose · Enter/Space select · Esc cancel";
+    const help = this.editing ? "Enter save · Shift+Enter newline · Ctrl+] hide · Esc cancel"
+      : !q ? "Enter submit · Tab edit answers · Ctrl+] hide · Esc cancel"
+      : `${q.multiSelect ? "Space/Enter toggle · Continue next" : "Space select · Enter next"} · ↑↓/j/k choose · Tab tabs · Ctrl+] hide · Esc cancel`;
     const scroll = lines.length > height ? `${this.offset + 1}–${Math.min(this.offset + height, lines.length)}/${lines.length} · Alt+PgUp/PgDn scroll · ` : "";
-    return [this.theme.fg("accent", heading), ...lines.slice(this.offset, this.offset + height),
+    const visible = lines.slice(this.offset, this.offset + height);
+    // Only Ctrl+] changes the dock height, not selecting a shorter answer or tab.
+    while (visible.length < height) visible.push("");
+    return [this.theme.fg("accent", heading), ...visible,
       this.theme.fg("dim", truncateToWidth(`${scroll}${help}`, width)),
     ].map((line) => truncateToWidth(line, width));
   }
