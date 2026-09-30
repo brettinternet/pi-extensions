@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import { initTheme, type KeybindingsManager, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, visibleWidth, type TUI } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, visibleWidth, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 import { Value } from "typebox/value";
 import extension, { askNative } from "../../extensions/ask-user-question/index.js";
 import { Questionnaire } from "../../extensions/ask-user-question/dialog.js";
@@ -17,6 +17,10 @@ function dialog(questions = [question], signal?: AbortSignal, keys?: Pick<Keybin
   return { ui, results, tui };
 }
 const enter = "\r", down = "\x1b[B", tab = "\t", escape = "\x1b";
+const wheel = (wheelDelta: number, overrides: Partial<TuiMouseEvent> = {}): TuiMouseEvent => ({
+  type: "wheel", button: "none", x: 5, y: 5, screenX: 5, screenY: 5, width: 80, height: 20,
+  shift: false, alt: false, ctrl: false, wheelDelta, ...overrides,
+});
 
 describe("schema", () => {
   test("limits question count, option count and labels", () => {
@@ -133,6 +137,35 @@ describe("terminal questionnaire", () => {
     ui.handleInput("\x1b[5~"); expect(ui.render(80).join("\n")).not.toBe(bottom);
     ui.handleInput(down); ui.render(80); ui.handleInput("k");
     expect(ui.render(80).join("\n")).toContain("Example");
+    ui.dispose();
+  });
+  test("mouse wheel scrolls only inside the questionnaire and clamps at both ends", () => {
+    const { ui, results } = dialog([{ ...question, question: Array.from({ length: 40 }, (_, i) => `Line ${i}`).join("\n") }]);
+    ui.render(80);
+    ui.handleMouse(wheel(-1000));
+    const top = ui.render(80).join("\n");
+    expect(ui.handleMouse(wheel(3))).toEqual({ handled: true });
+    expect(ui.render(80).join("\n")).not.toBe(top);
+    ui.handleMouse(wheel(-3)); expect(ui.render(80).join("\n")).toBe(top);
+    ui.handleMouse(wheel(1000)); const bottom = ui.render(80).join("\n");
+    ui.handleMouse(wheel(1000)); expect(ui.render(80).join("\n")).toBe(bottom);
+    ui.handleMouse(wheel(-1)); expect(ui.render(80).join("\n")).not.toBe(bottom);
+    ui.handleMouse(wheel(-1000)); expect(ui.render(80).join("\n")).toBe(top);
+    for (const ignored of [{ x: -1 }, { y: 20 }, { x: 80 }, { shift: true }, { alt: true }, { ctrl: true }, { type: "click" as const }, { wheelDelta: NaN }]) {
+      expect(ui.handleMouse(wheel(3, ignored))).toBeUndefined();
+      expect(ui.render(80).join("\n")).toBe(top);
+    }
+    expect(results).toHaveLength(0);
+    ui.handleInput(escape);
+    expect(ui.handleMouse(wheel(3))).toBeUndefined();
+  });
+  test("typing after mouse scrolling brings the editor cursor back into view", () => {
+    const { ui } = dialog([{ ...question, question: "Long question\n".repeat(30) }]);
+    ui.focused = true;
+    ui.handleInput("j"); ui.handleInput("j"); ui.handleInput(enter); ui.render(80);
+    ui.handleMouse(wheel(-100)); ui.render(80);
+    ui.handleInput("answer");
+    expect(ui.render(80).some((line) => line.includes(CURSOR_MARKER))).toBe(true);
     ui.dispose();
   });
   test("escape discards partial answers and abort closes exactly once", () => {

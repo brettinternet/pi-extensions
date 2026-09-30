@@ -57,10 +57,11 @@ A **Type something.** row is always included. Authored `Other` and `Type somethi
 | Shift+Enter while typing | Add a newline |
 | Ctrl+C while typing | Clear the whole draft (follows Pi's `app.clear` binding) |
 | Page Up / Page Down | Scroll long questions or previews |
+| Mouse wheel over questionnaire | Scroll in Pi fullscreen mode |
 | Enter on Submit | Submit only when every question is answered |
 | Escape | Cancel the whole questionnaire; discard all answers |
 
-Selections are preserved while navigating tabs. Single-select custom answers replace the selected option; multi-select custom answers can accompany selected options. Reopen the custom row, clear its text, and press Enter to withdraw a custom answer without losing selected options. A single question still requires confirmation on the Submit tab. Previews render below the focused option list and can be scrolled. Rendering adapts to terminal width and height.
+Selections are preserved while navigating tabs. Single-select custom answers replace the selected option; multi-select custom answers can accompany selected options. Reopen the custom row, clear its text, and press Enter to withdraw a custom answer without losing selected options. A single question still requires confirmation on the Submit tab. Previews render below the focused option list and can be scrolled. Rendering adapts to terminal width and height. In fullscreen mode, the mouse wheel scrolls while hovering over the questionnaire, without changing choices. Modified wheel gestures are left to the host. In regular mode the terminal owns wheel scrolling; use Page Up / Page Down to scroll questionnaire content.
 
 ## Results and hosts
 

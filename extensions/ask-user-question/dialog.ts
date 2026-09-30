@@ -1,5 +1,5 @@
 import { getMarkdownTheme, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, Editor, Key, Markdown, matchesKey, truncateToWidth, wrapTextWithAnsi, type Focusable, type TUI } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, Editor, Key, Markdown, matchesKey, truncateToWidth, wrapTextWithAnsi, type Focusable, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { answered, newDrafts, result, select, summary, type Question, type Result } from "./model.js";
 
 /** One interaction owns its drafts, editor, and cancellation listener. */
@@ -9,6 +9,7 @@ export class Questionnaire implements Focusable {
   private cursor = 0;
   private editing = false;
   private offset = 0;
+  private maxOffset = 0;
   private followCursor = true;
   private finished = false;
   private readonly drafts;
@@ -57,10 +58,21 @@ export class Questionnaire implements Focusable {
     this.followCursor = true;
     this.tui.requestRender();
   }
+  handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
+    if (this.finished || event.type !== "wheel" || event.shift || event.alt || event.ctrl ||
+      event.x < 0 || event.y < 0 || event.x >= event.width || event.y >= event.height ||
+      !Number.isFinite(event.wheelDelta) || !event.wheelDelta) return;
+    this.offset = Math.max(0, Math.min(this.maxOffset, this.offset + Math.trunc(event.wheelDelta)));
+    this.followCursor = false;
+    this.tui.requestRender();
+    return { handled: true };
+  }
+
   handleInput(data: string): void {
     if (this.finished) return;
     if (matchesKey(data, Key.escape)) { this.finish(true); return; }
     if (this.editing) {
+      this.followCursor = true;
       if (this.keys ? this.keys.matches(data, "app.clear") : matchesKey(data, Key.ctrl("c"))) this.editor.setText("");
       else this.editor.handleInput(data);
       this.tui.requestRender();
@@ -144,7 +156,8 @@ export class Questionnaire implements Focusable {
       if (anchor < this.offset) this.offset = anchor;
       if (anchor >= this.offset + height) this.offset = anchor - height + 1;
     }
-    this.offset = Math.max(0, Math.min(this.offset, lines.length - height));
+    this.maxOffset = Math.max(0, lines.length - height);
+    this.offset = Math.max(0, Math.min(this.offset, this.maxOffset));
     const help = this.editing ? "Enter save · Shift+Enter newline · Esc cancel" : "Tab/←→ tabs · ↑↓/j/k choose · Enter/Space select · Esc cancel";
     const scroll = lines.length > height ? `${this.offset + 1}–${Math.min(this.offset + height, lines.length)}/${lines.length} · PgUp/PgDn scroll · ` : "";
     return [this.theme.fg("accent", heading), ...lines.slice(this.offset, this.offset + height),
