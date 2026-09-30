@@ -20,10 +20,11 @@ export const outputSchema = Type.Object({
     header: Type.String(),
     selected: Type.Array(Type.String()),
     custom: Type.String(),
+    note: Type.Optional(Type.String()),
   })),
 });
 export type Result = Static<typeof outputSchema>;
-export interface Draft { selected: Set<number>; custom: string }
+export interface Draft { selected: Set<number>; custom: string; note: string }
 
 export function validate(questions: Question[]): void {
   for (const q of questions) {
@@ -40,7 +41,7 @@ export function validate(questions: Question[]): void {
   }
 }
 
-export const newDrafts = (questions: Question[]): Draft[] => questions.map(() => ({ selected: new Set<number>(), custom: "" }));
+export const newDrafts = (questions: Question[]): Draft[] => questions.map(() => ({ selected: new Set<number>(), custom: "", note: "" }));
 export const answered = (draft: Draft): boolean => draft.selected.size > 0 || !!draft.custom.trim();
 export function select(q: Question, draft: Draft, index: number): void {
   if (q.multiSelect) {
@@ -56,10 +57,11 @@ export function result(questions: Question[], drafts: Draft[], cancelled: boolea
     question: q.question, header: q.header,
     selected: q.options.filter((_, index) => drafts[i]!.selected.has(index)).map((o) => o.label),
     custom: drafts[i]!.custom.trim(),
+    ...(drafts[i]!.note.trim() ? { note: drafts[i]!.note.trim() } : {}),
   })) };
 }
 export function summary(value: Result): string {
   return value.cancelled ? "User cancelled the questionnaire. No answers were submitted." : value.answers.map((a) =>
-    `${a.header}: ${[...a.selected, ...(a.custom ? [`User wrote: ${a.custom}`] : [])].join("; ")}`,
+    `${a.header}: ${[...a.selected, ...(a.custom ? [`User wrote: ${a.custom}`] : []), ...(a.note ? [`Note: ${a.note}`] : [])].join("; ")}`,
   ).join("\n");
 }

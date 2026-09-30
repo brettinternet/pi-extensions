@@ -7,7 +7,7 @@ import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dis
 import { Value } from "typebox/value";
 import extension, { askNative } from "../../extensions/ask-user-question/index.js";
 import { Questionnaire } from "../../extensions/ask-user-question/dialog.js";
-import { parameters, validate, type Question, type Result } from "../../extensions/ask-user-question/model.js";
+import { parameters, summary, validate, type Question, type Result } from "../../extensions/ask-user-question/model.js";
 
 const question: Question = { header: "Store", question: "Which store?", options: [
   { label: "SQLite", description: "Embedded storage" }, { label: "Postgres", description: "Remote storage" },
@@ -52,7 +52,7 @@ describe("terminal questionnaire", () => {
   test("Ctrl+] collapses without losing choices, tabs, or unfinished text", () => {
     const { ui, results } = dialog([{ ...question, multiSelect: true }]);
     ui.focused = true;
-    ui.handleInput(enter); ui.handleInput("j"); ui.handleInput("j"); ui.handleInput(enter);
+    ui.handleInput(" "); ui.handleInput("j"); ui.handleInput("j"); ui.handleInput(enter);
     ui.handleInput("unfinished");
     ui.handleInput("\x1d");
     expect(ui.render(80)).toEqual(["Questions hidden · Ctrl+] show · Esc cancel"]);
@@ -62,8 +62,68 @@ describe("terminal questionnaire", () => {
     ui.handleInput("\x1d");
     expect(ui.render(80).join("\n")).toContain("unfinished");
     ui.handleInput(" answer"); ui.handleInput(enter);
-    ui.handleInput("\x1d"); ui.handleInput("\x1d"); ui.handleInput(tab); ui.handleInput(enter);
+    expect(results).toHaveLength(1);
     expect(results[0]?.answers[0]).toMatchObject({ selected: ["SQLite"], custom: "unfinished answer" });
+  });
+  test("n saves an optional note without submitting or changing the selection", () => {
+    const { ui, results } = dialog();
+    ui.handleInput(" "); ui.handleInput("n"); ui.handleInput("Keep backups");
+    ui.handleInput("\x1d"); ui.handleInput("\x1d"); ui.handleInput(" nightly");
+    ui.handleInput(enter);
+    expect(results).toHaveLength(0);
+    expect(ui.render(80).join("\n")).toContain("● SQLite");
+    expect(ui.render(80).join("\n")).toContain("Note: Keep backups nightly");
+    ui.handleInput("\x1b[13;1:2u");
+    expect(results).toHaveLength(0);
+    ui.handleInput(enter);
+    expect(results[0]?.answers[0]).toMatchObject({ selected: ["SQLite"], note: "Keep backups nightly" });
+    expect(summary(results[0]!)).toContain("Note: Keep backups nightly");
+  });
+  test("notes can be edited, discarded with Escape, or removed without losing the answer", () => {
+    const { ui, results } = dialog();
+    ui.handleInput(" "); ui.handleInput("n"); ui.handleInput("original"); ui.handleInput(enter);
+    ui.handleInput("n"); ui.handleInput(" changed"); ui.handleInput(escape);
+    expect(ui.render(80).join("\n")).toContain("Note: original");
+    expect(ui.render(80).join("\n")).not.toContain("changed");
+    ui.handleInput("n"); ui.handleInput("\x03"); ui.handleInput(enter);
+    expect(results).toHaveLength(0);
+    ui.handleInput(enter);
+    expect(results[0]?.answers[0]).toMatchObject({ selected: ["SQLite"] });
+    expect(results[0]?.answers[0]?.note).toBeUndefined();
+  });
+  test("notes are scoped to questions and do not count as answers", () => {
+    const { ui, results } = dialog([question, { ...question, header: "Second" }]);
+    ui.handleInput("n"); ui.handleInput("First note"); ui.handleInput(enter);
+    ui.handleInput("k"); ui.handleInput(enter);
+    expect(results).toHaveLength(0);
+    expect(ui.render(80).join("\n")).toContain("Unanswered: Store, Second");
+    ui.handleInput(tab); ui.handleInput("n"); ui.handleInput("Second note"); ui.handleInput(enter);
+    ui.handleInput(enter); ui.handleInput(tab); ui.handleInput(enter);
+    ui.handleInput("k"); ui.handleInput(enter);
+    expect(results[0]?.answers.map((a) => a.note)).toEqual(["First note", "Second note"]);
+  });
+  test("preview and empty options keep the same height and column width", () => {
+    initTheme("dark", false);
+    const questions = [{ ...question, options: [
+      { label: "Plain", description: "No extra detail" },
+      { label: "Short", description: "Small detail", preview: "Short preview" },
+      { label: "Long", description: "Large detail", preview: "Long preview\n\n".repeat(40) },
+    ] }];
+    for (const width of [80, 120]) {
+      const { ui } = dialog(questions);
+      const plain = ui.render(width);
+      expect(plain.join("\n")).not.toContain("┌─ Preview");
+      expect(plain.join("\n")).not.toContain("No preview available");
+      ui.handleInput(down); const short = ui.render(width);
+      ui.handleInput(down); const long = ui.render(width);
+      ui.handleInput(down); const custom = ui.render(width);
+      expect(short.length).toBe(plain.length);
+      expect(long.length).toBe(plain.length);
+      expect(custom.length).toBe(plain.length);
+      expect(short.every((line) => visibleWidth(line) <= width)).toBe(true);
+      expect(long.every((line) => visibleWidth(line) <= width)).toBe(true);
+      ui.dispose();
+    }
   });
   test("collapse retains scroll position and ignores held shortcut repeats", () => {
     const { ui } = dialog([{ ...question, question: "Question\n".repeat(40) }]);
@@ -121,7 +181,7 @@ describe("terminal questionnaire", () => {
     } as Theme;
     const tui = { requestRender() {}, terminal: { rows: 40 } } as unknown as TUI;
     const ui = new Questionnaire([question], tui, styled, () => {});
-    ui.handleInput(enter);
+    ui.handleInput(" ");
     const lines = ui.render(80);
     expect(lines.length).toBeLessThan(12);
     expect(lines).not.toContain("");
@@ -136,7 +196,7 @@ describe("terminal questionnaire", () => {
     expect(calls.some(([color, text]) => color === "accent" && text.startsWith("┌─ Preview"))).toBe(true);
     preview.dispose();
   });
-  test("Space and Enter select in place; Submit stays on the same screen", () => {
+  test("Space selects in place; Enter submits the focused single choice", () => {
     const { ui, results } = dialog();
     const height = ui.render(80).length;
     ui.handleInput(" ");
@@ -146,18 +206,15 @@ describe("terminal questionnaire", () => {
     ui.handleInput(down); ui.handleInput(" ");
     expect(ui.render(80).join("\n")).toContain("❯ ● Postgres");
     expect(ui.render(80).length).toBe(height);
-    ui.handleInput(enter);
-    expect(ui.render(80).join("\n")).toContain("○ SQLite");
-    expect(ui.render(80).join("\n")).toContain("Submit answer");
-    expect(ui.render(80).join("\n")).not.toContain("Review your answers");
+    expect(ui.render(80).join("\n")).not.toContain("Submit answer");
     expect(ui.render(80).join("\n")).not.toContain("[ ]");
-    expect(ui.render(80).length).toBe(height);
-    ui.handleInput(tab); ui.handleInput(" ");
+    ui.handleInput(tab);
+    expect(ui.render(80).join("\n")).toContain("❯ ● Postgres");
     expect(results).toHaveLength(0);
-    ui.handleInput(enter);
-    expect(results[0]?.answers[0]?.selected).toEqual(["Postgres"]);
+    ui.handleInput("k"); ui.handleInput(enter);
+    expect(results[0]?.answers[0]?.selected).toEqual(["SQLite"]);
   });
-  test("Space cannot accidentally activate custom editing or Submit", () => {
+  test("Space cannot accidentally open custom editing and multi-select Enter keeps checked choices", () => {
     const { ui, results } = dialog([{ ...question, multiSelect: true }]);
     ui.handleInput(" "); ui.handleInput(down); ui.handleInput(down); ui.handleInput(" ");
     expect(ui.render(80).join("\n")).not.toContain("Your answer");
@@ -167,14 +224,12 @@ describe("terminal questionnaire", () => {
     expect(results[0]?.answers[0]?.selected).toEqual(["SQLite"]);
     ui.dispose();
   });
-  test("requires explicit inline submission", () => {
+  test("Enter submits once and ignores repeat events before confirmation", () => {
     const { ui, results } = dialog();
-    ui.handleInput(enter); ui.handleInput(enter);
+    ui.handleInput("\x1b[13;1:2u");
     expect(results).toHaveLength(0);
-    expect(ui.render(80).join("\n")).toContain("Submit answer");
-    ui.handleInput(tab); ui.handleInput(enter);
+    ui.handleInput(enter); ui.handleInput(enter); ui.handleInput(escape);
     expect(results[0]?.answers[0]?.selected).toEqual(["SQLite"]);
-    ui.handleInput(escape);
     expect(results).toHaveLength(1);
   });
   test("vim keys navigate without intercepting literal editor input", () => {
@@ -184,6 +239,26 @@ describe("terminal questionnaire", () => {
     ui.handleInput("j"); ui.handleInput("j"); ui.handleInput(enter);
     ui.handleInput("j"); ui.handleInput("k"); ui.handleInput(enter); ui.handleInput(tab); ui.handleInput(enter);
     expect(results[0]?.answers[0]?.custom).toBe("jk");
+  });
+  test("Ctrl+N/P navigate by default, including Kitty encoded keys", () => {
+    const { ui, results } = dialog();
+    ui.handleInput("\x1b[110;5u");
+    expect(ui.render(80).join("\n")).toContain("❯ ○ Postgres");
+    ui.handleInput("\x1b[112;5:1u");
+    expect(ui.render(80).join("\n")).toContain("❯ ○ SQLite");
+    ui.handleInput("\x0e"); ui.handleInput("\x10"); ui.handleInput(enter);
+    expect(results[0]?.answers[0]?.selected).toEqual(["SQLite"]);
+  });
+  test("respects configured selection navigation such as Ctrl+P and Ctrl+N", () => {
+    const { ui, results } = dialog([question], undefined, {
+      matches: (data, action) => action === "tui.select.up" && data === "\x10" || action === "tui.select.down" && data === "\x0e",
+    });
+    ui.handleInput("\x0e");
+    expect(ui.render(80).join("\n")).toContain("❯ ○ Postgres");
+    ui.handleInput("\x10");
+    expect(ui.render(80).join("\n")).toContain("❯ ○ SQLite");
+    ui.handleInput("\x0e"); ui.handleInput(enter);
+    expect(results[0]?.answers[0]?.selected).toEqual(["Postgres"]);
   });
   test("Kitty-encoded Space toggles a multi-select choice", () => {
     const { ui, results } = dialog([{ ...question, multiSelect: true }]);
@@ -211,31 +286,31 @@ describe("terminal questionnaire", () => {
     ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
     expect(results[0]?.answers.map((answer) => answer.selected)).toEqual([["SQLite"], ["Postgres"]]);
   });
-  test("multi-select toggles, preserves choices across tabs, and continues", () => {
+  test("single multi-select uses Space to toggle and Enter adds the focused option then submits", () => {
     const { ui, results } = dialog([{ ...question, multiSelect: true }]);
-    ui.handleInput(enter); ui.handleInput(enter); ui.handleInput(down); ui.handleInput(enter);
-    ui.handleInput(tab); ui.handleInput(tab);
+    ui.handleInput(" "); ui.handleInput(" "); ui.handleInput(down); ui.handleInput(" ");
     expect(ui.render(80).join("\n")).toContain("[✔] Postgres");
-    ui.handleInput(down); ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
-    expect(results[0]?.answers[0]?.selected).toEqual(["Postgres"]);
+    expect(results).toHaveLength(0);
+    ui.handleInput("k"); ui.handleInput(enter);
+    expect(results[0]?.answers[0]?.selected).toEqual(["SQLite", "Postgres"]);
   });
-  test("custom answer returns to its list and requires inline submission", () => {
+  test("Enter submits a nonblank custom answer for one question", () => {
     const { ui, results } = dialog();
     ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
-    ui.handleInput("Redis"); ui.handleInput(enter);
+    ui.handleInput(enter);
     expect(results).toHaveLength(0);
-    expect(ui.render(80).join("\n")).toContain("● Type something.");
-    ui.handleInput(tab); ui.handleInput(enter);
+    ui.handleInput(enter); ui.handleInput("Redis"); ui.handleInput(enter);
     expect(results[0]?.answers[0]).toMatchObject({ selected: [], custom: "Redis" });
   });
   test("custom text can be cleared without losing multi-select choices", () => {
-    const { ui, results } = dialog([{ ...question, multiSelect: true }]);
+    const { ui, results } = dialog([{ ...question, multiSelect: true }, { ...question, header: "Second" }]);
     ui.handleInput(enter); ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
     ui.handleInput("Redis"); ui.handleInput(enter);
+    expect(results).toHaveLength(0);
     ui.handleInput(enter);
     ui.handleInput("\x15"); ui.handleInput(enter);
     expect(ui.render(80).join("\n")).toContain("[✔] SQLite");
-    ui.handleInput(tab); ui.handleInput(enter);
+    ui.handleInput(tab); ui.handleInput(enter); ui.handleInput("k"); ui.handleInput(enter);
     expect(results[0]?.answers[0]).toMatchObject({ selected: ["SQLite"], custom: "" });
   });
   test("opening editor after paging brings the focused cursor into view", () => {
@@ -253,7 +328,7 @@ describe("terminal questionnaire", () => {
     const wide = ui.render(120);
     expect(wide.some((line) => line.includes(question.question) && line.includes("┌─ Preview"))).toBe(true);
     expect(wide.join("\n")).toContain("Example");
-    expect(wide.join("\n")).toContain("Submit answer");
+    expect(wide.join("\n")).not.toContain("Submit answer");
     expect(wide.every((line) => visibleWidth(line) <= 120)).toBe(true);
     const narrow = ui.render(80);
     expect(narrow.some((line) => line.includes(question.question) && line.includes("┌─ Preview"))).toBe(false);
@@ -276,7 +351,7 @@ describe("terminal questionnaire", () => {
     ui.handleInput("\x1b[5~"); expect(ui.render(80).join("\n")).not.toBe(bottom);
     ui.handleInput(down); ui.render(80); ui.handleInput("k");
     expect(ui.render(80).join("\n")).toContain("Example");
-    ui.handleMouse(wheel(1000)); ui.render(80); ui.handleInput(enter);
+    ui.handleMouse(wheel(1000)); ui.render(80); ui.handleInput(" ");
     expect(ui.render(80).join("\n")).toContain("● SQLite");
     expect(ui.render(80).join("\n")).toContain("○ Postgres");
     ui.dispose();
@@ -313,7 +388,7 @@ describe("terminal questionnaire", () => {
   test("escape discards partial answers and abort closes exactly once", () => {
     const controller = new AbortController();
     const { ui, results } = dialog([question], controller.signal);
-    ui.handleInput(enter); controller.abort(); ui.handleInput(enter);
+    ui.handleInput(" "); controller.abort(); ui.handleInput(enter);
     expect(results).toEqual([{ cancelled: true, answers: [] }]);
     const other = dialog(); other.ui.handleInput(escape);
     expect(other.results).toEqual([{ cancelled: true, answers: [] }]);
@@ -384,6 +459,7 @@ test("registers sequential model-only tool and removes it without UI", async () 
     cancelled: false, answers: [{ header: "Store", question: "Which?", selected: ["SQLite (Recommended)", "Postgres"], custom: "custom (Recommended)" }],
   } };
   expect(render(receipt)).toBe("Store: SQLite; Postgres; custom (Recommended)");
+  expect(render({ ...receipt, details: { ...receipt.details, answers: [{ ...receipt.details.answers[0], note: "Keep backups" }] } })).toContain("Note: Keep backups");
   expect(receipt.details.answers[0]?.selected[0]).toBe("SQLite (Recommended)");
   expect(render(receipt, true)).toBe("Full model-facing answer");
   expect(render(receipt, false, true)).toBe("Full model-facing answer");

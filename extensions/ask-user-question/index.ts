@@ -57,7 +57,7 @@ export default function askUserQuestion(pi: ExtensionAPI): void {
       const value = response.details;
       const text = value.cancelled ? "Cancelled — no answers submitted" : value.answers.map((answer) => {
         const selected = answer.selected.map((label) => label.replace(/\s*\(Recommended\)\s*$/i, ""));
-        return `${answer.header}: ${[...selected, ...(answer.custom ? [answer.custom] : [])].join("; ")}`;
+        return `${answer.header}: ${[...selected, ...(answer.custom ? [answer.custom] : []), ...(answer.note ? [`Note: ${answer.note}`] : [])].join("; ")}`;
       }).join("\n");
       return new Text(theme.fg(value.cancelled ? "muted" : "toolOutput", text), 0, 0);
     },
