@@ -1,6 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import { initTheme, type KeybindingsManager, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, visibleWidth, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
+import { Container, CURSOR_MARKER, Text, visibleWidth, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
+// Exercise the installed host's actual fixed-dock layout, not an overlay mock.
+import { createChatViewport } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/chat-viewport.js";
+import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dist/layout.js";
 import { Value } from "typebox/value";
 import extension, { askNative } from "../../extensions/ask-user-question/index.js";
 import { Questionnaire } from "../../extensions/ask-user-question/dialog.js";
@@ -46,6 +49,68 @@ describe("schema", () => {
 });
 
 describe("terminal questionnaire", () => {
+  test("Ctrl+] collapses without losing choices, tabs, or unfinished text", () => {
+    const { ui, results } = dialog([{ ...question, multiSelect: true }]);
+    ui.focused = true;
+    ui.handleInput(enter); ui.handleInput("j"); ui.handleInput("j"); ui.handleInput(enter);
+    ui.handleInput("unfinished");
+    ui.handleInput("\x1d");
+    expect(ui.render(80)).toEqual(["Questions hidden · Ctrl+] show · Esc cancel"]);
+    expect(ui.handleMouse(wheel(3))).toBeUndefined();
+    ui.handleInput("accidental typing"); ui.handleInput(tab); ui.handleInput(enter);
+    expect(results).toHaveLength(0);
+    ui.handleInput("\x1d");
+    expect(ui.render(80).join("\n")).toContain("unfinished");
+    ui.handleInput(" answer"); ui.handleInput(enter);
+    ui.handleInput("\x1d"); ui.handleInput("\x1d"); ui.handleInput(enter);
+    expect(results[0]?.answers[0]).toMatchObject({ selected: ["SQLite"], custom: "unfinished answer" });
+  });
+  test("collapse retains scroll position and ignores held shortcut repeats", () => {
+    const { ui } = dialog([{ ...question, question: "Question\n".repeat(40) }]);
+    ui.render(80); ui.handleMouse(wheel(3));
+    const before = ui.render(80);
+    ui.handleInput("\x1b[93;5u");
+    ui.handleInput("\x1b[93;5:2u");
+    expect(ui.render(80)).toHaveLength(1);
+    ui.handleInput("\x1b[93;5u");
+    expect(ui.render(80)).toEqual(before);
+    ui.dispose();
+  });
+  test("collapsed questionnaire still cancels on Escape or abort", () => {
+    for (const abort of [false, true]) {
+      const controller = new AbortController();
+      const { ui, results } = dialog([question], controller.signal);
+      ui.handleInput("\x1d");
+      if (abort) controller.abort(); else ui.handleInput(escape);
+      expect(results).toEqual([{ cancelled: true, answers: [] }]);
+    }
+  });
+  test("dock reserves transcript space and collapse reveals more of the reply", () => {
+    const { ui, tui } = dialog([{ ...question, question: "Question\n".repeat(40) }]);
+    const document = new Container();
+    document.addChild(new Text(Array.from({ length: 80 }, (_, i) => `Agent reply line ${i}`).join("\n"), 0, 0));
+    const editor = new Container(); editor.addChild(ui);
+    const viewport = createChatViewport({ document, editor, pendingMessages: new Container(), status: new Container(), footer: new Container() });
+    const frame = () => renderLayoutFrame(viewport.root, 80, tui.terminal.rows, () => {});
+    for (const rows of [12, 24, 50]) {
+      tui.terminal.rows = rows;
+      const expanded = frame();
+      expect(ui.render(80).length).toBeLessThanOrEqual(Math.min(12, Math.floor(rows / 2)));
+      expect(expanded.lines.join("\n")).toContain("Agent reply line 79");
+      const expandedHeight = viewport.transcript.viewportHeight;
+      expect(expandedHeight).toBeGreaterThanOrEqual(Math.floor(rows / 2));
+      ui.handleInput("\x1d");
+      const collapsed = frame();
+      expect(viewport.transcript.viewportHeight).toBeGreaterThan(expandedHeight);
+      expect(collapsed.lines.join("\n")).toContain("Agent reply line 79");
+      viewport.transcript.scrollToStart();
+      expect(frame().lines.join("\n")).toContain("Agent reply line 0");
+      viewport.transcript.scrollToEnd();
+      expect(frame().lines.join("\n")).toContain("Agent reply line 79");
+      ui.handleInput("\x1d");
+    }
+    ui.dispose();
+  });
   test("requires explicit review and submission", () => {
     const { ui, results } = dialog();
     ui.handleInput(enter);

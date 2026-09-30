@@ -1,5 +1,5 @@
 import { getMarkdownTheme, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
-import { CURSOR_MARKER, Editor, Key, Markdown, matchesKey, truncateToWidth, wrapTextWithAnsi, type Focusable, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, Editor, Key, Markdown, isKeyRepeat, matchesKey, truncateToWidth, wrapTextWithAnsi, type Focusable, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
 import { answered, newDrafts, result, select, summary, type Question, type Result } from "./model.js";
 
 /** One interaction owns its drafts, editor, and cancellation listener. */
@@ -8,6 +8,7 @@ export class Questionnaire implements Focusable {
   private tab = 0;
   private cursor = 0;
   private editing = false;
+  private collapsed = false;
   private offset = 0;
   private maxOffset = 0;
   private followCursor = true;
@@ -59,7 +60,7 @@ export class Questionnaire implements Focusable {
     this.tui.requestRender();
   }
   handleMouse(event: TuiMouseEvent): TuiMouseEventResult | undefined {
-    if (this.finished || event.type !== "wheel" || event.shift || event.alt || event.ctrl ||
+    if (this.finished || this.collapsed || event.type !== "wheel" || event.shift || event.alt || event.ctrl ||
       event.x < 0 || event.y < 0 || event.x >= event.width || event.y >= event.height ||
       !Number.isFinite(event.wheelDelta) || !event.wheelDelta) return;
     this.offset = Math.max(0, Math.min(this.maxOffset, this.offset + Math.trunc(event.wheelDelta)));
@@ -71,6 +72,15 @@ export class Questionnaire implements Focusable {
   handleInput(data: string): void {
     if (this.finished) return;
     if (matchesKey(data, Key.escape)) { this.finish(true); return; }
+    if (matchesKey(data, Key.ctrl("]"))) {
+      if (!isKeyRepeat(data)) {
+        this.collapsed = !this.collapsed;
+        this.editor.focused = this.focused && this.editing && !this.collapsed;
+        this.tui.requestRender();
+      }
+      return;
+    }
+    if (this.collapsed) return;
     if (this.editing) {
       this.followCursor = true;
       if (this.keys ? this.keys.matches(data, "app.clear") : matchesKey(data, Key.ctrl("c"))) this.editor.setText("");
@@ -113,6 +123,7 @@ export class Questionnaire implements Focusable {
 
   render(width: number): string[] {
     width = Math.max(1, width);
+    if (this.collapsed) return [this.theme.fg("dim", truncateToWidth("Questions hidden · Ctrl+] show · Esc cancel", width))];
     const q = this.questions[this.tab];
     const tabs = [...this.questions.map((question, i) => `${answered(this.drafts[i]!) ? "✓" : "○"} ${question.header}`), "Submit"];
     const heading = truncateToWidth(tabs.map((label, i) => i === this.tab ? `[${label}]` : label).join(" · "), width);
@@ -151,14 +162,16 @@ export class Questionnaire implements Focusable {
       const missing = this.questions.filter((_, i) => !answered(this.drafts[i]!));
       add(missing.length ? `Unanswered: ${missing.map((question) => question.header).join(", ")}` : "Enter to submit answers");
     }
-    const height = Math.max(1, this.tui.terminal.rows - 6);
+    // This is an in-flow editor replacement, not an overlay. Leave the transcript
+    // room above the dock even when an option contains a very long preview.
+    const height = Math.max(1, Math.min(12, Math.floor(this.tui.terminal.rows / 2)) - 2);
     if (this.followCursor) {
       if (anchor < this.offset) this.offset = anchor;
       if (anchor >= this.offset + height) this.offset = anchor - height + 1;
     }
     this.maxOffset = Math.max(0, lines.length - height);
     this.offset = Math.max(0, Math.min(this.offset, this.maxOffset));
-    const help = this.editing ? "Enter save · Shift+Enter newline · Esc cancel" : "Tab/←→ tabs · ↑↓/j/k choose · Enter/Space select · Esc cancel";
+    const help = this.editing ? "Ctrl+] hide · Enter save · Shift+Enter newline · Esc cancel" : "Ctrl+] hide · Tab tabs · ↑↓/j/k choose · Enter/Space select · Esc cancel";
     const scroll = lines.length > height ? `${this.offset + 1}–${Math.min(this.offset + height, lines.length)}/${lines.length} · PgUp/PgDn scroll · ` : "";
     return [this.theme.fg("accent", heading), ...lines.slice(this.offset, this.offset + height),
       this.theme.fg("dim", truncateToWidth(`${scroll}${help}`, width)),

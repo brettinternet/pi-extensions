@@ -46,7 +46,7 @@ The tool accepts `{questions:[{question,header,options:[{label,description,previ
 
 `preview` is optional Markdown for single-select questions. It appears below the options. A `Type something.` custom row is always provided, so do not add an `Other` or `Type something` option.
 
-The questionnaire temporarily replaces the prompt in the bottom editor area; it is not a centered overlay.
+The questionnaire stays in the bottom editor dock, not an overlay, and uses at most half the terminal height or 12 rows. The chat above remains scrollable to the latest reply. Ctrl+] reduces the questionnaire to a one-line hint; press it again to restore selections, unfinished text, the active tab, and scroll position.
 
 | Control | Action |
 | --- | --- |
@@ -59,6 +59,7 @@ The questionnaire temporarily replaces the prompt in the bottom editor area; it 
 | Shift+Enter | Add a newline to custom text |
 | Ctrl+C | Clear the entire draft with `app.clear` |
 | PgUp / PgDn | Scroll |
+| Ctrl+] | Collapse to a one-line hint or restore the questionnaire; Escape still cancels while collapsed |
 
 Mouse-wheel scrolling over the questionnaire works only in Pi fullscreen. In multi-select questions, saved custom text and selected options can coexist.
 
