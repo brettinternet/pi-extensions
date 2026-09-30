@@ -313,6 +313,38 @@ describe("terminal questionnaire", () => {
     ui.handleInput(tab); ui.handleInput(enter); ui.handleInput("k"); ui.handleInput(enter);
     expect(results[0]?.answers[0]).toMatchObject({ selected: ["SQLite"], custom: "" });
   });
+  test("custom text edits inline below its row while choices remain visible", () => {
+    const { ui, results } = dialog([{ ...question, options: question.options.map((o) => ({ ...o, preview: "Preview detail" })) }]);
+    ui.focused = true;
+    ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
+    ui.handleInput("first line"); ui.handleInput("\x1b[13;2u"); ui.handleInput("second line");
+    expect(results).toHaveLength(0);
+    for (const width of [40, 80, 120]) {
+      const lines = ui.render(width);
+      const text = lines.join("\n");
+      expect(text).toContain("○ SQLite");
+      expect(text).toContain("○ Postgres");
+      expect(text).toContain("❯ ○ Type something.");
+      expect(text.indexOf("first line")).toBeGreaterThan(text.indexOf("Type something."));
+      expect(text).toContain("second line");
+      expect(text).not.toContain("┌─ Preview");
+      expect(lines.some((line) => line.includes(CURSOR_MARKER))).toBe(true);
+      expect(lines.every((line) => visibleWidth(line) <= width)).toBe(true);
+    }
+    ui.handleInput(enter);
+    expect(results[0]?.answers[0]).toMatchObject({ custom: "first line\nsecond line", selected: [] });
+  });
+  test("notes retain their separate editor rather than the inline answer field", () => {
+    const { ui, results } = dialog();
+    ui.handleInput("n"); ui.handleInput("A note");
+    const text = ui.render(80).join("\n");
+    expect(text).toContain("Note (Enter saves");
+    expect(text).not.toContain("Type something.");
+    ui.handleInput(enter);
+    expect(results).toHaveLength(0);
+    expect(ui.render(80).join("\n")).toContain("Type something.");
+    ui.dispose();
+  });
   test("opening editor after paging brings the focused cursor into view", () => {
     const { ui } = dialog([{ ...question, question: "Long question\n".repeat(30) }]);
     ui.focused = true;

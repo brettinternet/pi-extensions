@@ -175,12 +175,15 @@ export class Questionnaire implements Focusable {
     const add = (text: string) => lines.push(...wrapTextWithAnsi(text, listWidth));
     add(theme.fg("text", theme.bold(q.question)));
     let anchor = 0;
-    if (this.editing) {
-      add(theme.fg("muted", this.editing === "note" ? "Note (Enter saves; Esc discards changes):" : `Your answer (Enter ${this.questions.length === 1 ? "submits" : "saves"}; Shift+Enter inserts a newline):`));
+    const renderEditor = () => {
       this.editor.focused = this.focused;
       lines.push(...this.editor.render(width));
       const cursorLine = lines.findIndex((line) => line.includes(CURSOR_MARKER));
       anchor = cursorLine < 0 ? Math.max(0, lines.length - 1) : cursorLine;
+    };
+    if (this.editing === "note") {
+      add(theme.fg("muted", "Note (Enter saves; Esc discards changes):"));
+      renderEditor();
     } else {
       const labels = [...q.options.map((o) => o.label), "Type something."];
       labels.forEach((label, i) => {
@@ -191,12 +194,15 @@ export class Questionnaire implements Focusable {
         const pointer = active ? theme.fg("accent", "❯ ") : "  ";
         const styledLabel = active ? theme.fg("accent", theme.bold(label)) : theme.fg("text", label);
         add(`${pointer}${theme.fg(checked ? "accent" : "muted", marker)} ${styledLabel}`);
-        if (q.options[i]) add(theme.fg("muted", `    ${q.options[i]!.description}`));
-        else if (draft.custom) add(theme.fg("muted", `    ${draft.custom}`));
+        if (i === q.options.length && this.editing === "custom") renderEditor();
+        else if (this.editing !== "custom") {
+          if (q.options[i]) add(theme.fg("muted", `    ${q.options[i]!.description}`));
+          else if (draft.custom) add(theme.fg("muted", `    ${draft.custom}`));
+        }
       });
       if (this.questions.length > 1) {
         const active = this.cursor === q.options.length + 1;
-        if (active) anchor = lines.length;
+        if (active && !this.editing) anchor = lines.length;
         const ready = this.drafts.every(answered);
         add(`${active ? theme.fg("accent", "❯ ") : "  "}${theme.fg(active ? "accent" : ready ? "success" : "dim", active ? theme.bold("Submit answers") : "Submit answers")}`);
         if (!ready) add(theme.fg("dim", `Unanswered: ${this.questions.filter((_, i) => !answered(this.drafts[i]!)).map((question) => question.header).join(", ")}`));

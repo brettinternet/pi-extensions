@@ -35,13 +35,15 @@ The questionnaire replaces the prompt in the bottom editor dock, not an overlay.
 | ↑ / ↓, Ctrl+P / Ctrl+N, or k / j | Move focus |
 | Space on an option | Select without submitting |
 | Enter on an option | With one question, select and submit; with multiple, select in place |
-| Enter on `Type something.` | Open the custom editor; Enter submits nonblank text with one question or saves it to the list with multiple |
+| Enter on `Type something.` | Open a full-width editor beneath the row; Enter submits nonblank text for one question or saves it for multiple; Shift+Enter adds a newline |
 | `n` | Open this question’s optional note editor; Enter saves the note and returns |
 | Escape | Discard note edits while editing a note; otherwise cancel all answers |
 | Ctrl+C | Clear the focused editor via `app.clear` |
 | Ctrl+] | Collapse to a one-line hint; press again to restore answers, draft, tab, and scroll position |
 | Alt+PgUp / Alt+PgDn | Scroll the question or preview |
 | PgUp / PgDn | Scroll the conversation in fullscreen; scroll the question in regular mode |
+
+Choice labels remain visible while typing; descriptions are hidden to make room.
 
 For a single multi-select question, Space toggles choices; Enter includes the focused option without removing checked choices, then submits. With multiple questions, use the explicit **Submit answers** row after answering them all. Inside an editor, `n` types the letter rather than opening a note.
 
