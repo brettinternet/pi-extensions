@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { initTheme, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { initTheme, type KeybindingsManager, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import { Value } from "typebox/value";
 import extension, { askNative } from "../../extensions/ask-user-question/index.js";
@@ -10,10 +10,10 @@ const question: Question = { header: "Store", question: "Which store?", options:
   { label: "SQLite", description: "Embedded storage" }, { label: "Postgres", description: "Remote storage" },
 ] };
 const theme = { fg: (_: string, s: string) => s } as Theme;
-function dialog(questions = [question], signal?: AbortSignal) {
+function dialog(questions = [question], signal?: AbortSignal, keys?: Pick<KeybindingsManager, "matches">) {
   const results: Result[] = [];
   const tui = { requestRender() {}, terminal: { rows: 24 } };
-  const ui = new Questionnaire(questions, tui as unknown as TUI, theme, (value) => results.push(value), signal);
+  const ui = new Questionnaire(questions, tui as unknown as TUI, theme, (value) => results.push(value), signal, keys);
   return { ui, results, tui };
 }
 const enter = "\r", down = "\x1b[B", tab = "\t", escape = "\x1b";
@@ -24,6 +24,14 @@ describe("schema", () => {
     for (const questions of [[], Array(5).fill(question), [{ ...question, header: "x".repeat(17) }], [{ ...question, options: [question.options[0]] }]]) {
       expect(Value.Check(parameters, { questions })).toBe(false);
     }
+  });
+  test("rejects unknown fields at every input level, including misplaced previews", () => {
+    for (const params of [
+      { questions: [question], extra: true },
+      { questions: [{ ...question, preview: "wrong level" }] },
+      { questions: [{ ...question, options: question.options.map((o) => ({ ...o, extra: true })) }] },
+    ]) expect(Value.Check(parameters, params)).toBe(false);
+    expect(Value.Check(parameters, { questions: [{ ...question, options: question.options.map((o) => ({ ...o, preview: "correct level" })) }] })).toBe(true);
   });
   test("rejects reserved, duplicate, blank and multi-preview options", () => {
     for (const label of ["Other", " TYPE SOMETHING. ", "", "Postgres"]) {
@@ -43,6 +51,30 @@ describe("terminal questionnaire", () => {
     expect(results[0]?.answers[0]?.selected).toEqual(["SQLite"]);
     ui.handleInput(escape);
     expect(results).toHaveLength(1);
+  });
+  test("vim keys navigate without intercepting literal editor input", () => {
+    const { ui, results } = dialog();
+    ui.handleInput("j"); ui.handleInput("k");
+    expect(ui.render(80).join("\n")).toContain("❯ [ ] SQLite");
+    ui.handleInput("j"); ui.handleInput("j"); ui.handleInput(enter);
+    ui.handleInput("j"); ui.handleInput("k"); ui.handleInput(enter); ui.handleInput(enter);
+    expect(results[0]?.answers[0]?.custom).toBe("jk");
+  });
+  test("Kitty-encoded Space toggles a multi-select choice", () => {
+    const { ui, results } = dialog([{ ...question, multiSelect: true }]);
+    ui.handleInput("\x1b[32u"); ui.handleInput(tab); ui.handleInput(enter);
+    expect(results[0]?.answers[0]?.selected).toEqual(["SQLite"]);
+  });
+  test("app.clear clears the entire multiline draft with default or remapped binding", () => {
+    for (const key of ["ctrl+c", "ctrl+x"] as const) {
+      const { ui, results } = dialog([question], undefined, { matches: (data, action) => action === "app.clear" && data === (key === "ctrl+c" ? "\x03" : "\x18") });
+      ui.handleInput("j"); ui.handleInput("j"); ui.handleInput(enter);
+      ui.handleInput("\x1b[200~first\nsecond\x1b[201~");
+      ui.handleInput(key === "ctrl+c" ? "\x03" : "\x18");
+      expect(results).toHaveLength(0);
+      ui.handleInput("replacement"); ui.handleInput(enter); ui.handleInput(enter);
+      expect(results[0]?.answers[0]?.custom).toBe("replacement");
+    }
   });
   test("cannot submit incomplete questions", () => {
     const { ui, results } = dialog([question, { ...question, header: "Second" }]);
@@ -94,6 +126,13 @@ describe("terminal questionnaire", () => {
     const lines = ui.render(20);
     expect(lines.every((line) => visibleWidth(line) <= 20)).toBe(true);
     expect(lines.length).toBeLessThanOrEqual(24);
+    expect(ui.render(80).at(-1)).toContain("PgUp/PgDn");
+    for (let i = 0; i < 20; i++) { ui.handleInput("\x1b[6~"); ui.render(80); }
+    const bottom = ui.render(80).join("\n");
+    ui.handleInput("\x1b[6~"); expect(ui.render(80).join("\n")).toBe(bottom);
+    ui.handleInput("\x1b[5~"); expect(ui.render(80).join("\n")).not.toBe(bottom);
+    ui.handleInput(down); ui.render(80); ui.handleInput("k");
+    expect(ui.render(80).join("\n")).toContain("Example");
     ui.dispose();
   });
   test("escape discards partial answers and abort closes exactly once", () => {
@@ -137,6 +176,16 @@ test("RPC cancellation and declined review discard all answers", async () => {
   expect(await askNative([question], native([undefined]))).toEqual({ cancelled: true, answers: [] });
   expect(await askNative([question], native(["SQLite"], "", false))).toEqual({ cancelled: true, answers: [] });
 });
+test("RPC ignores an answer returned after abort and opens no follow-up dialog", async () => {
+  const controller = new AbortController();
+  const ctx = native([]);
+  let followUps = 0;
+  ctx.ui.select = async (_title, options) => { controller.abort(); return options[0]; };
+  ctx.ui.confirm = async () => { followUps++; return true; };
+  const value = await askNative([question, question], ctx, controller.signal);
+  expect(value).toEqual({ cancelled: true, answers: [] });
+  expect(followUps).toBe(0);
+});
 test("RPC pre-abort never opens a dialog", async () => {
   const controller = new AbortController(); controller.abort();
   expect(await askNative([question], {} as ExtensionContext, controller.signal)).toEqual({ cancelled: true, answers: [] });
@@ -154,4 +203,17 @@ test("registers sequential model-only tool and removes it without UI", async () 
   const response = await tool.execute("id", { questions: [question] }, undefined, undefined, native(["SQLite"]));
   expect(Value.Check(tool.outputSchema, response.structuredContent)).toBe(true);
   expect(response.details).toEqual(response.structuredContent);
+  const render = (value: unknown, expanded = false, isError = false, isPartial = false) =>
+    tool.renderResult(value, { expanded, isPartial }, theme, { isError }).render(120).join("\n").trim();
+  const receipt = { content: [{ type: "text", text: "Full model-facing answer" }], details: {
+    cancelled: false, answers: [{ header: "Store", question: "Which?", selected: ["SQLite (Recommended)", "Postgres"], custom: "custom (Recommended)" }],
+  } };
+  expect(render(receipt)).toBe("Store: SQLite; Postgres; custom (Recommended)");
+  expect(receipt.details.answers[0]?.selected[0]).toBe("SQLite (Recommended)");
+  expect(render(receipt, true)).toBe("Full model-facing answer");
+  expect(render(receipt, false, true)).toBe("Full model-facing answer");
+  expect(render(receipt, false, false, true)).toBe("Full model-facing answer");
+  expect(render({ content: receipt.content, details: {} })).toBe("Full model-facing answer");
+  expect(render({ content: [], details: { cancelled: true, answers: [] } })).toContain("Cancelled");
+  expect(tool.renderCall({}, theme).render(80).join("\n").trim()).toBe("Questions");
 });

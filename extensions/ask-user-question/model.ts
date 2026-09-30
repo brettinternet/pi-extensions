@@ -8,10 +8,10 @@ export const parameters = Type.Object({
       label: Type.String({ minLength: 1, maxLength: 60 }),
       description: Type.String({ minLength: 1 }),
       preview: Type.Optional(Type.String()),
-    }), { minItems: 2, maxItems: 4 }),
+    }, { additionalProperties: false }), { minItems: 2, maxItems: 4 }),
     multiSelect: Type.Optional(Type.Boolean()),
-  }), { minItems: 1, maxItems: 4 }),
-});
+  }, { additionalProperties: false }), { minItems: 1, maxItems: 4 }),
+}, { additionalProperties: false });
 export type Question = Static<typeof parameters>["questions"][number];
 export const outputSchema = Type.Object({
   cancelled: Type.Boolean(),

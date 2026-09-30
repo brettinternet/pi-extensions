@@ -1,4 +1,6 @@
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Text } from "@earendil-works/pi-tui";
+import { Value } from "typebox/value";
 import { Questionnaire } from "./dialog.js";
 import { answered, newDrafts, outputSchema, parameters, result, select, summary, validate, type Question, type Result } from "./model.js";
 
@@ -43,11 +45,27 @@ export default function askUserQuestion(pi: ExtensionAPI): void {
     outputSchema,
     exposure: "model-only",
     executionMode: "sequential",
+    renderCall(args, theme) {
+      const count = Array.isArray(args.questions) ? args.questions.length : 0;
+      return new Text(theme.fg("toolTitle", `Questions${count ? ` (${count})` : ""}`), 0, 0);
+    },
+    renderResult(response, { expanded, isPartial }, theme, context) {
+      const fullText = response.content.filter((item) => item.type === "text").map((item) => item.text).join("\n");
+      if (expanded || isPartial || context.isError || !Value.Check(outputSchema, response.details)) {
+        return new Text(theme.fg(context.isError ? "error" : "toolOutput", fullText), 0, 0);
+      }
+      const value = response.details;
+      const text = value.cancelled ? "Cancelled — no answers submitted" : value.answers.map((answer) => {
+        const selected = answer.selected.map((label) => label.replace(/\s*\(Recommended\)\s*$/i, ""));
+        return `${answer.header}: ${[...selected, ...(answer.custom ? [answer.custom] : [])].join("; ")}`;
+      }).join("\n");
+      return new Text(theme.fg(value.cancelled ? "muted" : "toolOutput", text), 0, 0);
+    },
     async execute(_id, params, signal, _update, ctx) {
       if (!ctx.hasUI) throw new Error("ask_user_question requires an interactive TUI or RPC host.");
       validate(params.questions);
       const value = signal?.aborted ? result(params.questions, [], true) : ctx.mode === "tui"
-        ? await ctx.ui.custom<Result>((tui, theme, _keys, done) => new Questionnaire(params.questions, tui, theme, done, signal))
+        ? await ctx.ui.custom<Result>((tui, theme, keys, done) => new Questionnaire(params.questions, tui, theme, done, signal, keys))
         : await askNative(params.questions, ctx, signal);
       return { content: [{ type: "text", text: summary(value) }], details: value, structuredContent: value };
     },

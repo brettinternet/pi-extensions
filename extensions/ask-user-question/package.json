@@ -1,6 +1,6 @@
 {
   "name": "ask-user-question",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Structured user questions for Pi with choices, custom answers, and previews",
   "type": "module",
   "license": "MIT",
@@ -9,7 +9,7 @@
     "url": "git+https://github.com/brettinternet/pi-extensions.git",
     "directory": "extensions/ask-user-question"
   },
-  "files": ["*.ts", "README.md"],
+  "files": ["*.ts", "README.md", "UPSTREAM-REVIEW.md"],
   "keywords": ["pi-package", "pi-extension"],
   "engines": { "node": ">=22.19.0" },
   "peerDependencies": {

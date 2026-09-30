@@ -1,4 +1,4 @@
-import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
+import { getMarkdownTheme, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, Editor, Key, Markdown, matchesKey, truncateToWidth, wrapTextWithAnsi, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import { answered, newDrafts, result, select, summary, type Question, type Result } from "./model.js";
 
@@ -17,7 +17,8 @@ export class Questionnaire implements Focusable {
   private readonly abort = () => this.finish(true);
 
   constructor(private readonly questions: Question[], private readonly tui: TUI, private readonly theme: Theme,
-    private readonly done: (value: Result) => void, private readonly signal?: AbortSignal) {
+    private readonly done: (value: Result) => void, private readonly signal?: AbortSignal,
+    private readonly keys?: Pick<KeybindingsManager, "matches">) {
     this.drafts = newDrafts(questions);
     this.editor = new Editor(tui, {
       borderColor: (s) => theme.fg("accent", s),
@@ -59,7 +60,12 @@ export class Questionnaire implements Focusable {
   handleInput(data: string): void {
     if (this.finished) return;
     if (matchesKey(data, Key.escape)) { this.finish(true); return; }
-    if (this.editing) { this.editor.handleInput(data); this.tui.requestRender(); return; }
+    if (this.editing) {
+      if (this.keys ? this.keys.matches(data, "app.clear") : matchesKey(data, Key.ctrl("c"))) this.editor.setText("");
+      else this.editor.handleInput(data);
+      this.tui.requestRender();
+      return;
+    }
     if (matchesKey(data, Key.tab) || matchesKey(data, Key.right)) { this.moveTab(1); return; }
     if (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left)) { this.moveTab(-1); return; }
     if (matchesKey(data, Key.pageDown) || matchesKey(data, Key.pageUp)) {
@@ -71,10 +77,13 @@ export class Questionnaire implements Focusable {
         if (matchesKey(data, Key.enter) && this.drafts.every(answered)) this.finish(false);
       } else {
         const last = q.options.length + (q.multiSelect ? 1 : 0);
-        if (matchesKey(data, Key.up) || matchesKey(data, Key.down)) {
-          this.cursor = (this.cursor + (matchesKey(data, Key.up) ? -1 : 1) + last + 1) % (last + 1);
+        const up = matchesKey(data, Key.up) || matchesKey(data, "k");
+        const down = matchesKey(data, Key.down) || matchesKey(data, "j");
+        if (up || down) {
+          this.cursor = (this.cursor + (up ? -1 : 1) + last + 1) % (last + 1);
+          this.offset = 0;
           this.followCursor = true;
-        } else if (matchesKey(data, Key.enter) || data === " ") {
+        } else if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
           const draft = this.drafts[this.tab]!;
           if (this.cursor < q.options.length) {
             select(q, draft, this.cursor);
@@ -136,9 +145,10 @@ export class Questionnaire implements Focusable {
       if (anchor >= this.offset + height) this.offset = anchor - height + 1;
     }
     this.offset = Math.max(0, Math.min(this.offset, lines.length - height));
-    const help = this.editing ? "Enter save · Shift+Enter newline · Esc cancel" : "Tab/←→ questions · ↑↓ choose · Enter/Space select · PgUp/PgDn scroll · Esc cancel";
+    const help = this.editing ? "Enter save · Shift+Enter newline · Esc cancel" : "Tab/←→ tabs · ↑↓/j/k choose · Enter/Space select · Esc cancel";
+    const scroll = lines.length > height ? `${this.offset + 1}–${Math.min(this.offset + height, lines.length)}/${lines.length} · PgUp/PgDn scroll · ` : "";
     return [this.theme.fg("accent", heading), ...lines.slice(this.offset, this.offset + height),
-      this.theme.fg("dim", truncateToWidth(`${help}${lines.length > height ? ` · ${this.offset + 1}/${lines.length}` : ""}`, width)),
+      this.theme.fg("dim", truncateToWidth(`${scroll}${help}`, width)),
     ].map((line) => truncateToWidth(line, width));
   }
 }
