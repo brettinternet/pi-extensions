@@ -90,8 +90,11 @@ export class Questionnaire implements Focusable {
     }
     if (matchesKey(data, Key.tab) || matchesKey(data, Key.right)) { this.moveTab(1); return; }
     if (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left)) { this.moveTab(-1); return; }
-    if (matchesKey(data, Key.pageDown) || matchesKey(data, Key.pageUp)) {
-      this.offset += matchesKey(data, Key.pageDown) ? 5 : -5;
+    // Fullscreen reserves unmodified PageUp/PageDown for the transcript.
+    const pageDown = matchesKey(data, Key.alt("pageDown")) || matchesKey(data, Key.pageDown);
+    const pageUp = matchesKey(data, Key.alt("pageUp")) || matchesKey(data, Key.pageUp);
+    if (pageDown || pageUp) {
+      this.offset += pageDown ? 5 : -5;
       this.followCursor = false;
     } else {
       const q = this.questions[this.tab];
@@ -172,7 +175,7 @@ export class Questionnaire implements Focusable {
     this.maxOffset = Math.max(0, lines.length - height);
     this.offset = Math.max(0, Math.min(this.offset, this.maxOffset));
     const help = this.editing ? "Ctrl+] hide · Enter save · Shift+Enter newline · Esc cancel" : "Ctrl+] hide · Tab tabs · ↑↓/j/k choose · Enter/Space select · Esc cancel";
-    const scroll = lines.length > height ? `${this.offset + 1}–${Math.min(this.offset + height, lines.length)}/${lines.length} · PgUp/PgDn scroll · ` : "";
+    const scroll = lines.length > height ? `${this.offset + 1}–${Math.min(this.offset + height, lines.length)}/${lines.length} · Alt+PgUp/PgDn scroll · ` : "";
     return [this.theme.fg("accent", heading), ...lines.slice(this.offset, this.offset + height),
       this.theme.fg("dim", truncateToWidth(`${scroll}${help}`, width)),
     ].map((line) => truncateToWidth(line, width));

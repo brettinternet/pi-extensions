@@ -58,10 +58,11 @@ The questionnaire stays in the bottom editor dock, not an overlay, and uses at m
 | Escape | Discard all answers |
 | Shift+Enter | Add a newline to custom text |
 | Ctrl+C | Clear the entire draft with `app.clear` |
-| PgUp / PgDn | Scroll |
+| Alt+PgUp / Alt+PgDn | Scroll the question or preview in either mode |
+| PgUp / PgDn | Scroll the conversation in fullscreen; scroll the question in regular mode |
 | Ctrl+] | Collapse to a one-line hint or restore the questionnaire; Escape still cancels while collapsed |
 
-Mouse-wheel scrolling over the questionnaire works only in Pi fullscreen. In multi-select questions, saved custom text and selected options can coexist.
+In fullscreen, the mouse wheel scrolls the questionnaire when over it and the conversation when over a reply. In multi-select questions, saved custom text and selected options can coexist.
 
 Successful answers contain `{question,header,selected:string[],custom:string}` entries. Cancellation returns `{cancelled:true,answers:[]}`. Compact transcript receipts can be expanded to show the full output.
 
