@@ -24,6 +24,8 @@ Pi binds `Ctrl+R` to rename in `/resume`. To avoid the conflict warning, remap i
 
 Prompts come from session JSONL files, including abandoned branches but not ephemeral or deleted sessions. Project scope matches the session's exact working directory.
 
+Expanded skill messages are reconstructed as `/skill:name` plus their arguments, including in older sessions. Search and selection use the command rather than the skill instructions. Original whitespace removed by Pi's expansion cannot be recovered; prompt-template expansions remain as saved.
+
 A private, owner-only index in `~/.pi/agent/prompt-history/` caches prompt text. It refreshes changed sessions and drops deleted ones. Deleting it is safe; it rebuilds from the sessions.
 
 ## Install

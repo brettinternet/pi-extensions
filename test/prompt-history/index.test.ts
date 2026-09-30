@@ -28,6 +28,60 @@ test("reads only user text from session JSONL, preserving multiline prompts", ()
   expect(parseSession(session("/project")).map((item) => item.text)).toEqual(["First prompt\nwith details", "Second prompt"]);
 });
 
+const expandedSkill = '<skill name="review" location="/skills/review/SKILL.md">\nReferences are relative to /skills/review.\n\nReview instructions\n</skill>';
+const userSession = (content: unknown) => JSON.stringify({
+  type: "message", timestamp: "2026-01-01T00:00:00Z", message: { role: "user", content },
+});
+
+test("reconstructs skill commands with no arguments and multiline arguments", () => {
+  expect(parseSession(userSession(expandedSkill))[0]?.text).toBe("/skill:review");
+  const prompts = parseSession(userSession([
+    { type: "text", text: `${expandedSkill}\n\ncheck this\nand that` },
+    { type: "image", data: "abc" },
+  ]));
+  expect(prompts[0]?.text).toBe("/skill:review check this\nand that");
+  expect(searchPrompts(prompts, "", "global", "/skill:review")).toHaveLength(1);
+  expect(searchPrompts(prompts, "", "global", "Review instructions")).toHaveLength(0);
+  const selected: Array<string | undefined> = [];
+  const picker = new HistoryPicker(prompts, "", { requestRender: () => {} },
+    { fg: (_color: string, value: string) => value } as any, (value) => selected.push(value), "", "global");
+  picker.handleInput("\r");
+  expect(selected).toEqual(["/skill:review check this\nand that"]);
+});
+
+test("preserves literal commands, embedded skill examples and malformed wrappers", () => {
+  for (const text of [
+    "/skill:review check this",
+    `Explain this:\n${expandedSkill}`,
+    expandedSkill.replace("\n</skill>", ""),
+    '<skill name="review">\nordinary markup\n</skill>',
+    `${expandedSkill}\nunexpected suffix`,
+  ]) {
+    expect(parseSession(userSession(text))[0]?.text).toBe(text);
+  }
+});
+
+test("rebuilds old indexes so unchanged sessions recover skill commands", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-prompt-history-skill-test-"));
+  const source = join(root, "session.jsonl");
+  const index = join(root, "history.json");
+  try {
+    await writeFile(source, userSession(expandedSkill));
+    const info = await stat(source);
+    await writeFile(index, JSON.stringify({ version: 1, root, files: {
+      [source]: { mtimeMs: info.mtimeMs, ctimeMs: info.ctimeMs, ino: info.ino, dev: info.dev, size: info.size,
+        prompts: [{ text: expandedSkill, cwd: "", timestamp: 0 }] },
+    } }));
+    expect((await loadPrompts(root, true, index))[0]?.text).toBe("/skill:review");
+    expect(JSON.parse(await readFile(index, "utf8")).version).toBe(2);
+    expect((await loadPrompts(root, true, index))[0]?.text).toBe("/skill:review");
+  } finally {
+    await unlink(source);
+    await unlink(index);
+    await rmdir(root);
+  }
+});
+
 test("reads saved sessions from all project folders and filters exact cwd", async () => {
   const root = await mkdtemp(join(tmpdir(), "pi-prompt-history-test-"));
   created.push(root);

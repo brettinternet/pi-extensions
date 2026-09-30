@@ -111,12 +111,16 @@ export function parseSession(contents: string): Prompt[] {
         cwd = typeof entry.cwd === "string" ? entry.cwd : "";
       } else if (entry.type === "message" && entry.message?.role === "user") {
         const content = entry.message.content;
-        const text = typeof content === "string"
+        let text = typeof content === "string"
           ? content
           : Array.isArray(content)
             ? content.filter((part): part is { type: "text"; text: string } =>
                 part?.type === "text" && typeof part.text === "string").map((part) => part.text).join("\n")
             : "";
+        // Pi persists expanded skills, not the submitted /skill:name command.
+        // Only unwrap its generated prefix; leave ordinary or incomplete markup alone.
+        const skill = /^<skill name="([^"\s]+)" location="[^"\n]+">\nReferences are relative to [^\n]+\.\n\n[\s\S]*?\n<\/skill>(?:\n\n([\s\S]*))?$/.exec(text);
+        if (skill) text = `/skill:${skill[1]}${skill[2] ? ` ${skill[2]}` : ""}`;
         if (text.trim()) prompts.push({ text, cwd, timestamp: Date.parse(String(entry.timestamp)) || 0 });
       }
     } catch {

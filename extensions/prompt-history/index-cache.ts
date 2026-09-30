@@ -12,14 +12,14 @@ export interface CachedSession {
   prompts: Prompt[];
 }
 
-type Index = { version: 1; root: string; files: Record<string, CachedSession> };
+type Index = { version: 2; root: string; files: Record<string, CachedSession> };
 
 export async function readIndex(path: string, root: string): Promise<{ files: Record<string, CachedSession>; valid: boolean }> {
   try {
     const value: unknown = JSON.parse(await readFile(path, "utf8"));
     if (!value || typeof value !== "object") return { files: {}, valid: false };
     const index = value as Partial<Index>;
-    if (index.version !== 1 || index.root !== root || !index.files || typeof index.files !== "object" || Array.isArray(index.files)) return { files: {}, valid: false };
+    if (index.version !== 2 || index.root !== root || !index.files || typeof index.files !== "object" || Array.isArray(index.files)) return { files: {}, valid: false };
     const files: Record<string, CachedSession> = {};
     let valid = true;
     for (const [file, record] of Object.entries(index.files)) {
@@ -44,7 +44,7 @@ export async function writeIndex(path: string, root: string, files: Record<strin
   const temporary = `${path}.${process.pid}.${randomUUID()}.tmp`;
   try {
     await mkdir(dirname(path), { recursive: true, mode: 0o700 });
-    await writeFile(temporary, JSON.stringify({ version: 1, root, files }), { mode: 0o600 });
+    await writeFile(temporary, JSON.stringify({ version: 2, root, files }), { mode: 0o600 });
     await rename(temporary, path);
   } catch {
     // Search must still work if the index directory is read-only or unavailable.
