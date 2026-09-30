@@ -31,10 +31,7 @@ export class Questionnaire implements Focusable {
       const draft = this.drafts[this.tab]!;
       const mode = this.editing;
       if (mode === "note") draft.note = text.trim();
-      else {
-        draft.custom = text.trim();
-        if (draft.custom && !questions[this.tab]!.multiSelect) draft.selected.clear();
-      }
+      else this.saveCustom(text);
       this.editing = undefined;
       this.followCursor = true;
       if (mode === "custom" && draft.custom && questions.length === 1) this.finish(false);
@@ -46,6 +43,11 @@ export class Questionnaire implements Focusable {
 
   dispose(): void { this.signal?.removeEventListener("abort", this.abort); }
   invalidate(): void { this.editor.invalidate(); for (const preview of this.previews.values()) preview.invalidate(); }
+  private saveCustom(text: string): void {
+    const draft = this.drafts[this.tab]!;
+    draft.custom = text.trim();
+    if (draft.custom && !this.questions[this.tab]!.multiSelect) draft.selected.clear();
+  }
   private finish(cancelled: boolean): void {
     if (this.finished) return;
     this.finished = true;
@@ -73,7 +75,8 @@ export class Questionnaire implements Focusable {
   handleInput(data: string): void {
     if (this.finished) return;
     if (matchesKey(data, Key.escape)) {
-      if (this.editing === "note" && !this.collapsed) {
+      if (this.editing && !this.collapsed) {
+        if (this.editing === "custom") this.saveCustom(this.editor.getExpandedText());
         this.editing = undefined;
         this.followCursor = true;
         this.tui.requestRender();
@@ -226,7 +229,7 @@ export class Questionnaire implements Focusable {
     }
     this.maxOffset = Math.max(0, lines.length - height);
     this.offset = Math.max(0, Math.min(this.offset, this.maxOffset));
-    const help = this.editing ? `Enter ${this.editing === "custom" && this.questions.length === 1 ? "submit" : "save"} · Shift+Enter newline · Ctrl+] hide · Esc ${this.editing === "note" ? "back" : "cancel"}`
+    const help = this.editing ? `Enter ${this.editing === "custom" && this.questions.length === 1 ? "submit" : "save"} · Shift+Enter newline · Ctrl+] hide · Esc back`
       : this.questions.length === 1 ? "↑↓/j/k move · Space select · Enter submit · n note · Ctrl+] hide · Esc cancel"
       : "↑↓/j/k move · Space/Enter select · Tab questions · n note · Ctrl+] hide · Esc cancel";
     const scroll = lines.length > height ? `${this.offset + 1}–${Math.min(this.offset + height, lines.length)}/${lines.length} · Alt+PgUp/PgDn scroll · ` : "";

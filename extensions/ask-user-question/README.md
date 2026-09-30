@@ -37,7 +37,7 @@ The questionnaire replaces the prompt in the bottom editor dock, not an overlay.
 | Enter on an option | With one question, select and submit; with multiple, select in place |
 | Enter on `Type something.` | Open a full-width editor beneath the row; Enter submits nonblank text for one question or saves it for multiple; Shift+Enter adds a newline |
 | `n` | Open this question’s optional note editor; Enter saves the note and returns |
-| Escape | Discard note edits while editing a note; otherwise cancel all answers |
+| Escape | In the custom-answer editor, keep the draft and return to choices without submitting; in the note editor, discard edits and return; otherwise cancel all answers, even while collapsed |
 | Ctrl+C | Clear the focused editor via `app.clear` |
 | Ctrl+] | Collapse to a one-line hint; press again to restore answers, draft, tab, and scroll position |
 | Alt+PgUp / Alt+PgDn | Scroll the question or preview |

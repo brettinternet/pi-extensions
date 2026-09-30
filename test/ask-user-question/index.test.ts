@@ -334,6 +334,28 @@ describe("terminal questionnaire", () => {
     ui.handleInput(enter);
     expect(results[0]?.answers[0]).toMatchObject({ custom: "first line\nsecond line", selected: [] });
   });
+  test("Escape leaves inline editing and preserves the draft without submitting", () => {
+    const { ui, results } = dialog();
+    ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
+    const text = Array.from({ length: 20 }, (_, i) => `Pasted line ${i}`).join("\n");
+    ui.handleInput(`\x1b[200~${text}\x1b[201~`);
+    ui.handleInput("\x1b");
+    expect(results).toHaveLength(0);
+    expect(ui.render(80).join("\n")).toContain("❯ ● Type something.");
+    ui.handleInput(enter);
+    ui.handleInput(enter);
+    expect(results[0]?.answers[0]?.custom).toBe(text);
+    expect(results[0]?.cancelled).toBe(false);
+  });
+  test("a second Escape from the choices cancels after leaving inline input", () => {
+    const { ui, results } = dialog();
+    ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
+    ui.handleInput("unfinished"); ui.handleInput("\x1b");
+    expect(results).toHaveLength(0);
+    ui.handleInput("\x1b");
+    expect(results[0]?.cancelled).toBe(true);
+    expect(results[0]?.answers).toEqual([]);
+  });
   test("notes retain their separate editor rather than the inline answer field", () => {
     const { ui, results } = dialog();
     ui.handleInput("n"); ui.handleInput("A note");
