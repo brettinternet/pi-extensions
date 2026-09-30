@@ -1,5 +1,5 @@
 import { getMarkdownTheme, type Theme } from "@earendil-works/pi-coding-agent";
-import { Editor, Key, Markdown, matchesKey, truncateToWidth, wrapTextWithAnsi, type Focusable, type TUI } from "@earendil-works/pi-tui";
+import { CURSOR_MARKER, Editor, Key, Markdown, matchesKey, truncateToWidth, wrapTextWithAnsi, type Focusable, type TUI } from "@earendil-works/pi-tui";
 import { answered, newDrafts, result, select, summary, type Question, type Result } from "./model.js";
 
 /** One interaction owns its drafts, editor, and cancellation listener. */
@@ -25,9 +25,14 @@ export class Questionnaire implements Focusable {
         description: (s) => theme.fg("muted", s), scrollInfo: (s) => theme.fg("dim", s), noMatch: (s) => theme.fg("warning", s) },
     });
     this.editor.onSubmit = (text) => {
-      if (!text.trim()) return;
       const draft = this.drafts[this.tab]!;
       draft.custom = text.trim();
+      if (!draft.custom) {
+        this.editing = false;
+        this.followCursor = true;
+        this.tui.requestRender();
+        return;
+      }
       if (!questions[this.tab]!.multiSelect) draft.selected.clear();
       this.editing = false;
       this.moveTab(1);
@@ -76,6 +81,7 @@ export class Questionnaire implements Focusable {
             if (!q.multiSelect) this.moveTab(1);
           } else if (this.cursor === q.options.length) {
             this.editing = true;
+            this.followCursor = true;
             this.editor.setText(draft.custom);
           } else if (answered(draft)) this.moveTab(1);
         }
@@ -99,7 +105,8 @@ export class Questionnaire implements Focusable {
         add("Your answer (Enter saves; Shift+Enter inserts a newline):");
         this.editor.focused = this.focused;
         lines.push(...this.editor.render(width));
-        anchor = Math.max(0, lines.length - 1);
+        const cursorLine = lines.findIndex((line) => line.includes(CURSOR_MARKER));
+        anchor = cursorLine < 0 ? Math.max(0, lines.length - 1) : cursorLine;
       } else {
         const labels = [...q.options.map((o) => o.label), "Type something.", ...(q.multiSelect ? ["Continue"] : [])];
         labels.forEach((label, i) => {

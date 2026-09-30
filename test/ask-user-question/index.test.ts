@@ -1,6 +1,6 @@
 import { describe, expect, test } from "bun:test";
-import type { ExtensionAPI, ExtensionContext, Theme } from "@earendil-works/pi-coding-agent";
-import { visibleWidth, type TUI } from "@earendil-works/pi-tui";
+import { initTheme, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { CURSOR_MARKER, visibleWidth, type TUI } from "@earendil-works/pi-tui";
 import { Value } from "typebox/value";
 import extension, { askNative } from "../../extensions/ask-user-question/index.js";
 import { Questionnaire } from "../../extensions/ask-user-question/dialog.js";
@@ -67,6 +67,35 @@ describe("terminal questionnaire", () => {
     ui.handleInput(enter);
     expect(results[0]?.answers[0]).toMatchObject({ selected: [], custom: "Redis" });
   });
+  test("custom text can be cleared without losing multi-select choices", () => {
+    const { ui, results } = dialog([{ ...question, multiSelect: true }]);
+    ui.handleInput(enter); ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
+    ui.handleInput("Redis"); ui.handleInput(enter); ui.handleInput(tab);
+    ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
+    ui.handleInput("\x15"); ui.handleInput(enter);
+    expect(ui.render(80).join("\n")).toContain("[✓] SQLite");
+    ui.handleInput(tab); ui.handleInput(enter);
+    expect(results[0]?.answers[0]).toMatchObject({ selected: ["SQLite"], custom: "" });
+  });
+  test("opening editor after paging brings the focused cursor into view", () => {
+    const { ui } = dialog([{ ...question, question: "Long question\n".repeat(30) }]);
+    ui.focused = true;
+    ui.handleInput(down); ui.handleInput(down); ui.render(80);
+    for (let i = 0; i < 10; i++) ui.handleInput("\x1b[5~");
+    ui.render(80); ui.handleInput(enter);
+    expect(ui.render(80).some((line) => line.includes(CURSOR_MARKER))).toBe(true);
+    ui.dispose();
+  });
+  test("previews render Markdown and scroll within the viewport", () => {
+    initTheme("dark", false);
+    const { ui } = dialog([{ ...question, options: [{ ...question.options[0]!, preview: "# Example\n\n" + "preview line\n".repeat(30) }, question.options[1]!] }]);
+    expect(ui.render(80).join("\n")).toContain("Example");
+    ui.handleInput("\x1b[6~");
+    const lines = ui.render(20);
+    expect(lines.every((line) => visibleWidth(line) <= 20)).toBe(true);
+    expect(lines.length).toBeLessThanOrEqual(24);
+    ui.dispose();
+  });
   test("escape discards partial answers and abort closes exactly once", () => {
     const controller = new AbortController();
     const { ui, results } = dialog([question], controller.signal);
@@ -96,6 +125,13 @@ function native(choices: (string | undefined)[], input = "custom", confirm = tru
 test("RPC supports multiple selections and custom text", async () => {
   const value = await askNative([{ ...question, multiSelect: true }], native(["SQLite", "Postgres", "Type something", "Continue"]));
   expect(value.answers[0]).toMatchObject({ selected: ["SQLite", "Postgres"], custom: "custom" });
+});
+test("RPC can withdraw custom text while retaining selected options", async () => {
+  const ctx = native(["SQLite", "Type something", "Type something", "Continue"]);
+  const inputs = ["Redis", ""];
+  ctx.ui.input = async () => inputs.shift();
+  const value = await askNative([{ ...question, multiSelect: true }], ctx);
+  expect(value.answers[0]).toMatchObject({ selected: ["SQLite"], custom: "" });
 });
 test("RPC cancellation and declined review discard all answers", async () => {
   expect(await askNative([question], native([undefined]))).toEqual({ cancelled: true, answers: [] });

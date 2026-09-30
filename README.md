@@ -4,6 +4,7 @@ Extensions and a theme for the [Pi coding agent](https://pi.dev).
 
 | Extension | What it does |
 | --- | --- |
+| [Ask User Question](extensions/ask-user-question/README.md) | Structured choices, custom answers, and previews via `ask_user_question` |
 | [Colima Sandbox](extensions/colima-sandbox/README.md) | Runs Pi's file and shell tools in a disposable container |
 | [Copy Prompt](extensions/copy-prompt/README.md) | `Alt+C` copies the editor text |
 | [Footer](extensions/footer/README.md) | Shows context, cache, cost, and Git status |

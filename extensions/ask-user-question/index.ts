@@ -20,8 +20,8 @@ export async function askNative(questions: Question[], ctx: ExtensionContext, si
       else if (selected === q.options.length) {
         const custom = await ctx.ui.input(`${q.header}: your answer`, draft.custom || undefined, { signal });
         if (signal?.aborted || custom === undefined) return cancel();
-        if (!custom.trim()) continue;
         draft.custom = custom.trim();
+        if (!draft.custom) continue;
         if (!q.multiSelect) draft.selected.clear();
       } else break;
       if (!q.multiSelect) break;
