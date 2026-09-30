@@ -1,97 +1,74 @@
-# ask-user-question
+# Ask User Question
 
-A standalone structured-question tool for Pi 0.99.1+. No rpiv dependency.
+A standalone question tool for Pi 0.99.1 and later. It registers `ask_user_question` without an `rpiv` dependency.
 
 ## Load
 
-From this repository:
+This extension is included in the root package. To load it directly from this repository:
 
 ```sh
 pi -e ./extensions/ask-user-question/index.ts
 ```
 
-Or install the local package:
+Or install the local extension:
 
 ```sh
 pi install ./extensions/ask-user-question
 ```
 
-Also included in this repository's root Pi package. Disable or remove `@juicesharp/rpiv-ask-user-question` before loading this extension: both register `ask_user_question`. Restart Pi after changing installed extensions. This package has not been published to npm.
+It is not published to npm. Disable `@juicesharp/rpiv-ask-user-question` first if you use it: both extensions register the same tool name.
 
-## Tool
-
-`ask_user_question` accepts 1–4 questions. Each has:
-
-- `question`: full question text.
-- `header`: short tab label, at most 16 characters.
-- `options`: 2–4 choices, each with a `label` (at most 60 characters) and `description`.
-- `multiSelect`: optional boolean, default false.
-- `options[].preview`: optional Markdown, only for single-select questions.
-
-Unknown fields are rejected, including `preview` placed on a question instead of an option.
-
-A **Type something.** row is always included. Authored `Other` and `Type something` labels, blank text, and duplicate option labels are rejected. Recommended choices should come first and include `(Recommended)` in their label.
+## Ask a question
 
 ```json
 {
-  "questions": [{
-    "question": "Where should we store the cache?",
-    "header": "Cache",
-    "options": [
-      { "label": "Memory (Recommended)", "description": "Simple, process-local caching." },
-      { "label": "Redis", "description": "Shared cache across instances." }
-    ]
-  }]
+  "questions": [
+    {
+      "question": "Where should session data live?",
+      "header": "Storage",
+      "options": [
+        {
+          "label": "Memory (Recommended)",
+          "description": "Keep data in this process."
+        },
+        {
+          "label": "Redis",
+          "description": "Share data across processes.",
+          "preview": "Requires a running Redis server."
+        }
+      ]
+    }
+  ]
 }
 ```
 
-## Terminal controls
+The tool accepts `{questions:[{question,header,options:[{label,description,preview?}],multiSelect?}]}`. Provide 1–4 questions with 2–4 options each. Headers are at most 16 characters; labels are at most 60. Unknown properties are rejected. Put `(Recommended)` on the first choice when recommending it.
 
-| Key | Action |
+`preview` is optional Markdown for single-select questions. It appears below the options. A `Type something.` custom row is always provided, so do not add an `Other` or `Type something` option.
+
+The questionnaire temporarily replaces the prompt in the bottom editor area; it is not a centered overlay.
+
+| Control | Action |
 | --- | --- |
-| Tab / Shift+Tab or ← / → | Move between questions and Submit |
-| ↑ / ↓ or k / j | Focus a choice |
-| Enter / Space | Select or toggle the focused choice |
-| Enter on Continue | Advance after a multi-select answer |
-| Enter while typing | Save the custom answer and advance |
-| Shift+Enter while typing | Add a newline |
-| Ctrl+C while typing | Clear the whole draft (follows Pi's `app.clear` binding) |
-| Page Up / Page Down | Scroll long questions or previews |
-| Mouse wheel over questionnaire | Scroll in Pi fullscreen mode |
-| Enter on Submit | Submit only when every question is answered |
-| Escape | Cancel the whole questionnaire; discard all answers |
+| Tab / Shift+Tab or ← / → | Change question tab |
+| ↑ / ↓ or j / k | Choose an option |
+| Enter / Space | Select or toggle an option |
+| Continue | Advance a multi-select question |
+| Submit, then Enter | Submit, including for a single question |
+| Escape | Discard all answers |
+| Shift+Enter | Add a newline to custom text |
+| Ctrl+C | Clear the entire draft with `app.clear` |
+| PgUp / PgDn | Scroll |
 
-Selections are preserved while navigating tabs. Single-select custom answers replace the selected option; multi-select custom answers can accompany selected options. Reopen the custom row, clear its text, and press Enter to withdraw a custom answer without losing selected options. A single question still requires confirmation on the Submit tab. Previews render below the focused option list and can be scrolled. Rendering adapts to terminal width and height. In fullscreen mode, the mouse wheel scrolls while hovering over the questionnaire, without changing choices. Modified wheel gestures are left to the host. In regular mode the terminal owns wheel scrolling; use Page Up / Page Down to scroll questionnaire content.
+Mouse-wheel scrolling over the questionnaire works only in Pi fullscreen. In multi-select questions, saved custom text and selected options can coexist.
 
-## Results and hosts
+Successful answers contain `{question,header,selected:string[],custom:string}` entries. Cancellation returns `{cancelled:true,answers:[]}`. Compact transcript receipts can be expanded to show the full output.
 
-The transcript shows compact answer receipts; expand the tool to see the full response. Selected labels omit `(Recommended)` in the compact view only. Error messages remain fully visible.
+In RPC mode, questions use native select, input, and confirm prompts. The tool is disabled in print and JSON modes.
 
-The model receives a readable answer summary. `details` and `structuredContent` contain:
-
-```json
-{
-  "cancelled": false,
-  "answers": [{
-    "question": "Where should we store the cache?",
-    "header": "Cache",
-    "selected": ["Memory (Recommended)"],
-    "custom": ""
-  }]
-}
-```
-
-Cancelled interactions return `cancelled: true` and an empty `answers` array, never partial answers. Abort signals close an active questionnaire. The tool is model-only and sequential to avoid competing dialogs.
-
-RPC hosts use native select, input, and confirmation dialogs. Multi-select repeats the picker until Continue; previews appear as plain option text. Print/JSON sessions deactivate the tool, and direct execution without UI fails explicitly.
-
-This is a focused replacement, not an rpiv fork. It intentionally omits rpiv localization, notes, collapse shortcuts, configuration, events, external-editor integration, and side-by-side preview layout.
-
-See [upstream PR review](UPSTREAM-REVIEW.md) for adopted ideas and deferred features.
+See [UPSTREAM-REVIEW.md](./UPSTREAM-REVIEW.md) for deferred features.
 
 ## Development
-
-From the repository root:
 
 ```sh
 bun test test/ask-user-question
