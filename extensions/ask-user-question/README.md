@@ -27,7 +27,7 @@ Disable `@juicesharp/rpiv-ask-user-question` before `/reload`: it registers the 
 
 Use 1–4 questions with 2–4 options each. Set `multiSelect: true` on a question to allow multiple choices. Each option needs a label and description; optional `options[].preview` is framed Markdown for single-select questions, shown beside the choices at widths of 100 columns or more and below them at narrower widths. Headers are limited to 16 characters and labels to 60. Unknown properties are rejected. The `Type something.` row is always provided, so do not add it as an option.
 
-The questionnaire replaces the prompt in the bottom editor dock, not an overlay. It uses at most half the terminal height or 12 rows, without reserving blank space. The chat above remains scrollable to the latest reply. Focus and preview borders are cyan; the active label is bold, descriptions are muted, and the selected tab follows the Pi theme.
+The questionnaire replaces the prompt in the bottom editor dock, not an overlay. It uses at most 60% of the terminal height or 16 rows, without reserving blank space. The chat above remains scrollable to the latest reply. Focus and preview borders are cyan; the active label is bold, descriptions are muted, and the selected tab follows the Pi theme.
 
 | Control | Action |
 | --- | --- |

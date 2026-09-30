@@ -185,7 +185,7 @@ export class Questionnaire implements Focusable {
       }
     }
     // In-flow bottom dock: leave room for the transcript; never pad short content.
-    const height = Math.max(1, Math.min(12, Math.floor(this.tui.terminal.rows / 2)) - 2);
+    const height = Math.max(1, Math.min(16, Math.floor(this.tui.terminal.rows * 0.6)) - 2);
     if (this.followCursor) {
       if (anchor < this.offset) this.offset = anchor;
       if (anchor >= this.offset + height) this.offset = anchor - height + 1;

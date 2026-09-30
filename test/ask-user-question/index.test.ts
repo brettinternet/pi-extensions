@@ -95,10 +95,10 @@ describe("terminal questionnaire", () => {
     for (const rows of [12, 24, 50]) {
       tui.terminal.rows = rows;
       const expanded = frame();
-      expect(ui.render(80).length).toBeLessThanOrEqual(Math.min(12, Math.floor(rows / 2)));
+      expect(ui.render(80).length).toBe(Math.min(16, Math.floor(rows * 0.6)));
       expect(expanded.lines.join("\n")).toContain("Agent reply line 79");
       const expandedHeight = viewport.transcript.viewportHeight;
-      expect(expandedHeight).toBeGreaterThanOrEqual(Math.floor(rows / 2));
+      expect(expandedHeight).toBeGreaterThanOrEqual(Math.ceil(rows * 0.4));
       ui.handleInput("\x1d");
       const collapsed = frame();
       expect(viewport.transcript.viewportHeight).toBeGreaterThan(expandedHeight);
