@@ -1,6 +1,6 @@
 import { getMarkdownTheme, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, Editor, Key, Markdown, isKeyRepeat, matchesKey, truncateToWidth, wrapTextWithAnsi, type Focusable, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { answered, newDrafts, result, select, summary, type Question, type Result } from "./model.js";
+import { answered, newDrafts, result, select, type Question, type Result } from "./model.js";
 
 /** One interaction owns its drafts, editor, and cancellation listener. */
 export class Questionnaire implements Focusable {
@@ -30,15 +30,10 @@ export class Questionnaire implements Focusable {
     this.editor.onSubmit = (text) => {
       const draft = this.drafts[this.tab]!;
       draft.custom = text.trim();
-      if (!draft.custom) {
-        this.editing = false;
-        this.followCursor = true;
-        this.tui.requestRender();
-        return;
-      }
-      if (!questions[this.tab]!.multiSelect) draft.selected.clear();
+      if (draft.custom && !questions[this.tab]!.multiSelect) draft.selected.clear();
       this.editing = false;
-      this.moveTab(1);
+      this.followCursor = true;
+      this.tui.requestRender();
     };
     signal?.addEventListener("abort", this.abort, { once: true });
     if (signal?.aborted) queueMicrotask(this.abort);
@@ -53,8 +48,13 @@ export class Questionnaire implements Focusable {
     this.done(result(this.questions, this.drafts, cancelled));
   }
   private moveTab(delta: number): void {
-    this.tab = (this.tab + delta + this.questions.length + 1) % (this.questions.length + 1);
-    this.cursor = 0;
+    if (this.questions.length === 1) {
+      const submit = this.questions[0]!.options.length + 1;
+      this.cursor = this.cursor === submit ? 0 : submit;
+    } else {
+      this.tab = (this.tab + delta + this.questions.length) % this.questions.length;
+      this.cursor = 0;
+    }
     this.offset = 0;
     this.followCursor = true;
     this.tui.requestRender();
@@ -97,27 +97,26 @@ export class Questionnaire implements Focusable {
       this.offset += pageDown ? 5 : -5;
       this.followCursor = false;
     } else {
-      const q = this.questions[this.tab];
-      if (!q) {
-        if (matchesKey(data, Key.enter) && this.drafts.every(answered)) this.finish(false);
-      } else {
-        const last = q.options.length + (q.multiSelect ? 1 : 0);
-        const up = matchesKey(data, Key.up) || matchesKey(data, "k");
-        const down = matchesKey(data, Key.down) || matchesKey(data, "j");
-        if (up || down) {
-          this.cursor = (this.cursor + (up ? -1 : 1) + last + 1) % (last + 1);
+      const q = this.questions[this.tab]!;
+      const submit = q.options.length + 1;
+      const up = matchesKey(data, Key.up) || matchesKey(data, "k");
+      const down = matchesKey(data, Key.down) || matchesKey(data, "j");
+      if (up || down) {
+        this.cursor = (this.cursor + (up ? -1 : 1) + submit + 1) % (submit + 1);
+        this.offset = 0;
+        this.followCursor = true;
+      } else if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
+        const draft = this.drafts[this.tab]!;
+        if (this.cursor < q.options.length) {
+          select(q, draft, this.cursor);
           this.offset = 0;
           this.followCursor = true;
-        } else if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
-          const draft = this.drafts[this.tab]!;
-          if (this.cursor < q.options.length) {
-            select(q, draft, this.cursor);
-            if (!q.multiSelect && matchesKey(data, Key.enter)) this.moveTab(1);
-          } else if (this.cursor === q.options.length && matchesKey(data, Key.enter)) {
+        } else if (matchesKey(data, Key.enter) && !isKeyRepeat(data)) {
+          if (this.cursor === q.options.length) {
             this.editing = true;
             this.followCursor = true;
             this.editor.setText(draft.custom);
-          } else if (this.cursor > q.options.length && matchesKey(data, Key.enter) && answered(draft)) this.moveTab(1);
+          } else if (this.drafts.every(answered)) this.finish(false);
         }
       }
     }
@@ -126,47 +125,66 @@ export class Questionnaire implements Focusable {
 
   render(width: number): string[] {
     width = Math.max(1, width);
-    if (this.collapsed) return [this.theme.fg("dim", truncateToWidth("Questions hidden · Ctrl+] show · Esc cancel", width))];
-    const q = this.questions[this.tab];
-    const tabs = [...this.questions.map((question, i) => `${answered(this.drafts[i]!) ? "✓" : "○"} ${question.header}`), "Submit"];
-    const heading = truncateToWidth(tabs.map((label, i) => i === this.tab ? `[${label}]` : label).join(" · "), width);
-    const lines: string[] = [];
-    const add = (text: string) => lines.push(...wrapTextWithAnsi(text, width));
+    const { theme } = this;
+    if (this.collapsed) return [theme.fg("dim", truncateToWidth("Questions hidden · Ctrl+] show · Esc cancel", width))];
+    const q = this.questions[this.tab]!;
+    const draft = this.drafts[this.tab]!;
+    const heading = this.questions.map((question, i) => {
+      const label = ` ${answered(this.drafts[i]!) ? "■" : "□"} ${question.header} `;
+      return i === this.tab ? theme.bg("selectedBg", theme.fg("text", label)) : theme.fg(answered(this.drafts[i]!) ? "success" : "muted", label);
+    }).join(" ");
+    const preview = this.editing ? undefined : q.options[this.cursor]?.preview;
+    const sideBySide = !!preview && width >= 100;
+    const listWidth = sideBySide ? Math.floor(width * 0.4) : width;
+    let lines: string[] = [];
+    const add = (text: string) => lines.push(...wrapTextWithAnsi(text, listWidth));
+    add(theme.fg("text", theme.bold(q.question)));
     let anchor = 0;
-    if (q) {
-      add(this.theme.fg("accent", q.question));
-      const draft = this.drafts[this.tab]!;
-      if (this.editing) {
-        add("Your answer (Enter saves; Shift+Enter inserts a newline):");
-        this.editor.focused = this.focused;
-        lines.push(...this.editor.render(width));
-        const cursorLine = lines.findIndex((line) => line.includes(CURSOR_MARKER));
-        anchor = cursorLine < 0 ? Math.max(0, lines.length - 1) : cursorLine;
-      } else {
-        const labels = [...q.options.map((o) => o.label), "Type something.", ...(q.multiSelect ? ["Continue"] : [])];
-        labels.forEach((label, i) => {
-          if (i === this.cursor) anchor = lines.length;
-          const checked = i < q.options.length ? draft.selected.has(i) : i === q.options.length && !!draft.custom;
-          add(`${i === this.cursor ? "❯" : " "} ${checked ? "[✓]" : "[ ]"} ${label}`);
-          if (q.options[i]) add(this.theme.fg("muted", `    ${q.options[i]!.description}`));
-          else if (i === q.options.length && draft.custom) add(`    ${draft.custom}`);
-        });
-        const preview = q.options[this.cursor]?.preview;
-        if (preview) {
-          add(this.theme.fg("dim", "─ Preview ─"));
-          let markdown = this.previews.get(preview);
-          if (!markdown) { markdown = new Markdown(preview, 0, 0, getMarkdownTheme()); this.previews.set(preview, markdown); }
-          lines.push(...markdown.render(width));
-        }
-      }
+    if (this.editing) {
+      add(theme.fg("muted", "Your answer (Enter saves; Shift+Enter inserts a newline):"));
+      this.editor.focused = this.focused;
+      lines.push(...this.editor.render(width));
+      const cursorLine = lines.findIndex((line) => line.includes(CURSOR_MARKER));
+      anchor = cursorLine < 0 ? Math.max(0, lines.length - 1) : cursorLine;
     } else {
-      add("Review your answers");
-      add(summary(result(this.questions, this.drafts, false)));
-      const missing = this.questions.filter((_, i) => !answered(this.drafts[i]!));
-      add(missing.length ? `Unanswered: ${missing.map((question) => question.header).join(", ")}` : "Enter to submit answers");
+      const labels = [...q.options.map((o) => o.label), "Type something."];
+      labels.forEach((label, i) => {
+        const active = i === this.cursor;
+        if (active) anchor = lines.length;
+        const checked = i < q.options.length ? draft.selected.has(i) : !!draft.custom;
+        const marker = q.multiSelect ? (checked ? "[✔]" : "[ ]") : (checked ? "●" : "○");
+        const pointer = active ? theme.fg("accent", "❯ ") : "  ";
+        const styledLabel = active ? theme.fg("accent", theme.bold(label)) : theme.fg("text", label);
+        add(`${pointer}${theme.fg(checked ? "accent" : "muted", marker)} ${styledLabel}`);
+        if (q.options[i]) add(theme.fg("muted", `    ${q.options[i]!.description}`));
+        else if (draft.custom) add(theme.fg("muted", `    ${draft.custom}`));
+      });
+      const active = this.cursor === q.options.length + 1;
+      if (active) anchor = lines.length;
+      const ready = this.drafts.every(answered);
+      const label = this.questions.length === 1 ? "Submit answer" : "Submit answers";
+      add(`${active ? theme.fg("accent", "❯ ") : "  "}${theme.fg(active ? "accent" : ready ? "success" : "dim", active ? theme.bold(label) : label)}`);
+      if (!ready && this.questions.length > 1) add(theme.fg("dim", `Unanswered: ${this.questions.filter((_, i) => !answered(this.drafts[i]!)).map((question) => question.header).join(", ")}`));
+      if (preview) {
+        const previewWidth = sideBySide ? width - listWidth - 2 : width;
+        let markdown = this.previews.get(preview);
+        if (!markdown) { markdown = new Markdown(preview, 0, 0, getMarkdownTheme()); this.previews.set(preview, markdown); }
+        const previewLines: string[] = [];
+        if (previewWidth >= 5) {
+          previewLines.push(theme.fg("accent", `┌${truncateToWidth("─ Preview " + "─".repeat(previewWidth), previewWidth - 2, "")}┐`));
+          for (const line of markdown.render(previewWidth - 4)) {
+            previewLines.push(theme.fg("accent", "│ ") + truncateToWidth(line, previewWidth - 4, "", true) + theme.fg("accent", " │"));
+          }
+          previewLines.push(theme.fg("accent", `└${"─".repeat(previewWidth - 2)}┘`));
+        } else previewLines.push(...markdown.render(previewWidth));
+        if (sideBySide) {
+          const choices = lines;
+          lines = Array.from({ length: Math.max(choices.length, previewLines.length) }, (_, i) =>
+            truncateToWidth(choices[i] ?? "", listWidth, "", true) + "  " + (previewLines[i] ?? ""));
+        } else lines.push(...previewLines);
+      }
     }
-    // This is an in-flow editor replacement, not an overlay. Leave the transcript
-    // room above the dock even when an option contains a very long preview.
+    // In-flow bottom dock: leave room for the transcript; never pad short content.
     const height = Math.max(1, Math.min(12, Math.floor(this.tui.terminal.rows / 2)) - 2);
     if (this.followCursor) {
       if (anchor < this.offset) this.offset = anchor;
@@ -175,14 +193,10 @@ export class Questionnaire implements Focusable {
     this.maxOffset = Math.max(0, lines.length - height);
     this.offset = Math.max(0, Math.min(this.offset, this.maxOffset));
     const help = this.editing ? "Enter save · Shift+Enter newline · Ctrl+] hide · Esc cancel"
-      : !q ? "Enter submit · Tab edit answers · Ctrl+] hide · Esc cancel"
-      : `${q.multiSelect ? "Space/Enter toggle · Continue next" : "Space select · Enter next"} · ↑↓/j/k choose · Tab tabs · Ctrl+] hide · Esc cancel`;
+      : `↑↓/j/k move · Space/Enter select · Tab ${this.questions.length === 1 ? "submit" : "questions"} · Ctrl+] hide · Esc cancel`;
     const scroll = lines.length > height ? `${this.offset + 1}–${Math.min(this.offset + height, lines.length)}/${lines.length} · Alt+PgUp/PgDn scroll · ` : "";
-    const visible = lines.slice(this.offset, this.offset + height);
-    // Only Ctrl+] changes the dock height, not selecting a shorter answer or tab.
-    while (visible.length < height) visible.push("");
-    return [this.theme.fg("accent", heading), ...visible,
-      this.theme.fg("dim", truncateToWidth(`${scroll}${help}`, width)),
+    return [truncateToWidth(heading, width), ...lines.slice(this.offset, this.offset + height),
+      theme.fg("dim", truncateToWidth(`${scroll}${help}`, width)),
     ].map((line) => truncateToWidth(line, width));
   }
 }

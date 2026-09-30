@@ -12,7 +12,7 @@ import { parameters, validate, type Question, type Result } from "../../extensio
 const question: Question = { header: "Store", question: "Which store?", options: [
   { label: "SQLite", description: "Embedded storage" }, { label: "Postgres", description: "Remote storage" },
 ] };
-const theme = { fg: (_: string, s: string) => s } as Theme;
+const theme = { fg: (_: string, s: string) => s, bg: (_: string, s: string) => s, bold: (s: string) => s } as Theme;
 function dialog(questions = [question], signal?: AbortSignal, keys?: Pick<KeybindingsManager, "matches">) {
   const results: Result[] = [];
   const tui = { requestRender() {}, terminal: { rows: 24 } };
@@ -62,7 +62,7 @@ describe("terminal questionnaire", () => {
     ui.handleInput("\x1d");
     expect(ui.render(80).join("\n")).toContain("unfinished");
     ui.handleInput(" answer"); ui.handleInput(enter);
-    ui.handleInput("\x1d"); ui.handleInput("\x1d"); ui.handleInput(enter);
+    ui.handleInput("\x1d"); ui.handleInput("\x1d"); ui.handleInput(tab); ui.handleInput(enter);
     expect(results[0]?.answers[0]).toMatchObject({ selected: ["SQLite"], custom: "unfinished answer" });
   });
   test("collapse retains scroll position and ignores held shortcut repeats", () => {
@@ -111,40 +111,68 @@ describe("terminal questionnaire", () => {
     }
     ui.dispose();
   });
-  test("Space selects in place and Enter advances without shrinking the dock", () => {
+  test("uses themed focus, selection, tabs and previews without padding short lists", () => {
+    initTheme("dark", false);
+    const calls: [string, string][] = [];
+    const styled = { ...theme,
+      fg: (color: string, text: string) => { calls.push([color, text]); return text; },
+      bg: (color: string, text: string) => { calls.push([color, text]); return text; },
+      bold: (text: string) => { calls.push(["bold", text]); return text; },
+    } as Theme;
+    const tui = { requestRender() {}, terminal: { rows: 40 } } as unknown as TUI;
+    const ui = new Questionnaire([question], tui, styled, () => {});
+    ui.handleInput(enter);
+    const lines = ui.render(80);
+    expect(lines.length).toBeLessThan(12);
+    expect(lines).not.toContain("");
+    expect(calls).toContainEqual(["accent", "●"]);
+    expect(calls).toContainEqual(["accent", "❯ "]);
+    expect(calls).toContainEqual(["bold", "SQLite"]);
+    expect(calls).toContainEqual(["muted", "    Embedded storage"]);
+    expect(calls).toContainEqual(["selectedBg", " ■ Store "]);
+    ui.dispose();
+    const preview = new Questionnaire([{ ...question, options: [{ ...question.options[0]!, preview: "# Example" }, question.options[1]!] }], tui, styled, () => {});
+    preview.render(80);
+    expect(calls.some(([color, text]) => color === "accent" && text.startsWith("┌─ Preview"))).toBe(true);
+    preview.dispose();
+  });
+  test("Space and Enter select in place; Submit stays on the same screen", () => {
     const { ui, results } = dialog();
     const height = ui.render(80).length;
     ui.handleInput(" ");
-    expect(ui.render(80).join("\n")).toContain("[✓ Store]");
-    expect(ui.render(80).join("\n")).toContain("❯ [✓] SQLite");
+    expect(ui.render(80).join("\n")).toContain("■ Store");
+    expect(ui.render(80).join("\n")).toContain("❯ ● SQLite");
     expect(ui.render(80).join("\n")).not.toContain("Review your answers");
     ui.handleInput(down); ui.handleInput(" ");
-    expect(ui.render(80).join("\n")).toContain("❯ [✓] Postgres");
+    expect(ui.render(80).join("\n")).toContain("❯ ● Postgres");
     expect(ui.render(80).length).toBe(height);
     ui.handleInput(enter);
-    expect(ui.render(80).join("\n")).toContain("Review your answers");
+    expect(ui.render(80).join("\n")).toContain("○ SQLite");
+    expect(ui.render(80).join("\n")).toContain("Submit answer");
+    expect(ui.render(80).join("\n")).not.toContain("Review your answers");
+    expect(ui.render(80).join("\n")).not.toContain("[ ]");
     expect(ui.render(80).length).toBe(height);
-    ui.handleInput(" ");
+    ui.handleInput(tab); ui.handleInput(" ");
     expect(results).toHaveLength(0);
     ui.handleInput(enter);
     expect(results[0]?.answers[0]?.selected).toEqual(["Postgres"]);
   });
-  test("Space cannot accidentally activate custom editing or Continue", () => {
-    const { ui } = dialog([{ ...question, multiSelect: true }]);
+  test("Space cannot accidentally activate custom editing or Submit", () => {
+    const { ui, results } = dialog([{ ...question, multiSelect: true }]);
     ui.handleInput(" "); ui.handleInput(down); ui.handleInput(down); ui.handleInput(" ");
     expect(ui.render(80).join("\n")).not.toContain("Your answer");
     ui.handleInput(down); ui.handleInput(" ");
-    expect(ui.render(80).join("\n")).not.toContain("Review your answers");
+    expect(results).toHaveLength(0);
     ui.handleInput(enter);
-    expect(ui.render(80).join("\n")).toContain("Review your answers");
+    expect(results[0]?.answers[0]?.selected).toEqual(["SQLite"]);
     ui.dispose();
   });
-  test("requires explicit review and submission", () => {
+  test("requires explicit inline submission", () => {
     const { ui, results } = dialog();
-    ui.handleInput(enter);
+    ui.handleInput(enter); ui.handleInput(enter);
     expect(results).toHaveLength(0);
-    expect(ui.render(80).join("\n")).toContain("Enter to submit");
-    ui.handleInput(enter);
+    expect(ui.render(80).join("\n")).toContain("Submit answer");
+    ui.handleInput(tab); ui.handleInput(enter);
     expect(results[0]?.answers[0]?.selected).toEqual(["SQLite"]);
     ui.handleInput(escape);
     expect(results).toHaveLength(1);
@@ -152,9 +180,9 @@ describe("terminal questionnaire", () => {
   test("vim keys navigate without intercepting literal editor input", () => {
     const { ui, results } = dialog();
     ui.handleInput("j"); ui.handleInput("k");
-    expect(ui.render(80).join("\n")).toContain("❯ [ ] SQLite");
+    expect(ui.render(80).join("\n")).toContain("❯ ○ SQLite");
     ui.handleInput("j"); ui.handleInput("j"); ui.handleInput(enter);
-    ui.handleInput("j"); ui.handleInput("k"); ui.handleInput(enter); ui.handleInput(enter);
+    ui.handleInput("j"); ui.handleInput("k"); ui.handleInput(enter); ui.handleInput(tab); ui.handleInput(enter);
     expect(results[0]?.answers[0]?.custom).toBe("jk");
   });
   test("Kitty-encoded Space toggles a multi-select choice", () => {
@@ -169,40 +197,44 @@ describe("terminal questionnaire", () => {
       ui.handleInput("\x1b[200~first\nsecond\x1b[201~");
       ui.handleInput(key === "ctrl+c" ? "\x03" : "\x18");
       expect(results).toHaveLength(0);
-      ui.handleInput("replacement"); ui.handleInput(enter); ui.handleInput(enter);
+      ui.handleInput("replacement"); ui.handleInput(enter); ui.handleInput(tab); ui.handleInput(enter);
       expect(results[0]?.answers[0]?.custom).toBe("replacement");
     }
   });
   test("cannot submit incomplete questions", () => {
     const { ui, results } = dialog([question, { ...question, header: "Second" }]);
-    ui.handleInput(enter); ui.handleInput(tab); ui.handleInput(enter);
+    ui.handleInput(enter); ui.handleInput("k"); ui.handleInput(enter);
     expect(results).toHaveLength(0);
     expect(ui.render(80).join("\n")).toContain("Unanswered: Second");
-    ui.dispose();
+    ui.handleInput(tab); ui.handleInput(down); ui.handleInput(enter);
+    expect(results).toHaveLength(0);
+    ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
+    expect(results[0]?.answers.map((answer) => answer.selected)).toEqual([["SQLite"], ["Postgres"]]);
   });
   test("multi-select toggles, preserves choices across tabs, and continues", () => {
     const { ui, results } = dialog([{ ...question, multiSelect: true }]);
     ui.handleInput(enter); ui.handleInput(enter); ui.handleInput(down); ui.handleInput(enter);
     ui.handleInput(tab); ui.handleInput(tab);
-    expect(ui.render(80).join("\n")).toContain("[✓] Postgres");
-    ui.handleInput(down); ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter); ui.handleInput(enter);
+    expect(ui.render(80).join("\n")).toContain("[✔] Postgres");
+    ui.handleInput(down); ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
     expect(results[0]?.answers[0]?.selected).toEqual(["Postgres"]);
   });
-  test("custom answer supports typing and does not submit until reviewed", () => {
+  test("custom answer returns to its list and requires inline submission", () => {
     const { ui, results } = dialog();
     ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
     ui.handleInput("Redis"); ui.handleInput(enter);
     expect(results).toHaveLength(0);
-    ui.handleInput(enter);
+    expect(ui.render(80).join("\n")).toContain("● Type something.");
+    ui.handleInput(tab); ui.handleInput(enter);
     expect(results[0]?.answers[0]).toMatchObject({ selected: [], custom: "Redis" });
   });
   test("custom text can be cleared without losing multi-select choices", () => {
     const { ui, results } = dialog([{ ...question, multiSelect: true }]);
     ui.handleInput(enter); ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
-    ui.handleInput("Redis"); ui.handleInput(enter); ui.handleInput(tab);
-    ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
+    ui.handleInput("Redis"); ui.handleInput(enter);
+    ui.handleInput(enter);
     ui.handleInput("\x15"); ui.handleInput(enter);
-    expect(ui.render(80).join("\n")).toContain("[✓] SQLite");
+    expect(ui.render(80).join("\n")).toContain("[✔] SQLite");
     ui.handleInput(tab); ui.handleInput(enter);
     expect(results[0]?.answers[0]).toMatchObject({ selected: ["SQLite"], custom: "" });
   });
@@ -213,6 +245,20 @@ describe("terminal questionnaire", () => {
     for (let i = 0; i < 10; i++) ui.handleInput("\x1b[5~");
     ui.render(80); ui.handleInput(enter);
     expect(ui.render(80).some((line) => line.includes(CURSOR_MARKER))).toBe(true);
+    ui.dispose();
+  });
+  test("wide terminals show the framed preview beside choices; narrow terminals stack it", () => {
+    initTheme("dark", false);
+    const { ui } = dialog([{ ...question, options: [{ ...question.options[0]!, preview: "# Example\n\nPreview content" }, question.options[1]!] }]);
+    const wide = ui.render(120);
+    expect(wide.some((line) => line.includes(question.question) && line.includes("┌─ Preview"))).toBe(true);
+    expect(wide.join("\n")).toContain("Example");
+    expect(wide.join("\n")).toContain("Submit answer");
+    expect(wide.every((line) => visibleWidth(line) <= 120)).toBe(true);
+    const narrow = ui.render(80);
+    expect(narrow.some((line) => line.includes(question.question) && line.includes("┌─ Preview"))).toBe(false);
+    expect(narrow.join("\n")).toContain("Example");
+    expect(narrow.every((line) => visibleWidth(line) <= 80)).toBe(true);
     ui.dispose();
   });
   test("previews render Markdown and scroll within the viewport", () => {
@@ -230,6 +276,9 @@ describe("terminal questionnaire", () => {
     ui.handleInput("\x1b[5~"); expect(ui.render(80).join("\n")).not.toBe(bottom);
     ui.handleInput(down); ui.render(80); ui.handleInput("k");
     expect(ui.render(80).join("\n")).toContain("Example");
+    ui.handleMouse(wheel(1000)); ui.render(80); ui.handleInput(enter);
+    expect(ui.render(80).join("\n")).toContain("● SQLite");
+    expect(ui.render(80).join("\n")).toContain("○ Postgres");
     ui.dispose();
   });
   test("mouse wheel scrolls only inside the questionnaire and clamps at both ends", () => {

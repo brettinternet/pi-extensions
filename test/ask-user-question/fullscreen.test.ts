@@ -22,7 +22,7 @@ test("real fullscreen input routes questionnaire scrolling separately from conve
       { label: "Preview", description: "Long preview", preview: Array.from({ length: 50 }, (_, i) => `Preview line ${i}\n`).join("\n") },
       { label: "No preview", description: "No extra panel" },
     ],
-  }], screen, { fg: (_color: string, text: string) => text } as Theme, () => {});
+  }], screen, { fg: (_color: string, text: string) => text, bg: (_color: string, text: string) => text, bold: (text: string) => text } as Theme, () => {});
   const document = new Container();
   document.addChild(new Text(Array.from({ length: 80 }, (_, i) => `Agent reply line ${i}`).join("\n"), 0, 0));
   const editor = new Container(); editor.addChild(ui);
