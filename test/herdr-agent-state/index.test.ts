@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import askUserQuestion from "../../extensions/ask-user-question/index.ts";
 import herdrAgentStateExtension, {
   registerHerdrAgentState,
 } from "../../extensions/herdr-agent-state/index.ts";
@@ -44,7 +45,7 @@ function setup(
     now,
     sendRequest: sendRequest ?? (async () => {}),
   });
-  return { events, hooks, ctx, bridge };
+  return { pi, events, hooks, ctx, bridge };
 }
 
 function params(request: Record<string, unknown>): Record<string, unknown> {
@@ -172,6 +173,50 @@ describe("Herdr Pi agent state integration", () => {
     await bridge.flush();
     expect(reports.at(-1)).toMatchObject({ state: "working", message: undefined });
   });
+
+  for (const outcome of ["submit", "cancel", "abort", "error"] as const) {
+    test(`actual questionnaire reports blocked and clears on ${outcome}`, async () => {
+      const reports: Record<string, unknown>[] = [];
+      const { pi, hooks, ctx, bridge } = setup(collectStateReports(reports));
+      let tool: any;
+      askUserQuestion({ ...pi, on: () => () => {}, registerTool: (value) => { tool = value; } });
+      await start(hooks, ctx);
+      hooks.get("agent_start")!({}, ctx);
+      const controller = new AbortController();
+      let finish!: (value: unknown) => void;
+      let fail!: (error: Error) => void;
+      const uiResult = new Promise((resolve, reject) => { finish = resolve; fail = reject; });
+      const promptCtx = { ...ctx, hasUI: true, ui: {
+        custom: async () => {
+          hooks.get("ui_prompt_start")!({ kind: "custom" }, ctx);
+          try { return await uiResult; }
+          finally { hooks.get("ui_prompt_end")!({ kind: "custom" }, ctx); }
+        },
+      } } as unknown as ExtensionContext;
+      const execution = tool.execute("question", { questions: [{
+        header: "Store", question: "Which store?", options: [
+          { label: "SQLite", description: "Embedded" }, { label: "Postgres", description: "Remote" },
+        ],
+      }] }, controller.signal, undefined, promptCtx);
+      try {
+        await bridge.flush();
+        expect(reports.at(-1)).toMatchObject({ state: "blocked", message: "Waiting for user" });
+      } finally {
+        if (outcome === "error") fail(new Error("UI failed"));
+        else {
+          if (outcome === "abort") controller.abort();
+          finish({ cancelled: outcome !== "submit", answers: [] });
+        }
+        if (outcome === "error") await expect(execution).rejects.toThrow("UI failed");
+        else await execution;
+        await bridge.flush();
+      }
+      expect(reports.at(-1)).toMatchObject({ state: "working", message: undefined });
+      hooks.get("agent_settled")!({}, ctx);
+      await bridge.flush();
+      expect(reports.at(-1)).toMatchObject({ state: "idle" });
+    });
+  }
 
   test("keeps working during generic custom UI", async () => {
     const reports: Record<string, unknown>[] = [];

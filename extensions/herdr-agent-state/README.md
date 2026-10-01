@@ -16,4 +16,6 @@ herdr integration uninstall pi
 
 It reports under `herdr:pi`, so Herdr session identity and restore keep working.
 
+Native input prompts are tracked automatically. Custom blocking UI (including `ask_user_question`) emits paired `herdr:blocked` events with `scope: "root"` and `active: true`/`false`, clearing the event in `finally`. Generic custom UI is not treated as blocked because it also includes non-blocking inspectors.
+
 Upstream: [herdr#3796](https://github.com/herdrdev/herdr/issues/3796) (closed as a feature request), [herdr#3323](https://github.com/herdrdev/herdr/discussions/3323) (native support discussion).

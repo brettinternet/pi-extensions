@@ -64,10 +64,17 @@ export default function askUserQuestion(pi: ExtensionAPI): void {
     async execute(_id, params, signal, _update, ctx) {
       if (!ctx.hasUI) throw new Error("ask_user_question requires an interactive TUI or RPC host.");
       validate(params.questions);
-      const value = signal?.aborted ? result(params.questions, [], true) : ctx.mode === "tui"
-        ? await ctx.ui.custom<Result>((tui, theme, keys, done) => new Questionnaire(params.questions, tui, theme, done, signal, keys))
-        : await askNative(params.questions, ctx, signal);
-      return { content: [{ type: "text", text: summary(value) }], details: value, structuredContent: value };
+      // Native prompts report their own lifecycle; custom questionnaires must opt in.
+      const blocked = ctx.mode === "tui" && !signal?.aborted;
+      if (blocked) pi.events.emit("herdr:blocked", { active: true, scope: "root", label: "Waiting for user" });
+      try {
+        const value = signal?.aborted ? result(params.questions, [], true) : ctx.mode === "tui"
+          ? await ctx.ui.custom<Result>((tui, theme, keys, done) => new Questionnaire(params.questions, tui, theme, done, signal, keys))
+          : await askNative(params.questions, ctx, signal);
+        return { content: [{ type: "text", text: summary(value) }], details: value, structuredContent: value };
+      } finally {
+        if (blocked) pi.events.emit("herdr:blocked", { active: false, scope: "root" });
+      }
     },
   });
   pi.on("session_start", async (_event, ctx) => {
