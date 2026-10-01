@@ -35,8 +35,8 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "@oh-my-pi/pi-natives": "18.1.6",
-    "ws": "8.21.3"
+    "@oh-my-pi/pi-natives": "18.4.9",
+    "ws": "8.22.0"
   },
   "peerDependencies": {
     "@earendil-works/pi-agent-core": "*",

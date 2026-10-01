@@ -14,7 +14,7 @@
   "keywords": ["async", "monitor", "pi", "pi-extension", "pi-package", "polling", "recurring"],
   "engines": { "node": ">=22.19.0" },
   "dependencies": {
-    "xstate": "5.32.5"
+    "xstate": "5.33.2"
   },
   "peerDependencies": {
     "@earendil-works/pi-ai": "*",
