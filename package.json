@@ -23,6 +23,7 @@
   "dependencies": {
     "@oh-my-pi/pi-natives": "18.4.9",
     "jsonc-parser": "^3.3.1",
+    "vscode-jsonrpc": "^9.0.2",
     "ws": "8.22.0",
     "xstate": "5.33.2"
   },
@@ -53,6 +54,7 @@
       "./extensions/wait/index.ts",
       "./extensions/progress/index.ts",
       "./extensions/prompt-history/index.ts",
+      "./extensions/pi-lsp/index.ts",
       "./extensions/title/index.ts",
       "./extensions/footer/index.ts",
       "./extensions/workbench/index.ts",

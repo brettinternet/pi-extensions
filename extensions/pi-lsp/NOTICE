@@ -1,0 +1,28 @@
+pi-lsp
+
+Selected LSP lifecycle, stdio JSON-RPC transport, and built-in server discovery
+conventions are adapted from pi-lsp-client source commit
+9d029fb32b721c038b58fb418b98bbfcf720cf0a (MIT):
+https://github.com/code-yeongyu/pi-lsp-client
+This extension is an independent, narrower implementation; it does not include
+the upstream UI, installer, mutation tools, project config loader, directory
+scanning, or post-edit diagnostics features.
+
+The upstream pi-lsp-client notice is retained here:
+
+pi-lsp-client
+
+This package is a port of the LSP (Language Server Protocol) tool stack from
+oh-my-openagent (omo) at https://github.com/code-yeongyu/oh-my-openagent
+(originally licensed under the Sustainable Use License 1.0).
+
+The original author Yeongyu Kim (https://github.com/code-yeongyu) has
+re-licensed the ported source under MIT for distribution as a pi-coding-agent
+extension. See LICENSE for the MIT terms.
+
+The vscode-jsonrpc transport library is by Microsoft
+(https://github.com/microsoft/vscode-languageserver-node). Distributed under
+the MIT License.
+
+The pi-coding-agent host is by Mario Zechner
+(https://github.com/badlogic/pi-mono). Distributed under the MIT License.
