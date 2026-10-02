@@ -14,14 +14,20 @@ const cases = [
   { extension: ".less", source: "@color: red;\n.answer { color: @color; }\n" },
   { extension: ".c", source: "const int answer = 42;\nint use(void) { return answer; }\n" },
   { extension: ".cpp", source: "constexpr int answer = 42;\nint use() { return answer; }\n" },
+  { extension: ".toml", source: "[example]\nanswer = 42\n" },
+  { extension: ".md", source: "# Example\n\n[Answer](other.md#answer)\n" },
 ];
 
-test.skipIf(process.env.PI_LSP_REAL_SERVER_SMOKE !== "1")("optional real-server Bash/HTML/CSS/clangd discovery and queries", async () => {
+test.skipIf(process.env.PI_LSP_REAL_SERVER_SMOKE !== "1")("optional real-server Bash/HTML/CSS/clangd/Taplo/Marksman discovery and queries", async () => {
   let ran = 0;
   for (const item of cases) {
     const root = await mkdtemp(join(tmpdir(), "pi-lsp-additional-smoke-"));
     const file = join(root, `main${item.extension}`);
     await writeFile(file, item.source);
+    if (item.extension === ".md") {
+      await writeFile(join(root, ".marksman.toml"), "");
+      await writeFile(join(root, "other.md"), "# Answer\n\n42\n");
+    }
     const workspace = await resolveWorkspacePath(root, file);
     let server;
     try {
@@ -48,6 +54,10 @@ test.skipIf(process.env.PI_LSP_REAL_SERVER_SMOKE !== "1")("optional real-server 
       const symbols = await client.documentSymbols(file);
       expect(Array.isArray(symbols), item.extension).toBe(true);
       expect((symbols as unknown[]).length, item.extension).toBeGreaterThan(0);
+      if (item.extension === ".md") {
+        const definition = await client.getDefinition(file, 2, 12);
+        expect(JSON.stringify(definition)).toContain("other.md");
+      }
       console.log(`lsp smoke: ${item.extension}: symbols found, diagnostics ${diagnostics.status}`);
       ran++;
     } finally {

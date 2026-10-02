@@ -29,6 +29,8 @@ const definitions: ServerDefinition[] = [
   { id: "html-language-server", command: ["vscode-html-language-server", "--stdio"], extensions: [".html", ".htm"], languageId: "html" },
   { id: "css-language-server", command: ["vscode-css-language-server", "--stdio"], extensions: [".css", ".scss", ".less"], languageId: "css" },
   { id: "clangd", command: ["clangd"], extensions: [".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"], languageId: "cpp" },
+  { id: "taplo", command: ["taplo", "lsp", "stdio"], extensions: [".toml"], languageId: "toml" },
+  { id: "marksman", command: ["marksman", "server"], extensions: [".md", ".markdown"], languageId: "markdown" },
 ];
 
 export function getBuiltinServers(): ServerDefinition[] {

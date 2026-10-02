@@ -31,6 +31,8 @@ The extension uses installed servers already available on `PATH` only. It never 
 | HTML (`.html`, `.htm`) | `vscode-html-language-server --stdio` |
 | CSS / SCSS / Less | `vscode-css-language-server --stdio` |
 | C / C++ | `clangd` |
+| TOML | `taplo lsp stdio` |
+| Markdown (`.md`, `.markdown`) | `marksman server` |
 
 Install only the servers you need globally (for example with Mise). HTML, CSS, and JSON servers are supplied by `vscode-langservers-extracted`. Bash diagnostics benefit from an installed `shellcheck`; shell scripts without an extension and Zsh/Fish files are not selected automatically. C/C++ headers use `c` for `.h` and `cpp` for `.hh`, `.hpp`, and `.hxx`. Java, C#, and framework-specific servers such as Vue/Svelte are not included yet.
 
@@ -51,6 +53,8 @@ Each diagnostic acquisition synchronizes a new, client-wide monotonic document v
 There is no project-specific **Pi LSP configuration**: server commands, disabled flags, and initialization options are global-only. The client does not supply editor-style per-project `workspace/configuration` settings.
 
 Servers can still read their own native project configuration. Keep normal dependencies installed and use the files your server expects, such as `tsconfig.json`, `pyrightconfig.json`, or `.clangd`. For C/C++, generate `compile_commands.json` with your build system (or provide `compile_flags.txt`); this gives clangd the include paths and flags needed for useful results. `.clangd`, compilation databases, and flags files also identify nested project roots, alongside `CMakeLists.txt` and the existing markers. A database in a separate build directory may need a `.clangd` `CompileFlags.CompilationDatabase` setting.
+
+For Markdown, Marksman uses a Git repository or `.marksman.toml` to group related documents for cross-file heading/link navigation; an empty `.marksman.toml` is enough for a standalone docs folder. Taplo reads `taplo.toml` or `.taplo.toml` for TOML settings. These files also identify nested project roots. MDX is not supported by this Markdown registration.
 
 Native configuration is interpreted by each server, not by Pi. It can affect builds/plugins, so use trusted projects. TypeScript still uses the globally selected compiler, not the project's TypeScript installation.
 
@@ -96,4 +100,4 @@ bun run check
 bun test test/lsp
 ```
 
-Optional Go/TypeScript/Swift and Bash/HTML/CSS/SCSS/Less/C/C++ smoke tests run against binaries already on PATH when `PI_LSP_REAL_SERVER_SMOKE=1`; they never install dependencies. Upstream attribution and the exact source commit are recorded in [NOTICE](NOTICE).
+Optional Go/TypeScript/Swift and Bash/HTML/CSS/SCSS/Less/C/C++/TOML/Markdown smoke tests run against binaries already on PATH when `PI_LSP_REAL_SERVER_SMOKE=1`; they never install dependencies. Upstream attribution and the exact source commit are recorded in [NOTICE](NOTICE).

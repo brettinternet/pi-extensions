@@ -18,6 +18,9 @@ const ROOT_MARKERS = [
   "compile_commands.json",
   "compile_flags.txt",
   ".clangd",
+  ".marksman.toml",
+  "taplo.toml",
+  ".taplo.toml",
   "Makefile",
   "justfile",
 ] as const;

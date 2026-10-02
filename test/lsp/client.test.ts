@@ -404,6 +404,8 @@ describe("pi-lsp client", () => {
       { extensions: [".sh", ".bash"], ids: ["shellscript", "shellscript"] },
       { extensions: [".html", ".htm"], ids: ["html", "html"] },
       { extensions: [".css", ".scss", ".less"], ids: ["css", "scss", "less"] },
+      { extensions: [".toml"], ids: ["toml"] },
+      { extensions: [".md", ".markdown"], ids: ["markdown", "markdown"] },
       { extensions: [".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"], ids: ["c", "c", "cpp", "cpp", "cpp", "cpp", "cpp", "cpp"] },
     ];
     for (const family of families) {
@@ -466,13 +468,16 @@ describe("pi-lsp client", () => {
 });
 
 describe("pi-lsp workspace and server discovery", () => {
-  test("C/C++ configuration selects a nested project root", async () => {
-    for (const marker of [".clangd", "compile_commands.json", "compile_flags.txt"]) {
+  test("native server configuration selects a nested project root", async () => {
+    for (const [marker, extension] of [
+      [".clangd", ".cpp"], ["compile_commands.json", ".cpp"], ["compile_flags.txt", ".cpp"],
+      [".marksman.toml", ".md"], ["taplo.toml", ".toml"], [".taplo.toml", ".toml"],
+    ]) {
       const { root } = await rootWithGo();
       const nested = join(root, "native");
       await mkdir(join(nested, "src"), { recursive: true });
       await writeFile(join(nested, marker), "");
-      const file = join(nested, "src", "main.cpp");
+      const file = join(nested, "src", `main${extension}`);
       await writeFile(file, "int main() {}\n");
       expect((await resolveWorkspacePath(root, file)).root).toBe(await realpath(nested));
     }
