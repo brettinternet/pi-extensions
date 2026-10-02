@@ -1,16 +1,17 @@
 import { chmod, mkdir, mkdtemp, readFile, realpath, rename, symlink, writeFile } from "node:fs/promises";
-import { spawn } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { delimiter, join } from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { afterEach, describe, expect, test } from "bun:test";
-import { LspClient } from "../../extensions/pi-lsp/client.ts";
-import { readGlobalConfig, resolveServer } from "../../extensions/pi-lsp/config.ts";
-import { formatDiagnostics, formatSymbols, MAX_OUTPUT_CHARS } from "../../extensions/pi-lsp/format.ts";
-import { LspClientManager } from "../../extensions/pi-lsp/manager.ts";
-import { resolveServerCommand } from "../../extensions/pi-lsp/servers.ts";
-import { resolveWorkspacePath } from "../../extensions/pi-lsp/workspace.ts";
-import piLspExtension from "../../extensions/pi-lsp/index.ts";
+import { LspClient } from "../../extensions/lsp/client.ts";
+import { readGlobalConfig, resolveServer } from "../../extensions/lsp/config.ts";
+import { diagnoseSetup } from "../../extensions/lsp/doctor.ts";
+import { formatDiagnostics, formatSymbols, MAX_OUTPUT_CHARS } from "../../extensions/lsp/format.ts";
+import { LspClientManager } from "../../extensions/lsp/manager.ts";
+import { getBuiltinServers, resolveServerCommand } from "../../extensions/lsp/servers.ts";
+import { resolveWorkspacePath } from "../../extensions/lsp/workspace.ts";
+import piLspExtension from "../../extensions/lsp/index.ts";
 
 const fakeServer = fileURLToPath(new URL("./fake-server.mjs", import.meta.url));
 const definition = { id: "fake", command: [], extensions: [".go"], languageId: "go" };
@@ -508,6 +509,27 @@ describe("pi-lsp workspace and server discovery", () => {
     await expect(readFile(marker, "utf8")).rejects.toThrow();
   });
 
+  test("preserves external shim names while rejecting workspace launcher targets", async () => {
+    const { root } = await rootWithGo();
+    const trustedBin = await mkdtemp(join(tmpdir(), "pi-lsp-shims-"));
+    const dispatcher = join(trustedBin, "dispatcher");
+    await writeFile(dispatcher, '#!/bin/sh\nprintf "%s" "$0"\n');
+    await chmod(dispatcher, 0o755);
+    const launcher = join(trustedBin, "gopls");
+    await symlink(dispatcher, launcher);
+    setEnv({ PATH: trustedBin });
+    const resolved = resolveServerCommand("gopls", root)!;
+    expect(resolved).toBe(join(await realpath(trustedBin), "gopls"));
+    expect(spawnSync(resolved, [], { encoding: "utf8" }).stdout).toBe(resolved);
+    const localServer = join(root, "local-server");
+    await writeFile(localServer, "#!/bin/sh\nexit 0\n");
+    await chmod(localServer, 0o755);
+    const escapingLauncher = join(trustedBin, "pyright-langserver");
+    await symlink(localServer, escapingLauncher);
+    expect(resolveServerCommand("pyright-langserver", root)).toBeUndefined();
+    expect(resolveServerCommand(escapingLauncher, root)).toBeUndefined();
+  });
+
   test("an external env-node launcher cannot pick an interpreter from the workspace PATH", async () => {
     const { root, file } = await rootWithGo();
     const localBin = join(root, "bin");
@@ -570,6 +592,36 @@ describe("pi-lsp workspace and server discovery", () => {
     await expect(readGlobalConfig()).rejects.toThrow(/Invalid Pi LSP config/);
   });
 
+  test("doctor checks commands, disabled servers, and TypeScript setup without spawning", async () => {
+    const { root } = await rootWithGo();
+    const agentDir = await mkdtemp(join(tmpdir(), "pi-lsp-doctor-"));
+    const marker = join(root, "server-started");
+    setEnv({ PI_CODING_AGENT_DIR: agentDir });
+    const servers = Object.fromEntries(getBuiltinServers().map((server) => [server.id, { disabled: true }]));
+    const config = { servers: {
+      ...servers,
+      gopls: { command: [process.execPath, "-e", `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'started')`] },
+      typescript: { command: [process.execPath], initializationOptions: { tsserver: { path: join(agentDir, "missing.js") } } },
+    } };
+    await writeFile(join(agentDir, "pi-lsp.json"), JSON.stringify(config));
+    const report = await diagnoseSetup(root);
+    expect(report.hasIssues).toBe(true);
+    expect(report.text).toContain("gopls: found");
+    expect(report.text).toContain("pyright: disabled");
+    expect(report.text).toContain("typescript: unavailable");
+    expect(report.text).toContain("Invalid TypeScript tsserver.path");
+    await expect(readFile(marker)).rejects.toThrow();
+
+    await writeFile(join(agentDir, "pi-lsp.json"), JSON.stringify({ servers: { ...servers, gopls: config.servers.gopls } }));
+    expect((await diagnoseSetup(root)).hasIssues).toBe(false);
+    await writeFile(join(agentDir, "pi-lsp.json"), JSON.stringify({ servers: { ...servers, gopls: { command: [join(agentDir, "missing-server")] } } }));
+    expect((await diagnoseSetup(root)).text).toContain("gopls: unavailable");
+    await writeFile(join(agentDir, "pi-lsp.json"), "{ malformed");
+    const invalid = await diagnoseSetup(root);
+    expect(invalid.hasIssues).toBe(true);
+    expect(invalid.text).toContain(join(agentDir, "pi-lsp.json"));
+  });
+
   test("extension registration is lazy and exposes only read-only tools plus command completions", async () => {
     const tools: Array<Record<string, unknown>> = [];
     const hooks = new Map<string, (...args: unknown[]) => unknown>();
@@ -589,6 +641,25 @@ describe("pi-lsp workspace and server discovery", () => {
       { value: "stop", label: "stop", description: "Stop owned language-server processes" },
     ]);
     expect(command?.getArgumentCompletions("sto")).toEqual([{ value: "stop", label: "stop", description: "Stop owned language-server processes" }]);
+    expect(command?.getArgumentCompletions("doc")).toEqual([{ value: "doctor", label: "doctor", description: "Check global configuration and installed server paths without starting servers" }]);
+    expect(tools.find((tool) => tool.name === "lsp_diagnostics")?.promptGuidelines).toEqual(expect.arrayContaining([
+      expect.stringContaining("meaningful batch"),
+      expect.stringContaining("unknown is not clean"),
+      expect.stringContaining("do not repeatedly retry"),
+    ]));
     expect(hooks.has("session_shutdown")).toBe(true);
+    expect(hooks.has("tool_result")).toBe(false);
+    const agentDir = await mkdtemp(join(tmpdir(), "pi-lsp-doctor-command-"));
+    setEnv({ PI_CODING_AGENT_DIR: agentDir });
+    await writeFile(join(agentDir, "pi-lsp.json"), JSON.stringify({ servers: Object.fromEntries(getBuiltinServers().map((server) => [server.id, { disabled: true }])) }));
+    const notices: Array<{ text: string; level: string }> = [];
+    const ctx = { cwd: agentDir, ui: { notify(text: string, level: string) { notices.push({ text, level }); } } } as never;
+    await command!.handler("doctor", ctx);
+    expect(notices.at(-1)).toMatchObject({ text: expect.stringContaining("gopls: disabled"), level: "info" });
+    await command!.handler("status", ctx);
+    expect(notices.at(-1)?.text).toBe("lsp: no active language servers");
+    await writeFile(join(agentDir, "pi-lsp.json"), "invalid");
+    await command!.handler("doctor", ctx);
+    expect(notices.at(-1)?.level).toBe("warning");
   });
 });

@@ -54,7 +54,7 @@
       "./extensions/wait/index.ts",
       "./extensions/progress/index.ts",
       "./extensions/prompt-history/index.ts",
-      "./extensions/pi-lsp/index.ts",
+      "./extensions/lsp/index.ts",
       "./extensions/title/index.ts",
       "./extensions/footer/index.ts",
       "./extensions/workbench/index.ts",

@@ -1,6 +1,6 @@
 import { access, readFile, realpath, stat } from "node:fs/promises";
 import { accessSync, constants, realpathSync, statSync } from "node:fs";
-import { delimiter, dirname, isAbsolute, join, relative, sep } from "node:path";
+import { basename, delimiter, dirname, isAbsolute, join, relative, sep } from "node:path";
 
 export interface ServerDefinition {
   id: string;
@@ -140,7 +140,10 @@ export function resolveServerCommand(command: string, workspace: string): string
     try {
       accessSync(candidate, constants.X_OK);
       const canonical = realpathSync(candidate);
-      if (!isWithinWorkspace(canonical, boundary)) return canonical;
+      // Mise and rustup dispatch by the invoked filename. Validate the target,
+      // but preserve the external launcher name instead of invoking mise/rustup directly.
+      const launcher = join(realpathSync(dirname(candidate)), basename(candidate));
+      if (!isWithinWorkspace(canonical, boundary) && !isWithinWorkspace(launcher, boundary)) return launcher;
     } catch {
       // Continue looking in the trusted PATH entries.
     }

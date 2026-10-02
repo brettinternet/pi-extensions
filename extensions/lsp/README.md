@@ -1,6 +1,8 @@
-# pi-lsp
+# lsp
 
 Read-only LSP diagnostics and code navigation for Pi. Servers start only when an LSP tool is called; there are no read/write hooks, automatic installs, or project-local Pi command/config discovery.
+
+The tools supply agent guidance to prefer semantic navigation and check affected files after meaningful batches of edits. This is model-directed, not a mandatory post-edit hook: it avoids checking every edit, scanning the whole repository, or repeatedly retrying missing servers. Compiler checks and tests remain necessary.
 
 ## Tools
 
@@ -26,15 +28,19 @@ The extension uses installed servers already available on `PATH` only. It never 
 | YAML | `yaml-language-server --stdio` |
 | JSON | `vscode-json-language-server --stdio` |
 
-Server commands and their inherited PATH use canonical, absolute locations outside the active workspace. TypeScript also requires an external `lib/tsserver.js`: pi-lsp locates an installed `tsserver` on trusted PATH or validates an explicit global path. It never falls back to workspace `node_modules/typescript`. Automatic TypeScript typing acquisition is always disabled, even if global initialization options request it.
+Server commands and their inherited PATH use validated, absolute locations outside the active workspace. Executable symlink targets are checked, but external launcher names are preserved so Mise and Rustup shims dispatch correctly. TypeScript also requires an external `lib/tsserver.js`: pi-lsp locates an installed `tsserver` on trusted PATH or validates an explicit global path. It never falls back to workspace `node_modules/typescript`. Automatic TypeScript typing acquisition is always disabled, even if global initialization options request it.
 
-`/lsp status` shows owned processes and `/lsp stop` stops them. Both command arguments complete with Tab. On macOS/Linux, teardown terminates the owned process group, including workers left by a crashed launcher. Windows currently stops only the launcher; full descendant cleanup is not supported there.
+`/lsp doctor` checks global config, enabled server commands, and the external TypeScript compiler without starting processes or installing anything. It reports each server as found, disabled, or unavailable, with paths and actionable errors. “Found” verifies discovery, not server startup or health; Mise shims may still require an installed tool. Only servers for languages you use need to be available.
+
+`/lsp status` shows owned processes and `/lsp stop` stops them. All command arguments complete with Tab. After changing global config, use `/lsp stop` so the next tool call starts with the new settings. On macOS/Linux, teardown terminates the owned process group, including workers left by a crashed launcher. Windows currently stops only the launcher; full descendant cleanup is not supported there.
 
 This is not a sandbox. Servers run with your permissions and may read project settings or invoke compilers, builds, and plugins. Use trusted projects. The extension ignores project-local Pi executable configuration; it cannot enforce every language server's internal trust or dependency behavior.
 
 Each diagnostic acquisition synchronizes a new, client-wide monotonic document version; it does not reuse a previous clean push or pull report. The server remains responsible for its view of unopened dependencies. A clean report is not a substitute for the project's tests or compiler checks.
 
 ## Global configuration
+
+The extension directory is `lsp`; the package name (`pi-lsp`) and global config filename are unchanged so existing installations keep working.
 
 Optional configuration is read only from `getAgentDir()/pi-lsp.json` (normally `~/.pi/agent/pi-lsp.json`). Malformed configuration fails with its file path; there is no silent fallback. The supported map can disable a built-in server, replace its command, or pass a small JSON `initializationOptions` object. No project `.pi/lsp-client.json`, `.pi/lsp.json`, or `.pi-lsp.json` is read or executed.
 
@@ -71,7 +77,7 @@ Only JSON values are accepted in `initializationOptions` (at most 8 nesting leve
 
 ```sh
 bun run check
-bun test test/pi-lsp
+bun test test/lsp
 ```
 
 An optional Go/TypeScript/Swift smoke test runs against binaries already on PATH when `PI_LSP_REAL_SERVER_SMOKE=1`; it never installs dependencies. Upstream attribution and the exact source commit are recorded in [NOTICE](NOTICE).

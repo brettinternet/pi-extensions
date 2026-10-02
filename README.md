@@ -13,7 +13,7 @@ Extensions and a theme for the [Pi coding agent](https://pi.dev).
 | [Loop](extensions/loop/README.md) | `/loop 10 <prompt>` runs a prompt in fresh sessions |
 | [Progress](extensions/progress/README.md) | Shows agent activity below the editor |
 | [Prompt History](extensions/prompt-history/README.md) | `Ctrl+R` searches past prompts |
-| [pi-lsp](extensions/pi-lsp/README.md) | Read-only LSP diagnostics, hover, definitions, references, and symbols |
+| [lsp](extensions/lsp/README.md) | Read-only LSP diagnostics, hover, definitions, references, and symbols |
 | [Title](extensions/title/README.md) | Generates session titles |
 | [Until](extensions/until/README.md) | Watches shell conditions and schedules follow-ups |
 | [Wait](extensions/wait/README.md) | `/wait 10m <prompt>` sends a prompt later |

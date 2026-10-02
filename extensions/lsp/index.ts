@@ -1,6 +1,7 @@
 import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
 import { resolveServer } from "./config.ts";
+import { diagnoseSetup } from "./doctor.ts";
 import { formatDiagnostics, formatHover, formatLocations, formatSymbols, MAX_RESULTS } from "./format.ts";
 import { LspClientManager } from "./manager.ts";
 import { resolveWorkspacePath } from "./workspace.ts";
@@ -23,6 +24,7 @@ const position = {
 function completions(prefix: string): Array<{ value: string; label: string; description?: string }> | null {
   const query = prefix.trimStart().toLowerCase();
   const candidates = [
+    { value: "doctor", label: "doctor", description: "Check global configuration and installed server paths without starting servers" },
     { value: "status", label: "status", description: "Show active language-server processes" },
     { value: "stop", label: "stop", description: "Stop owned language-server processes" },
   ];
@@ -47,6 +49,13 @@ export default function piLspExtension(pi: ExtensionAPI): void {
     name: "lsp_diagnostics",
     label: "LSP Diagnostics",
     description: "Read current language-server diagnostics for a workspace file. Reports clean, findings, or unknown explicitly; unknown never means clean. This tool never changes files.",
+    promptSnippet: "Check file diagnostics and navigate code with language servers",
+    promptGuidelines: [
+      "Prefer LSP hover, definitions, references, and symbols for semantic code questions in supported languages; use rg for text searches.",
+      "After a meaningful batch of source edits, use lsp_diagnostics on the affected files when a server is available. Do not check after every individual edit or scan the whole repository.",
+      "LSP diagnostics are supplemental: unknown is not clean, and advisory findings may be stale. Still run the project's relevant compiler checks and tests.",
+      "If a server is missing, disabled, or unsupported, fall back to file reads, rg, and project checks; do not repeatedly retry or install servers automatically. /lsp doctor checks global setup without starting servers.",
+    ],
     parameters: Type.Object({ path: filePath, limit: resultLimit }),
     annotations: commonReadOnlyAnnotations,
     async execute(_id, params, signal, _onUpdate, ctx) {
@@ -132,26 +141,31 @@ export default function piLspExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("lsp", {
-    description: "Show or stop pi-lsp language servers",
+    description: "Check LSP setup, show status, or stop language servers",
     getArgumentCompletions: completions,
     handler: async (args, ctx: ExtensionCommandContext) => {
       const command = args.trim();
+      if (command === "doctor") {
+        const report = await diagnoseSetup(ctx.cwd);
+        ctx.ui.notify(report.text, report.hasIssues ? "warning" : "info");
+        return;
+      }
       if (command === "stop") {
         const stopped = manager;
         manager = new LspClientManager();
         await stopped.shutdown();
-        ctx.ui.notify("Stopped pi-lsp language servers.", "info");
+        ctx.ui.notify("Stopped LSP language servers.", "info");
         return;
       }
       if (command === "status" || command === "") {
         const active = manager.getStatus();
         const summary = active.length
-          ? `pi-lsp: ${active.map((item) => `${item.serverId} (${item.root})${item.starting ? " starting" : ""}`).join(", ")}`
-          : "pi-lsp: no active language servers";
+          ? `lsp: ${active.map((item) => `${item.serverId} (${item.root})${item.starting ? " starting" : ""}`).join(", ")}`
+          : "lsp: no active language servers";
         ctx.ui.notify(summary, "info");
         return;
       }
-      ctx.ui.notify("Usage: /lsp [status|stop]", "warning");
+      ctx.ui.notify("Usage: /lsp [doctor|status|stop]", "warning");
     },
   });
 

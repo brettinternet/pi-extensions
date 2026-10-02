@@ -2,9 +2,9 @@ import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { test, expect } from "bun:test";
-import { LspClient } from "../../extensions/pi-lsp/client.ts";
-import { resolveServer } from "../../extensions/pi-lsp/config.ts";
-import { resolveWorkspacePath } from "../../extensions/pi-lsp/workspace.ts";
+import { LspClient } from "../../extensions/lsp/client.ts";
+import { resolveServer } from "../../extensions/lsp/config.ts";
+import { resolveWorkspacePath } from "../../extensions/lsp/workspace.ts";
 
 const cases = [
   {
