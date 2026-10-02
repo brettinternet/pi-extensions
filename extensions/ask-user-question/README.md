@@ -31,7 +31,7 @@ The questionnaire replaces the prompt in the bottom editor dock, not an overlay.
 
 | Control | Action |
 | --- | --- |
-| Tab / Shift+Tab or ← / → | Change tabs when there are multiple questions; no effect with one |
+| Tab / Shift+Tab or ← / → | Change question tabs and the final Review tab when there are multiple questions; no effect with one |
 | ↑ / ↓, Ctrl+P / Ctrl+N, or k / j | Move focus |
 | Space on an option | Select without submitting |
 | Enter on an option | With one question, select and submit; with multiple, select in place |
@@ -45,7 +45,7 @@ The questionnaire replaces the prompt in the bottom editor dock, not an overlay.
 
 Choice labels remain visible while typing; descriptions are hidden to make room.
 
-For a single multi-select question, Space toggles choices; Enter includes the focused option without removing checked choices, then submits. With multiple questions, use the explicit **Submit answers** row after answering them all. Inside an editor, `n` types the letter rather than opening a note.
+For a single multi-select question, Space toggles choices; Enter includes the focused option without removing checked choices, then submits. With multiple questions, Tab past the last question to **Review**: it summarizes all selected choices, custom answers, and notes before submission. **Submit answers** appears only on this final tab; Enter submits once every question is answered. Use Tab / Shift+Tab or ← / → to revisit and edit answers. Long summaries scroll with ↑ / ↓, j / k, Alt+PgUp / Alt+PgDn, or the mouse wheel. Inside an editor, `n` types the letter rather than opening a note.
 
 Previews are optional framed Markdown for single-select questions. They appear beside choices at widths of at least 100 columns, or below them at narrower widths. A question reserves space for its largest visible preview even when the focused option has none, leaving that space blank without a placeholder or duplicate note hint. Questions without previews reserve no preview space. In fullscreen, the mouse wheel scrolls the questionnaire or conversation according to pointer position.
 

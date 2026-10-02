@@ -1,6 +1,6 @@
 import { getMarkdownTheme, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, Editor, Key, Markdown, isKeyRepeat, matchesKey, truncateToWidth, wrapTextWithAnsi, type Focusable, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { answered, newDrafts, result, select, type Question, type Result } from "./model.js";
+import { answered, newDrafts, result, select, summary, type Question, type Result } from "./model.js";
 
 /** One interaction owns its drafts, editor, and cancellation listener. */
 export class Questionnaire implements Focusable {
@@ -56,7 +56,8 @@ export class Questionnaire implements Focusable {
   }
   private moveTab(delta: number): void {
     if (this.questions.length === 1) return;
-    this.tab = (this.tab + delta + this.questions.length) % this.questions.length;
+    const tabs = this.questions.length + 1; // Final tab reviews the complete submission.
+    this.tab = (this.tab + delta + tabs) % tabs;
     this.cursor = 0;
     this.offset = 0;
     this.followCursor = true;
@@ -100,7 +101,7 @@ export class Questionnaire implements Focusable {
       this.tui.requestRender();
       return;
     }
-    if (matchesKey(data, "n")) {
+    if (matchesKey(data, "n") && this.tab < this.questions.length) {
       this.editing = "note";
       this.editor.setText(this.drafts[this.tab]!.note);
       this.followCursor = true;
@@ -116,10 +117,16 @@ export class Questionnaire implements Focusable {
       this.offset += pageDown ? 5 : -5;
       this.followCursor = false;
     } else {
-      const q = this.questions[this.tab]!;
-      const last = q.options.length + (this.questions.length > 1 ? 1 : 0);
       const up = (this.keys?.matches(data, "tui.select.up") ?? matchesKey(data, Key.up)) || matchesKey(data, Key.ctrl("p")) || matchesKey(data, "k");
       const down = (this.keys?.matches(data, "tui.select.down") ?? matchesKey(data, Key.down)) || matchesKey(data, Key.ctrl("n")) || matchesKey(data, "j");
+      if (this.tab === this.questions.length) {
+        if (matchesKey(data, Key.enter) && !isKeyRepeat(data) && this.drafts.every(answered)) this.finish(false);
+        else if (up || down) { this.offset += up ? -1 : 1; this.followCursor = false; }
+        this.tui.requestRender();
+        return;
+      }
+      const q = this.questions[this.tab]!;
+      const last = q.options.length;
       if (up || down) {
         this.cursor = (this.cursor + (up ? -1 : 1) + last + 1) % (last + 1);
         this.offset = 0;
@@ -139,7 +146,7 @@ export class Questionnaire implements Focusable {
             this.editing = "custom";
             this.followCursor = true;
             this.editor.setText(draft.custom);
-          } else if (this.drafts.every(answered)) this.finish(false);
+          }
         }
       }
     }
@@ -162,12 +169,15 @@ export class Questionnaire implements Focusable {
     if (this.collapsed) return [theme.fg("dim", truncateToWidth("Questions hidden · Ctrl+] show · Esc cancel", width))];
     const q = this.questions[this.tab]!;
     const draft = this.drafts[this.tab]!;
-    const heading = this.questions.map((question, i) => {
+    const reviewing = this.tab === this.questions.length;
+    let heading = this.questions.map((question, i) => {
       const label = ` ${answered(this.drafts[i]!) ? "■" : "□"} ${question.header} `;
       return i === this.tab ? theme.bg("selectedBg", theme.fg("text", label)) : theme.fg(answered(this.drafts[i]!) ? "success" : "muted", label);
     }).join(" ");
+    if (this.questions.length > 1) heading += " " + (reviewing
+      ? theme.bg("selectedBg", theme.fg("text", " Review ")) : theme.fg("muted", " Review "));
     const height = Math.max(1, Math.min(16, Math.floor(this.tui.terminal.rows * 0.6)) - 2);
-    const hasPreviews = !this.editing && q.options.some((option) => !!option.preview);
+    const hasPreviews = !reviewing && !this.editing && q.options.some((option) => !!option.preview);
     const sideBySide = hasPreviews && width >= 100;
     const listWidth = sideBySide ? Math.floor(width * 0.4) : width;
     const previewWidth = sideBySide ? width - listWidth - 2 : width;
@@ -176,7 +186,7 @@ export class Questionnaire implements Focusable {
     const reservedPreviewHeight = Math.min(height, Math.max(0, ...panels.map((panel) => panel.length)));
     let lines: string[] = [];
     const add = (text: string) => lines.push(...wrapTextWithAnsi(text, listWidth));
-    add(theme.fg("text", theme.bold(q.question)));
+    add(theme.fg("text", theme.bold(reviewing ? "Review your answers" : q.question)));
     let anchor = 0;
     const renderEditor = () => {
       this.editor.focused = this.focused;
@@ -184,7 +194,12 @@ export class Questionnaire implements Focusable {
       const cursorLine = lines.findIndex((line) => line.includes(CURSOR_MARKER));
       anchor = cursorLine < 0 ? Math.max(0, lines.length - 1) : cursorLine;
     };
-    if (this.editing === "note") {
+    if (reviewing) {
+      add(theme.fg("text", summary(result(this.questions, this.drafts, false))));
+      const ready = this.drafts.every(answered);
+      if (!ready) add(theme.fg("dim", `Unanswered: ${this.questions.filter((_, i) => !answered(this.drafts[i]!)).map((question) => question.header).join(", ")}`));
+      add(theme.fg(ready ? "accent" : "dim", `${ready ? "❯ " : "  "}Submit answers`));
+    } else if (this.editing === "note") {
       add(theme.fg("muted", "Note (Enter saves; Esc discards changes):"));
       renderEditor();
     } else {
@@ -203,13 +218,6 @@ export class Questionnaire implements Focusable {
           else if (draft.custom) add(theme.fg("muted", `    ${draft.custom}`));
         }
       });
-      if (this.questions.length > 1) {
-        const active = this.cursor === q.options.length + 1;
-        if (active && !this.editing) anchor = lines.length;
-        const ready = this.drafts.every(answered);
-        add(`${active ? theme.fg("accent", "❯ ") : "  "}${theme.fg(active ? "accent" : ready ? "success" : "dim", active ? theme.bold("Submit answers") : "Submit answers")}`);
-        if (!ready) add(theme.fg("dim", `Unanswered: ${this.questions.filter((_, i) => !answered(this.drafts[i]!)).map((question) => question.header).join(", ")}`));
-      }
       if (draft.note) add(theme.fg("muted", `Note: ${draft.note}`));
       // Reserve the largest visible preview footprint even on options without one.
       // Keep the column width too, so descriptions do not rewrap on focus changes.
@@ -229,9 +237,10 @@ export class Questionnaire implements Focusable {
     }
     this.maxOffset = Math.max(0, lines.length - height);
     this.offset = Math.max(0, Math.min(this.offset, this.maxOffset));
-    const help = this.editing ? `Enter ${this.editing === "custom" && this.questions.length === 1 ? "submit" : "save"} · Shift+Enter newline · Ctrl+] hide · Esc back`
+    const help = reviewing ? "Enter submit · ↑↓/j/k scroll · Tab/Shift+Tab edit answers · Ctrl+] hide · Esc cancel"
+      : this.editing ? `Enter ${this.editing === "custom" && this.questions.length === 1 ? "submit" : "save"} · Shift+Enter newline · Ctrl+] hide · Esc back`
       : this.questions.length === 1 ? "↑↓/j/k move · Space select · Enter submit · n note · Ctrl+] hide · Esc cancel"
-      : "↑↓/j/k move · Space/Enter select · Tab questions · n note · Ctrl+] hide · Esc cancel";
+      : "↑↓/j/k move · Space/Enter select · Tab questions/review · n note · Ctrl+] hide · Esc cancel";
     const scroll = lines.length > height ? `${this.offset + 1}–${Math.min(this.offset + height, lines.length)}/${lines.length} · Alt+PgUp/PgDn scroll · ` : "";
     return [truncateToWidth(heading, width), ...lines.slice(this.offset, this.offset + height),
       theme.fg("dim", truncateToWidth(`${scroll}${help}`, width)),
