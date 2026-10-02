@@ -9,7 +9,7 @@ import { readGlobalConfig, resolveServer } from "../../extensions/lsp/config.ts"
 import { diagnoseSetup } from "../../extensions/lsp/doctor.ts";
 import { formatDiagnostics, formatSymbols, MAX_OUTPUT_CHARS } from "../../extensions/lsp/format.ts";
 import { LspClientManager } from "../../extensions/lsp/manager.ts";
-import { getBuiltinServers, resolveServerCommand } from "../../extensions/lsp/servers.ts";
+import { findServerDefinition, getBuiltinServers, resolveServerCommand } from "../../extensions/lsp/servers.ts";
 import { resolveWorkspacePath } from "../../extensions/lsp/workspace.ts";
 import piLspExtension from "../../extensions/lsp/index.ts";
 
@@ -397,6 +397,34 @@ describe("pi-lsp client", () => {
     expect(log).toContain("didOpen:javascriptreact");
   });
 
+  test("new server families send the correct language IDs for each file type", async () => {
+    const { root } = await rootWithGo();
+    setEnv({ FAKE_LSP_LOG: logFile(root) });
+    const families = [
+      { extensions: [".sh", ".bash"], ids: ["shellscript", "shellscript"] },
+      { extensions: [".html", ".htm"], ids: ["html", "html"] },
+      { extensions: [".css", ".scss", ".less"], ids: ["css", "scss", "less"] },
+      { extensions: [".c", ".h", ".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"], ids: ["c", "c", "cpp", "cpp", "cpp", "cpp", "cpp", "cpp"] },
+    ];
+    for (const family of families) {
+      const server = findServerDefinition(family.extensions[0]!)!;
+      const client = new LspClient(root, server, command);
+      try {
+        await client.start();
+        for (const extension of family.extensions) {
+          expect(findServerDefinition(extension)?.id).toBe(server.id);
+          const file = join(root, `source${extension}`);
+          await writeFile(file, "example\n");
+          await client.documentSymbols(file);
+        }
+      } finally {
+        await client.stop();
+      }
+    }
+    const opened = (await readLog(root)).split("\n").filter((line) => line.startsWith("didOpen:"));
+    expect(opened).toEqual(families.flatMap((family) => family.ids.map((id) => `didOpen:${id}`)));
+  });
+
   test("limits document retention and formats output/details within the configured bound", async () => {
     const { root, file } = await rootWithGo();
     setEnv({ FAKE_LSP_PULL: "true", FAKE_LSP_LOG: logFile(root) });
@@ -438,6 +466,18 @@ describe("pi-lsp client", () => {
 });
 
 describe("pi-lsp workspace and server discovery", () => {
+  test("C/C++ configuration selects a nested project root", async () => {
+    for (const marker of [".clangd", "compile_commands.json", "compile_flags.txt"]) {
+      const { root } = await rootWithGo();
+      const nested = join(root, "native");
+      await mkdir(join(nested, "src"), { recursive: true });
+      await writeFile(join(nested, marker), "");
+      const file = join(nested, "src", "main.cpp");
+      await writeFile(file, "int main() {}\n");
+      expect((await resolveWorkspacePath(root, file)).root).toBe(await realpath(nested));
+    }
+  });
+
   test("TypeScript inherits an ancestor compiler config across nested package manifests", async () => {
     const { root } = await rootWithGo();
     const nested = join(root, "package");

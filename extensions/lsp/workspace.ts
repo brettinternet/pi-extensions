@@ -15,6 +15,9 @@ const ROOT_MARKERS = [
   "deno.json",
   "deno.jsonc",
   "CMakeLists.txt",
+  "compile_commands.json",
+  "compile_flags.txt",
+  ".clangd",
   "Makefile",
   "justfile",
 ] as const;

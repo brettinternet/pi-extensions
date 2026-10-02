@@ -27,6 +27,14 @@ The extension uses installed servers already available on `PATH` only. It never 
 | Lua | `lua-language-server` |
 | YAML | `yaml-language-server --stdio` |
 | JSON | `vscode-json-language-server --stdio` |
+| Bash (`.sh`, `.bash`) | `bash-language-server start` |
+| HTML (`.html`, `.htm`) | `vscode-html-language-server --stdio` |
+| CSS / SCSS / Less | `vscode-css-language-server --stdio` |
+| C / C++ | `clangd` |
+
+Install only the servers you need globally (for example with Mise). HTML, CSS, and JSON servers are supplied by `vscode-langservers-extracted`. Bash diagnostics benefit from an installed `shellcheck`; shell scripts without an extension and Zsh/Fish files are not selected automatically. C/C++ headers use `c` for `.h` and `cpp` for `.hh`, `.hpp`, and `.hxx`. Java, C#, and framework-specific servers such as Vue/Svelte are not included yet.
+
+Not every server implements every tool. Bash may return an empty symbol result during its asynchronous cold-start analysis; a subsequent query after diagnostics can obtain the analyzed symbols.
 
 Server commands and their inherited PATH use validated, absolute locations outside the active workspace. Executable symlink targets are checked, but external launcher names are preserved so Mise and Rustup shims dispatch correctly. TypeScript also requires an external `lib/tsserver.js`: pi-lsp locates an installed `tsserver` on trusted PATH or validates an explicit global path. It never falls back to workspace `node_modules/typescript`. Automatic TypeScript typing acquisition is always disabled, even if global initialization options request it.
 
@@ -37,6 +45,14 @@ Server commands and their inherited PATH use validated, absolute locations outsi
 This is not a sandbox. Servers run with your permissions and may read project settings or invoke compilers, builds, and plugins. Use trusted projects. The extension ignores project-local Pi executable configuration; it cannot enforce every language server's internal trust or dependency behavior.
 
 Each diagnostic acquisition synchronizes a new, client-wide monotonic document version; it does not reuse a previous clean push or pull report. The server remains responsible for its view of unopened dependencies. A clean report is not a substitute for the project's tests or compiler checks.
+
+## Project setup
+
+There is no project-specific **Pi LSP configuration**: server commands, disabled flags, and initialization options are global-only. The client does not supply editor-style per-project `workspace/configuration` settings.
+
+Servers can still read their own native project configuration. Keep normal dependencies installed and use the files your server expects, such as `tsconfig.json`, `pyrightconfig.json`, or `.clangd`. For C/C++, generate `compile_commands.json` with your build system (or provide `compile_flags.txt`); this gives clangd the include paths and flags needed for useful results. `.clangd`, compilation databases, and flags files also identify nested project roots, alongside `CMakeLists.txt` and the existing markers. A database in a separate build directory may need a `.clangd` `CompileFlags.CompilationDatabase` setting.
+
+Native configuration is interpreted by each server, not by Pi. It can affect builds/plugins, so use trusted projects. TypeScript still uses the globally selected compiler, not the project's TypeScript installation.
 
 ## Global configuration
 
@@ -80,4 +96,4 @@ bun run check
 bun test test/lsp
 ```
 
-An optional Go/TypeScript/Swift smoke test runs against binaries already on PATH when `PI_LSP_REAL_SERVER_SMOKE=1`; it never installs dependencies. Upstream attribution and the exact source commit are recorded in [NOTICE](NOTICE).
+Optional Go/TypeScript/Swift and Bash/HTML/CSS/SCSS/Less/C/C++ smoke tests run against binaries already on PATH when `PI_LSP_REAL_SERVER_SMOKE=1`; they never install dependencies. Upstream attribution and the exact source commit are recorded in [NOTICE](NOTICE).

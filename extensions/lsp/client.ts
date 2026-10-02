@@ -472,14 +472,17 @@ export class LspClient {
   }
 
   private languageIdForPath(path: string): string {
-    if (this.definition.id !== "typescript") return this.definition.languageId;
     switch (extname(path).toLowerCase()) {
       case ".tsx": return "typescriptreact";
       case ".jsx": return "javascriptreact";
       case ".js":
       case ".mjs":
       case ".cjs": return "javascript";
-      default: return "typescript";
+      case ".scss": return "scss";
+      case ".less": return "less";
+      case ".c":
+      case ".h": return "c";
+      default: return this.definition.languageId;
     }
   }
 
