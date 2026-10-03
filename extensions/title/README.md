@@ -1,6 +1,6 @@
 # pi-title
 
-Title each session automatically from its first request. Titles persist, and manual titles are never replaced.
+Title each session automatically from its first request. Titles persist, and manual titles are never replaced. Refreshing the title as the work develops is off until you ask for it.
 
 ```sh
 pi install npm:pi-title
@@ -26,9 +26,34 @@ pi install npm:pi-title
   "enabled": true,
   "model": null,       // null = session model, "auto", or "provider/model[:effort]"
   "maxTokens": 30,
-  "maxLength": 60
+  "maxLength": 60,
+  "refreshTurns": 0    // completed turns between refreshes; 0 (default) titles once and stops
 }
 ```
+
+## Refreshing titles
+
+A session is titled from its first request. Refreshing is off by default, so that stays the only
+title the session gets — the behaviour of every earlier version. Set `refreshTurns` to the number of
+completed turns between refreshes and the title is then regenerated from a transcript of the most
+recent messages instead of the original request, so a session that moved on from its opening
+question ends up named for what it became. `1` refreshes after every completed turn; `4` refreshes
+on the fifth turn, then every fourth turn after that.
+
+One rule governs refreshing: a title the extension did not write is never replaced. That covers a
+session that arrives already named (started with `--name`, named before the extension loaded, or
+titled in an earlier session and resumed), and any title you set while the session runs. `/title
+regenerate` still replaces a title on request.
+
+Set `refreshTurns` to `0` (the default) to title a session once and leave it alone.
+
+Refreshing is evaluated when a turn settles, and a turn counts once it has produced assistant
+text, so a turn spent entirely on tool calls does not advance the cadence. Navigating the session
+tree rebases the cadence on the branch you are on, and titles a still-unnamed session from that
+branch. A refresh also waits for any title request already in flight, so a busy slot can push the
+next refresh past the nominal cadence. `/title regenerate` replaces the title on request, including
+one you set yourself, without resetting the cadence — and without handing automatic refreshing back:
+a session you named stays yours, so the regenerated title persists until you ask for another one.
 
 ## Model fallback
 
