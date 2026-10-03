@@ -23,8 +23,38 @@ describe("configuration", () => {
 
   test("normalizes configured values", () => {
     expect(
-      parseConfig({ enabled: false, model: " openai/gpt-5-nano ", maxTokens: 20, maxLength: 48 }),
-    ).toEqual({ enabled: false, model: "openai/gpt-5-nano", maxTokens: 20, maxLength: 48 });
+      parseConfig({
+        enabled: false,
+        model: " openai/gpt-5-nano ",
+        maxTokens: 20,
+        maxLength: 48,
+        refreshTurns: 2,
+        showWidget: false,
+      }),
+    ).toEqual({
+      enabled: false,
+      model: "openai/gpt-5-nano",
+      maxTokens: 20,
+      maxLength: 48,
+      refreshTurns: 2,
+      showWidget: false,
+    });
+  });
+
+  test("titles once by default and treats zero as disabling refreshes", () => {
+    expect(DEFAULT_CONFIG.refreshTurns).toBe(0);
+    expect(parseConfig({}).refreshTurns).toBe(0);
+    expect(parseConfig({ refreshTurns: 0 }).refreshTurns).toBe(0);
+    for (const value of [-1, 2.5, "4", null]) {
+      expect(parseConfig({ refreshTurns: value }).refreshTurns).toBe(DEFAULT_CONFIG.refreshTurns);
+    }
+  });
+
+  test("leaves the widget off by default and rejects a non-boolean", () => {
+    expect(DEFAULT_CONFIG.showWidget).toBe(false);
+    expect(parseConfig({}).showWidget).toBe(false);
+    expect(parseConfig({ showWidget: true }).showWidget).toBe(true);
+    expect(() => parseConfig({ showWidget: "yes" })).toThrow('"showWidget" must be a boolean');
   });
 
   test("defaults an omitted model to the active session model", () => {

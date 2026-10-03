@@ -8,6 +8,10 @@ export interface Config {
   model: string | null;
   maxTokens: number;
   maxLength: number;
+  /** Completed user turns between refreshes. `0` (the default) titles a session once. */
+  refreshTurns: number;
+  /** Whether the current title is shown in the session widget. Off unless turned on. */
+  showWidget: boolean;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -15,6 +19,8 @@ export const DEFAULT_CONFIG: Config = {
   model: null,
   maxTokens: 30,
   maxLength: 60,
+  refreshTurns: 0,
+  showWidget: false,
 };
 
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -31,6 +37,11 @@ function positiveInteger(value: unknown, fallback: number): number {
   return typeof value === "number" && Number.isInteger(value) && value > 0 ? value : fallback;
 }
 
+/** Zero is meaningful for `refreshTurns`: it turns refreshing off. */
+function nonNegativeInteger(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isInteger(value) && value >= 0 ? value : fallback;
+}
+
 export function parseConfig(value: unknown): Config {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     throw new Error("configuration must be a JSON object");
@@ -43,6 +54,9 @@ export function parseConfig(value: unknown): Config {
   if (input.enabled !== undefined && typeof input.enabled !== "boolean") {
     throw new Error('"enabled" must be a boolean');
   }
+  if (input.showWidget !== undefined && typeof input.showWidget !== "boolean") {
+    throw new Error('"showWidget" must be a boolean');
+  }
 
   const model = input.model === undefined
     ? DEFAULT_CONFIG.model
@@ -54,6 +68,8 @@ export function parseConfig(value: unknown): Config {
     model,
     maxTokens: positiveInteger(input.maxTokens, DEFAULT_CONFIG.maxTokens),
     maxLength: positiveInteger(input.maxLength, DEFAULT_CONFIG.maxLength),
+    refreshTurns: nonNegativeInteger(input.refreshTurns, DEFAULT_CONFIG.refreshTurns),
+    showWidget: input.showWidget ?? DEFAULT_CONFIG.showWidget,
   };
 }
 

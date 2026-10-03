@@ -368,10 +368,7 @@ describe("automatic title generation", () => {
       expect(titleRequest?.messages?.[0]?.content?.[0]?.text).toContain("Implement background titles");
       expect(titleRequest?.messages?.[0]?.content?.[0]?.text).not.toContain("assistant response");
 
-      handlers.get("message_end")!(
-        { message: { role: "assistant", content: [{ type: "text", text: "Implemented it" }] } },
-        ctx,
-      );
+      handlers.get("agent_settled")!({ type: "agent_settled" }, ctx);
       expect(requestCount).toBe(1);
 
       resolveCompletion({ content: [{ type: "text", text: "Background Session Titles" }], stopReason: "stop" });
@@ -455,10 +452,7 @@ describe("automatic title generation", () => {
       } as unknown as ExtensionCommandContext;
 
       titleExtension(pi);
-      handlers.get("message_end")!(
-        { message: { role: "assistant", content: [{ type: "text", text: "Implemented it" }] } },
-        ctx,
-      );
+      handlers.get("agent_settled")!({ type: "agent_settled" }, ctx);
       await automaticStarted;
 
       const regenerate = command!.handler("regenerate", ctx);
