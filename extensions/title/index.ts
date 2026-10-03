@@ -133,6 +133,312 @@ export function resolveModel(
   throw new Error(`configured model is unavailable: ${config.model}`);
 }
 
+/** A model the title can be generated with, in fallback order. */
+export interface TitleModelCandidate {
+  model: TitleModel;
+  thinkingLevel?: ThinkingLevel;
+  /** `configured` is the requested model, `session` is the fallback. */
+  source: "configured" | "session";
+}
+
+export interface TitleModelChain {
+  candidates: TitleModelCandidate[];
+  /** Why the configured model could not be used at all, when it could not. */
+  configuredFailure?: string;
+}
+
+/** Why a title attempt failed, mapped to how the fallback chain reacts. */
+export type TitleFailureKind =
+  | "aborted"
+  | "auth"
+  | "billing"
+  | "empty"
+  | "invalid"
+  | "network"
+  | "not-found"
+  | "rate-limit"
+  | "server"
+  | "unknown";
+
+export interface TitleFailure {
+  kind: TitleFailureKind;
+  status?: number;
+  /** Transient failures are worth one bounded retry when nothing else is left to try. */
+  retryable: boolean;
+  message: string;
+}
+
+export const FAILURE_LABELS: Record<TitleFailureKind, string> = {
+  aborted: "aborted",
+  auth: "authentication failed",
+  billing: "insufficient credits",
+  empty: "no usable title in the response",
+  invalid: "invalid request",
+  network: "network error",
+  "not-found": "model not found",
+  "rate-limit": "rate limited",
+  server: "provider server error",
+  unknown: "unknown error",
+};
+
+const TITLE_RETRY_BASE_DELAY_MS = 500;
+const TITLE_RETRY_MAX_DELAY_MS = 4_000;
+
+/** Retryable failures are transient: another attempt or another model may work. */
+const RETRYABLE_FAILURES: ReadonlySet<TitleFailureKind> = new Set<TitleFailureKind>([
+  "empty",
+  "network",
+  "rate-limit",
+  "server",
+]);
+
+/**
+ * Account, subscription, and quota exhaustion: deterministic limits, so another
+ * attempt on the same model cannot succeed even when the provider reports them with
+ * a retryable-looking status such as 429. These codes mirror the ones Pi's own
+ * assistant retry classifier refuses to retry.
+ */
+const NON_RETRYABLE_LIMIT_PATTERN =
+  /GoUsageLimitError|FreeUsageLimitError|Monthly usage limit reached|available balance|insufficient_quota|insufficient credits|out of budget|quota exceeded|billing|payment required|subscription_sharing_usage_limit_exceeded/i;
+
+/** Deterministic provider wording, checked before transient wording. */
+const DETERMINISTIC_WORDING: ReadonlyArray<readonly [TitleFailureKind, RegExp]> = [
+  ["auth", /unauthori|unauthoriz|forbidden|api key|invalid token|authentication/i],
+  ["not-found", /not found|does not exist|no such model|unknown model|unsupported model/i],
+  ["invalid", /invalid|malformed|bad request/i],
+];
+
+/**
+ * Transient provider wording, mirroring the patterns Pi's assistant retry
+ * classifier treats as retryable. Status numbers are deliberately absent so that
+ * recognising a status stays context-aware; see `statusFromText`.
+ */
+const TRANSIENT_WORDING: ReadonlyArray<readonly [TitleFailureKind, RegExp]> = [
+  [
+    "rate-limit",
+    /overloaded|currently experiencing high demand|rate.?limit|too many requests|you can retry your request|try your request again|please retry your request/i,
+  ],
+  [
+    "network",
+    /network.?error|connection.?error|connection.?refused|connection.?lost|other side closed|fetch failed|getaddrinfo|ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|EPIPE|ETIMEDOUT|EHOSTUNREACH|ENETUNREACH|upstream.?connect|reset before headers|socket hang up|socket connection was closed|timed? out|timeout|terminated|websocket.?closed|websocket.?error|ended without|stream ended before message_stop|stream ended before a terminal response event|http2 request did not get a response|retry delay/i,
+  ],
+  [
+    "server",
+    /service.?unavailable|server.?error|internal.?error|provider.?returned.?error|bad gateway|gateway timeout|exceeded request buffer limit while retrying upstream|subscription_sharing_usage_unavailable|subscription_sharing_user_unavailable|ResourceExhausted/i,
+  ],
+];
+
+/** Explicit cancellation phrasing, not an arbitrary occurrence of "abort"/"cancel". */
+const ABORT_PATTERNS: readonly RegExp[] = [
+  /\bAbortError\b/,
+  /\b(?:operation|request|fetch|stream|call|prompt)\s+(?:was\s+|is\s+|has been\s+)?(?:aborted|cancell?ed)\b/i,
+  /\b(?:aborted|cancell?ed)\s+(?:by|due to)\s+(?:the\s+)?(?:user|caller|signal|request|client)\b/i,
+];
+
+/** The prefix the title call adds to a failed completion, removed before classification. */
+const TITLE_ERROR_PREFIX = /^title model failed:\s*/;
+
+/**
+ * Extract a status from provider text, but only where a number is presented as one:
+ * leading the message, after an `HTTP`/`status`/`code` prefix, or parenthesised. A
+ * value that merely sits between whitespace is not a status — real provider text such
+ * as `Invalid Azure OpenAI base URL: <value>` embeds a URL there — and a number inside
+ * an identifier such as `model-500` is not one either.
+ */
+function statusFromText(message: string): number | undefined {
+  const leading = /^\s*(?:http\s*)?([45]\d{2})\b/i.exec(message);
+  if (leading) return Number(leading[1]);
+  const prefixed = /\b(?:http|status(?:\s*code)?|code)\s*[:=]?\s*([45]\d{2})\b/i.exec(message);
+  if (prefixed) return Number(prefixed[1]);
+  const parenthesised = /\(([45]\d{2})\)/.exec(message);
+  return parenthesised ? Number(parenthesised[1]) : undefined;
+}
+
+/**
+ * Limit information can arrive as a structured code rather than in the message, for
+ * example OpenAI's parsed `insufficient_quota` error body.
+ */
+function structuredCodes(error: unknown): string {
+  const record = error as { code?: unknown; error?: { code?: unknown } } | null;
+  return [record?.code, record?.error?.code]
+    .filter((value): value is string => typeof value === "string")
+    .join(" ");
+}
+
+/** Bounded exponential backoff, matching the shape of Pi's provider retry policy. */
+export function titleRetryDelayMs(attempt: number): number {
+  return Math.min(TITLE_RETRY_BASE_DELAY_MS * 2 ** (attempt - 1), TITLE_RETRY_MAX_DELAY_MS);
+}
+
+function sleepTitleRetry(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve) => {
+    const finish = (): void => {
+      clearTimeout(timer);
+      signal.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal.addEventListener("abort", finish, { once: true });
+  });
+}
+
+function kindFromStatus(status: number): TitleFailureKind {
+  if (status === 401 || status === 403) return "auth";
+  if (status === 402) return "billing";
+  if (status === 404) return "not-found";
+  if (status === 408 || status === 409 || status === 425 || status === 429) return "rate-limit";
+  if (status >= 500) return "server";
+  if (status === 400 || status === 422) return "invalid";
+  return "unknown";
+}
+
+/**
+ * Classify a failed title attempt so the chain can choose between a bounded retry,
+ * another model, or giving up.
+ *
+ * Precedence is deliberate:
+ * 1. explicit cancellation wording is terminal;
+ * 2. an empty completion is retryable;
+ * 3. account/quota exhaustion is deterministic even when reported as 429, because
+ *    another attempt cannot succeed;
+ * 4. a structured status carried by the provider error is authoritative;
+ * 5. a status stated in the message text is used when the message presents one (a
+ *    leading code, an `HTTP`/`status`/`code` prefix, or a parenthesised code);
+ * 6. wording decides last, deterministic wording before transient wording, so
+ *    "Provider returned error" cannot turn an explicit 400 into a retry.
+ *
+ * The title call prefixes a failed completion with "title model failed: " to add context.
+ * That prefix is removed before reading a status, because the provider's status is only a
+ * status while it still leads the message — wrapped, a "400:" would fall through to
+ * wording and a deterministic failure would be retried.
+ *
+ * Pi's provider retry helper defaults `maxRetries` to 0 and this call path passes no
+ * budget, so the extension performs its own bounded retry rather than relying on
+ * retries that never happen.
+ */
+export function classifyTitleFailure(error: unknown): TitleFailure {
+  const message = error instanceof Error ? error.message : String(error);
+  const text = message.replace(TITLE_ERROR_PREFIX, "");
+
+  if (ABORT_PATTERNS.some((pattern) => pattern.test(text))) {
+    return { kind: "aborted", retryable: false, message };
+  }
+
+  if (/returned no usable text/i.test(text)) {
+    return { kind: "empty", retryable: true, message };
+  }
+
+  if (NON_RETRYABLE_LIMIT_PATTERN.test(text) || NON_RETRYABLE_LIMIT_PATTERN.test(structuredCodes(error))) {
+    return { kind: "billing", retryable: false, message };
+  }
+
+  const structured = typeof (error as { status?: unknown } | null)?.status === "number"
+    ? (error as { status: number }).status
+    : undefined;
+  const status = structured ?? statusFromText(text);
+
+  const wording = [...DETERMINISTIC_WORDING, ...TRANSIENT_WORDING]
+    .find(([, expression]) => expression.test(text));
+  const kind = status !== undefined ? kindFromStatus(status) : wording?.[0] ?? "unknown";
+
+  return {
+    kind,
+    retryable: RETRYABLE_FAILURES.has(kind),
+    ...(status !== undefined ? { status } : {}),
+    message,
+  };
+}
+
+function sameModel(left: TitleModel, right: TitleModel): boolean {
+  return left.provider === right.provider && left.id === right.id;
+}
+
+/**
+ * Build the ordered title model chain: the configured model first, then the
+ * active session model as a fallback. A configured model that cannot be
+ * resolved at all is recorded and skipped instead of aborting the attempt.
+ */
+export function resolveModelChain(
+  ctx: Pick<ExtensionContext, "model" | "modelRegistry">,
+  config: Config,
+): TitleModelChain {
+  const candidates: TitleModelCandidate[] = [];
+  let configuredFailure: string | undefined;
+
+  if (config.model) {
+    try {
+      const { model, thinkingLevel } = resolveModel(ctx, config);
+      if (model) candidates.push({ model, thinkingLevel, source: "configured" });
+    } catch (error) {
+      configuredFailure = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  const sessionModel = ctx.model;
+  if (sessionModel && !candidates.some((candidate) => sameModel(candidate.model, sessionModel))) {
+    candidates.push({ model: sessionModel, source: config.model ? "session" : "configured" });
+  }
+
+  return { candidates, ...(configuredFailure ? { configuredFailure } : {}) };
+}
+
+function describeTitleFailures(
+  failures: ReadonlyArray<{ candidate: TitleModelCandidate; failure: TitleFailure }>,
+): string {
+  const attempts = failures.map(({ candidate, failure }) =>
+    `${candidate.model.provider}/${candidate.model.id} (${FAILURE_LABELS[failure.kind]})`);
+  const last = failures.at(-1)?.failure.message;
+  return last ? `${attempts.join("; ")}: ${last}` : attempts.join("; ");
+}
+
+function notifyModelFallback(
+  ctx: ExtensionContext,
+  config: Config,
+  chain: TitleModelChain,
+  candidate: TitleModelCandidate,
+  failure: TitleFailure | undefined,
+): void {
+  // Reporting is cosmetic and this runs after an awaited model call, so a context that
+  // was invalidated while the request was in flight must not turn the report into a
+  // failure of a title that was already written.
+  try {
+    if (!ctx.hasUI) return;
+    const requested = config.model ?? "active session model";
+    const used = `${candidate.model.provider}/${candidate.model.id}`;
+    const reason = chain.configuredFailure
+      ? "is unavailable"
+      : failure ? `failed (${FAILURE_LABELS[failure.kind]})` : "could not be used";
+    ctx.ui.notify(`Configured title model ${requested} ${reason}; used ${used}`, "warning");
+  } catch {
+    // Ignore: the session may have been replaced while the model was answering.
+  }
+}
+
+function buildTitleRequest(source: TitleSource): TitleRequest {
+  return {
+    systemPrompt: TITLE_SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: [
+              "--- First user request ---",
+              source.user.slice(0, 4800),
+              ...(source.assistant
+                ? ["--- First assistant response ---", source.assistant.slice(0, 2400)]
+                : []),
+              "--- End session data ---",
+            ].join("\n"),
+          },
+        ],
+        timestamp: Date.now(),
+      },
+    ],
+  };
+}
+
 export function completionOptions(config: Config, thinkingLevel?: ThinkingLevel) {
   const thinkingTokens = thinkingLevel && thinkingLevel !== "off"
     ? THINKING_TOKEN_BUDGETS[thinkingLevel]
@@ -197,8 +503,17 @@ export default function titleExtension(pi: ExtensionAPI) {
     return error instanceof Error && error.message.startsWith("This extension ctx is stale");
   }
 
-  function applyTerminalTitle(ctx: ExtensionContext, title = pi.getSessionName()): void {
-    if (ctx.hasUI && title) ctx.ui.setTitle(title);
+  function applyTerminalTitle(ctx: ExtensionContext, title?: string): void {
+    // The terminal title is cosmetic, and this runs both after awaited work and from a
+    // timer, so a replaced session must not turn it into a failure or an unhandled throw.
+    // The name is read inside the guard: as a default parameter it would be evaluated at
+    // call time, before any of this could catch it.
+    try {
+      const name = title ?? pi.getSessionName();
+      if (ctx.hasUI && name) ctx.ui.setTitle(name);
+    } catch {
+      // Ignore: the session may have been replaced.
+    }
   }
 
   function setTitle(ctx: ExtensionContext, title: string): void {
@@ -214,12 +529,9 @@ export default function titleExtension(pi: ExtensionAPI) {
     titleTimer = setTimeout(() => {
       titleTimer = undefined;
       if (lifecycle !== expectedLifecycle) return;
-      try {
-        applyTerminalTitle(ctx);
-      } catch (error) {
-        // Session replacement can invalidate ctx before the next session event cancels this timer.
-        if (!isStaleContextError(error)) throw error;
-      }
+      // applyTerminalTitle tolerates a context invalidated before the next session event
+      // cancels this timer.
+      applyTerminalTitle(ctx);
     }, 0);
   }
 
@@ -238,47 +550,72 @@ export default function titleExtension(pi: ExtensionAPI) {
       const config = await loadConfig();
       if (!config.enabled && !overwrite) return undefined;
 
-      const { model, thinkingLevel } = resolveModel(ctx, config);
-      if (!model) throw new Error("no title model is available");
+      const chain = resolveModelChain(ctx, config);
+      if (chain.candidates.length === 0) throw new Error("no title model is available");
 
-      const response = await completeTitle(
-        ctx,
-        model,
-        {
-          systemPrompt: TITLE_SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: [
-                    "--- First user request ---",
-                    source.user.slice(0, 4800),
-                    ...(source.assistant
-                      ? ["--- First assistant response ---", source.assistant.slice(0, 2400)]
-                      : []),
-                    "--- End session data ---",
-                  ].join("\n"),
-                },
-              ],
-              timestamp: Date.now(),
-            },
-          ],
-        },
-        config,
-        thinkingLevel,
-        controller.signal,
-      );
+      const request = buildTitleRequest(source);
+      const failures: Array<{ candidate: TitleModelCandidate; failure: TitleFailure }> = [];
+      let lastError: unknown;
+      let degraded = false;
 
-      if (controller.signal.aborted || lifecycle !== expectedLifecycle) return undefined;
-      const title = titleFromCompletion(response, config.maxLength);
-      if (!overwrite && pi.getSessionName()) return undefined;
+      for (let index = 0; index < chain.candidates.length; index += 1) {
+        const candidate = chain.candidates[index]!;
+        // An earlier failure moves straight to the next model because an untried
+        // model is the better bet; a transient failure on the last candidate is
+        // retried once instead of giving up on the only option left.
+        const maxAttempts = index === chain.candidates.length - 1 ? 2 : 1;
 
-      pi.setSessionName(title);
-      applyTerminalTitle(ctx, title);
-      deferTerminalTitle(ctx);
-      return title;
+        for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+          if (controller.signal.aborted || lifecycle !== expectedLifecycle) return undefined;
+          try {
+            const response = await completeTitle(
+              ctx,
+              candidate.model,
+              request,
+              config,
+              candidate.thinkingLevel,
+              controller.signal,
+            );
+
+            if (controller.signal.aborted || lifecycle !== expectedLifecycle) return undefined;
+            const title = titleFromCompletion(response, config.maxLength);
+            if (!overwrite && pi.getSessionName()) return undefined;
+
+            pi.setSessionName(title);
+            applyTerminalTitle(ctx, title);
+            deferTerminalTitle(ctx);
+            if (candidate.source === "session") {
+              // Explain the configured model's failure, not a later failure of the
+              // model that was used as the fallback.
+              const replaced = failures.find(({ candidate: failed }) => failed.source === "configured")?.failure;
+              notifyModelFallback(ctx, config, chain, candidate, replaced);
+            }
+            return title;
+          } catch (error) {
+            if (controller.signal.aborted) return undefined;
+            // The background handler suppresses stale-context errors by message;
+            // classifying or aggregating one would hide that and make the handler
+            // read an already-invalid context.
+            if (isStaleContextError(error)) throw error;
+            const failure = classifyTitleFailure(error);
+            if (failure.kind === "aborted") return undefined;
+            lastError = error;
+            failures.push({ candidate, failure });
+            if (failure.retryable && attempt < maxAttempts) {
+              degraded = true;
+              await sleepTitleRetry(titleRetryDelayMs(attempt), controller.signal);
+              continue;
+            }
+            break;
+          }
+        }
+
+        if (index < chain.candidates.length - 1) degraded = true;
+      }
+
+      // A single attempt on a single model keeps the original error untouched.
+      if (!degraded) throw lastError;
+      throw new Error(`title model failed: ${describeTitleFailures(failures)}`);
     } catch (error) {
       if (controller.signal.aborted) return undefined;
       throw error;
