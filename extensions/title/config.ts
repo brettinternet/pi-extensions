@@ -10,6 +10,8 @@ export interface Config {
   maxLength: number;
   /** Completed user turns between refreshes. `0` (the default) titles a session once. */
   refreshTurns: number;
+  /** Whether the current title is shown in the session widget. Off unless turned on. */
+  showWidget: boolean;
 }
 
 export const DEFAULT_CONFIG: Config = {
@@ -18,6 +20,7 @@ export const DEFAULT_CONFIG: Config = {
   maxTokens: 30,
   maxLength: 60,
   refreshTurns: 0,
+  showWidget: false,
 };
 
 export function configPath(env: NodeJS.ProcessEnv = process.env): string {
@@ -51,6 +54,9 @@ export function parseConfig(value: unknown): Config {
   if (input.enabled !== undefined && typeof input.enabled !== "boolean") {
     throw new Error('"enabled" must be a boolean');
   }
+  if (input.showWidget !== undefined && typeof input.showWidget !== "boolean") {
+    throw new Error('"showWidget" must be a boolean');
+  }
 
   const model = input.model === undefined
     ? DEFAULT_CONFIG.model
@@ -63,6 +69,7 @@ export function parseConfig(value: unknown): Config {
     maxTokens: positiveInteger(input.maxTokens, DEFAULT_CONFIG.maxTokens),
     maxLength: positiveInteger(input.maxLength, DEFAULT_CONFIG.maxLength),
     refreshTurns: nonNegativeInteger(input.refreshTurns, DEFAULT_CONFIG.refreshTurns),
+    showWidget: input.showWidget ?? DEFAULT_CONFIG.showWidget,
   };
 }
 

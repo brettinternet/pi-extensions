@@ -72,6 +72,7 @@ function harness(options: HarnessOptions) {
   const handlers = new Map<string, (...args: unknown[]) => unknown>();
   const requests: string[] = [];
   const titles: string[] = [];
+  const widgets: Array<string | undefined> = [];
   const notifications: Array<{ message: string; level: string }> = [];
   const responses = [...(options.responses ?? [])];
   const branch: BranchEntry[] = [];
@@ -111,6 +112,10 @@ function harness(options: HarnessOptions) {
     },
     sessionManager: { getBranch: () => [...branch] },
     ui: {
+      theme: { fg: (_color: string, text: string) => text },
+      setWidget: (_key: string, content: string[] | undefined) => {
+        widgets.push(content?.[0]);
+      },
       notify: (message: string, level = "info") => {
         notifications.push({ message, level });
       },
@@ -136,6 +141,7 @@ function harness(options: HarnessOptions) {
   return {
     requests,
     titles,
+    widgets,
     notifications,
     branch,
     start: () => handlers.get("session_start")!({ type: "session_start", reason: "startup" }, ctx),
@@ -286,6 +292,29 @@ describe("refreshing titles", () => {
     }
     await h.waitForRequests(3);
     expect(h.titles).toEqual(["Initial title", "Refreshed title", "Second refresh"]);
+  });
+
+  test("a refresh repaints the widget with the new title", async () => {
+    const h = harness({
+      dir: configDir({ refreshTurns: 1, showWidget: true }),
+      responses: [ok("Initial title"), ok("Refreshed title")],
+    });
+    h.start();
+    h.prompt("add retries to the upload API");
+    await h.waitForRequests(1);
+    expect(h.widgets.at(-1)).toBe("● Title: Initial title");
+
+    // The opening exchange anchors the cadence, so the refresh needs the turn after it.
+    h.turn("warm-up");
+    await h.reply("warm-up answer");
+    expect(h.requests).toHaveLength(1);
+
+    h.turn("follow-up");
+    await h.reply("answer");
+    await h.waitForRequests(2);
+
+    expect(h.titles.at(-1)).toBe("Refreshed title");
+    expect(h.widgets.at(-1)).toBe("● Title: Refreshed title");
   });
 
   test("zero refresh turns keeps the initial title and stops refreshing", async () => {

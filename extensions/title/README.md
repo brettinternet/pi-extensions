@@ -1,6 +1,6 @@
 # pi-title
 
-Title each session automatically from its first request. Titles persist, and manual titles are never replaced. Refreshing the title as the work develops is off until you ask for it.
+Title each session automatically from its first request. Titles persist, and manual titles are never replaced. Refreshing the title as the work develops, and showing it in a widget, are both off until you ask for them.
 
 ```sh
 pi install npm:pi-title
@@ -16,6 +16,8 @@ pi install npm:pi-title
 /title model openai/gpt-5-nano  use a specific model
 /title model auto               use a lightweight model
 /title model active             use the session's model
+/title show                     show the title widget
+/title hide                     hide the title widget
 ```
 
 ## Configuration
@@ -27,7 +29,8 @@ pi install npm:pi-title
   "model": null,       // null = session model, "auto", or "provider/model[:effort]"
   "maxTokens": 30,
   "maxLength": 60,
-  "refreshTurns": 0    // completed turns between refreshes; 0 (default) titles once and stops
+  "refreshTurns": 0,   // completed turns between refreshes; 0 (default) titles once and stops
+  "showWidget": false  // show the current title below the editor
 }
 ```
 
@@ -81,3 +84,14 @@ The failure decides how fast the chain moves on:
 
 When the fallback writes the title, Pi reports which configured model failed and which model was
 used instead.
+
+## Title widget
+
+The widget is off by default. `/title show` turns it on: the current title is then shown as
+`● Title: <name>` below the editor and redrawn whenever it changes. `/title hide` removes it again,
+and that choice is stored as `showWidget`, so it also applies to later sessions. `/title status`
+reports whether the widget is enabled.
+
+One host path does not report a name change: renaming the **currently active** session from the
+`/resume` picker writes through a separate session handle, so the widget keeps the old title until
+the next change.
