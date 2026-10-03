@@ -70,3 +70,72 @@ export function cleanTitle(raw: string, maxLength: number): string | undefined {
 
   return title.length >= 2 ? title : undefined;
 }
+
+/**
+ * Number of user turns that were answered, which is what a refresh cadence
+ * counts. A user message without assistant output is not a completed turn.
+ */
+export function countCompletedExchanges(entries: BranchEntry[]): number {
+  let completed = 0;
+  let awaitingAnswer = false;
+
+  for (const entry of entries) {
+    if (entry.type !== "message") continue;
+    const role = entry.message?.role;
+
+    if (role === "user") {
+      awaitingAnswer = textOf(entry.message?.content).length > 0;
+      continue;
+    }
+
+    if (role === "assistant" && awaitingAnswer && textOf(entry.message?.content).length > 0) {
+      completed += 1;
+      awaitingAnswer = false;
+    }
+  }
+
+  return completed;
+}
+
+export const RECENT_TRANSCRIPT_DEFAULTS = {
+  maxMessages: 8,
+  maxCharsPerMessage: 600,
+  maxChars: 4_000,
+} as const;
+
+/**
+ * Compact transcript of the most recent user and assistant messages, oldest
+ * first, used to retitle a session once its subject has had time to develop.
+ * Bounded by message count and by total length so a long session cannot grow the
+ * request without limit.
+ */
+export function recentTranscript(
+  entries: BranchEntry[],
+  options: Partial<typeof RECENT_TRANSCRIPT_DEFAULTS> = {},
+): string | undefined {
+  const maxMessages = options.maxMessages ?? RECENT_TRANSCRIPT_DEFAULTS.maxMessages;
+  const maxCharsPerMessage = options.maxCharsPerMessage ?? RECENT_TRANSCRIPT_DEFAULTS.maxCharsPerMessage;
+  const maxChars = options.maxChars ?? RECENT_TRANSCRIPT_DEFAULTS.maxChars;
+  const lines: string[] = [];
+  let length = 0;
+
+  for (let index = entries.length - 1; index >= 0 && lines.length < maxMessages; index -= 1) {
+    const entry = entries[index];
+    if (entry?.type !== "message") continue;
+    const role = entry.message?.role;
+    if (role !== "user" && role !== "assistant") continue;
+
+    const text = textOf(entry.message?.content).replace(/\s+/g, " ").trim();
+    if (!text) continue;
+
+    const line = `${role}: ${text.slice(0, maxCharsPerMessage)}`;
+    // Stop on a whole line rather than slicing the assembled text, so the model never
+    // receives the tail of a word at the start of the transcript.
+    if (lines.length > 0 && length + line.length + 1 > maxChars) break;
+    lines.push(line);
+    length += line.length + 1;
+  }
+
+  if (lines.length === 0) return undefined;
+  return lines.reverse().join("\n");
+}
