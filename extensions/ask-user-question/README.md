@@ -49,6 +49,8 @@ For a single multi-select question, Space toggles choices; Enter includes the fo
 
 Previews are optional framed Markdown for single-select questions. They appear beside choices at widths of at least 100 columns, or below them at narrower widths. A question reserves space for its largest visible preview even when the focused option has none, leaving that space blank without a placeholder or duplicate note hint. Questions without previews reserve no preview space. In fullscreen, the mouse wheel scrolls the questionnaire or conversation according to pointer position.
 
+After submission, the compact transcript receipt shows each full question above its header and answer, with a blank line between questions. Selected choices, custom answers, and notes remain visible without expanding the tool result.
+
 Notes are not answers; an optional `note` string appears in results and compact transcript receipts. RPC mode uses native select, input, and final confirm dialogs, without a note editor. The tool is disabled in print and JSON modes. See [UPSTREAM-REVIEW.md](./UPSTREAM-REVIEW.md) for deferred features.
 
 ## Development

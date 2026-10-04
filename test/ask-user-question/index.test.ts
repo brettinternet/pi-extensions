@@ -554,11 +554,17 @@ test("registers sequential model-only tool and removes it without UI", async () 
   expect(Value.Check(tool.outputSchema, response.structuredContent)).toBe(true);
   expect(response.details).toEqual(response.structuredContent);
   const render = (value: unknown, expanded = false, isError = false, isPartial = false) =>
-    tool.renderResult(value, { expanded, isPartial }, theme, { isError }).render(120).join("\n").trim();
+    tool.renderResult(value, { expanded, isPartial }, theme, { isError }).render(120).map((line: string) => line.trimEnd()).join("\n").trim();
   const receipt = { content: [{ type: "text", text: "Full model-facing answer" }], details: {
     cancelled: false, answers: [{ header: "Store", question: "Which?", selected: ["SQLite (Recommended)", "Postgres"], custom: "custom (Recommended)" }],
   } };
-  expect(render(receipt)).toBe("Store: SQLite; Postgres; custom (Recommended)");
+  expect(render(receipt)).toBe("Which?\n  Store: SQLite; Postgres; custom (Recommended)");
+  const secondAnswer = { header: "Deploy", question: "Where should it run?", selected: [], custom: "On my server" };
+  expect(render({ ...receipt, details: { cancelled: false, answers: [...receipt.details.answers, secondAnswer] } }))
+    .toBe("Which?\n  Store: SQLite; Postgres; custom (Recommended)\n\nWhere should it run?\n  Deploy: On my server");
+  const narrow = tool.renderResult(receipt, { expanded: false, isPartial: false }, theme, { isError: false }).render(20);
+  expect(narrow.join("\n")).toContain("Which?");
+  expect(narrow.every((line: string) => visibleWidth(line) <= 20)).toBe(true);
   expect(render({ ...receipt, details: { ...receipt.details, answers: [{ ...receipt.details.answers[0], note: "Keep backups" }] } })).toContain("Note: Keep backups");
   expect(receipt.details.answers[0]?.selected[0]).toBe("SQLite (Recommended)");
   expect(render(receipt, true)).toBe("Full model-facing answer");
