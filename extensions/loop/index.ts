@@ -677,21 +677,79 @@ export default function loopExtension(pi: ExtensionAPI): void {
   let currentSessionManagerRef: unknown;
   let herdrBlocked = false;
   const pendingWakes = new Map<string, boolean>();
-  let waitingForWake = false;
+  let waitingForWake: "boundary" | "recovery" | undefined;
   let wakeContext: ExtensionContext | undefined;
+  let parentTurnActive = false;
+  let subagentLifecycleExpected = false;
+
+  // Public pi-subagents/session-liveness v1 contract. Keep the packages optional
+  // and independently installable: no runtime import from another Pi package.
+  function subagentsBusy(ctx: ExtensionContext): boolean | undefined {
+    const sessionId = ctx.sessionManager.getSessionId();
+    const request: { version: 1; sessionId: string; result?: unknown } = { version: 1, sessionId };
+    pi.events.emit("pi-subagents:session-liveness:query:v1", request);
+    const result = request.result;
+    if (result && typeof result === "object" && "version" in result && result.version === 1
+      && "sessionId" in result && result.sessionId === sessionId
+      && "busy" in result && typeof result.busy === "boolean") {
+      subagentLifecycleExpected = true;
+      return result.busy;
+    }
+    return result !== undefined || subagentLifecycleExpected ? undefined : false;
+  }
+
+  function deferBoundary(ctx: ExtensionContext, state: LoopState, purpose: "boundary" | "recovery" = "boundary"): boolean {
+    const busy = subagentsBusy(ctx);
+    if (busy === undefined) {
+      waitingForWake = undefined;
+      handledSettlementKey = undefined;
+      const reason = "subagent session-liveness API unavailable; update pi-subagents before resuming this loop";
+      pauseLoop(ctx, state, reason);
+      notify(ctx, `loop paused: ${reason}`, "error");
+      return true;
+    }
+    if (!busy && !parentTurnActive && !ctx.hasPendingMessages() && ![...pendingWakes.values()].some(Boolean)) return false;
+    clearContinuationWait();
+    handledSettlementKey = undefined;
+    waitingForWake = purpose;
+    wakeContext = ctx;
+    return true;
+  }
+
+  function resumeBoundary(): void {
+    const ctx = wakeContext;
+    if (!waitingForWake || !ctx || parentTurnActive || !ctx.isIdle() || ctx.hasPendingMessages()) return;
+    const state = currentState(ctx);
+    const purpose = waitingForWake;
+    if (!state || !statusIsActive(state) || transitionInFlight || deferBoundary(ctx, state, purpose)) return;
+    waitingForWake = undefined;
+    if (purpose === "recovery") {
+      continueCurrentIteration(ctx, state);
+    } else {
+      handledSettlementKey = stateKey(ctx, state);
+      scheduleContinuation(ctx, state);
+    }
+  }
+
+  pi.events.on("pi-subagents:session-liveness:changed:v1", (value) => {
+    if (!value || typeof value !== "object" || !("version" in value) || value.version !== 1
+      || !("sessionId" in value) || value.sessionId !== wakeContext?.sessionManager.getSessionId()) return;
+    subagentLifecycleExpected = true;
+    resumeBoundary();
+  });
+  // Older owners lack the liveness API. Never silently roll over after observing
+  // their work; pause with an upgrade diagnostic instead of guessing its lifetime.
+  pi.events.on("subagent:async-started", (value) => {
+    if (!value || typeof value !== "object" || !("sessionId" in value) || !wakeContext) return;
+    const identity = contextIdentity(wakeContext);
+    if (value.sessionId === identity.id || value.sessionId === identity.file) subagentLifecycleExpected = true;
+  });
 
   for (const channel of ["pi-until:busy", "pi-wait:busy"]) {
     pi.events.on(channel, (value) => {
       if (typeof value !== "boolean") return;
       pendingWakes.set(channel, value);
-      if (!waitingForWake || [...pendingWakes.values()].some(Boolean)) return;
-      const ctx = wakeContext;
-      if (!ctx || !ctx.isIdle()) return;
-      const state = currentState(ctx);
-      if (!state || !statusIsActive(state) || transitionInFlight) return;
-      waitingForWake = false;
-      handledSettlementKey = stateKey(ctx, state);
-      scheduleContinuation(ctx, state);
+      resumeBoundary();
     });
   }
 
@@ -824,7 +882,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     state: LoopState,
     settledAt = Date.now(),
   ): void {
-    if (!statusIsActive(state) || transitionInFlight) return;
+    if (!statusIsActive(state) || transitionInFlight || deferBoundary(ctx, state)) return;
     const nextBudget = state.pendingRetune ?? state.remainingBudget;
     if (state.status === "pausing" || state.status === "stopping" || (state.endsAt === undefined && nextBudget <= 0) || state.delay === 0) {
       clearContinuationWait();
@@ -985,6 +1043,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
         armRetry(ctx, latest, waitMs);
         return;
       }
+      if (deferBoundary(ctx, latest, "recovery")) return;
       notify(ctx, `loop recovering interrupted iteration ${latest.currentIteration}`, "warning");
       continueCurrentIteration(ctx, latest);
     }, 0);
@@ -1125,6 +1184,8 @@ export default function loopExtension(pi: ExtensionAPI): void {
     if (!state || state.runId !== expectedRunId || state.currentIteration !== expectedIteration) return;
     const canAdvance = ACTIVE_STATUSES.has(state.status) || (allowPaused && state.status === "paused");
     if (!canAdvance || transitionInFlight) return;
+    // Work may have started after settlement, during the configured loop delay.
+    if (!allowPaused && deferBoundary(ctx, state)) return;
     clearContinuationWait();
     clearRetryWait();
 
@@ -1576,8 +1637,10 @@ export default function loopExtension(pi: ExtensionAPI): void {
     pendingFailure = undefined;
     currentSessionManagerRef = ctx.sessionManager;
     pendingWakes.clear();
-    waitingForWake = false;
+    waitingForWake = undefined;
     wakeContext = ctx;
+    parentTurnActive = false;
+    subagentLifecycleExpected = false;
     transitionInFlight = false;
     handledSettlementKey = undefined;
     const loaded = latestStateFromContext(ctx);
@@ -1606,7 +1669,12 @@ export default function loopExtension(pi: ExtensionAPI): void {
 
   pi.on("agent_start", (_event, ctx) => {
     const loaded = currentState(ctx);
-    if (loaded && statusIsActive(loaded)) renderWidget(ctx, loaded);
+    if (!loaded || !statusIsActive(loaded)) return;
+    parentTurnActive = true;
+    waitingForWake = undefined;
+    clearContinuationWait();
+    handledSettlementKey = undefined;
+    renderWidget(ctx, loaded);
   });
 
   pi.on("message_end", (event, ctx) => {
@@ -1627,6 +1695,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   pi.on("agent_settled", (_event, ctx) => {
     const loaded = currentState(ctx);
     if (!loaded || !statusIsActive(loaded) || transitionInFlight) return;
+    parentTurnActive = false;
     const key = stateKey(ctx, loaded);
     if (commandInterruptedKey === key && loaded.status === "active") {
       clearCommandInterruption();
@@ -1648,12 +1717,8 @@ export default function loopExtension(pi: ExtensionAPI): void {
       return;
     }
     if (handledSettlementKey === key) return;
-    if ([...pendingWakes.values()].some(Boolean)) {
-      waitingForWake = true;
-      wakeContext = ctx;
-      return;
-    }
-    waitingForWake = false;
+    if (deferBoundary(ctx, loaded)) return;
+    waitingForWake = undefined;
     handledSettlementKey = key;
     scheduleContinuation(ctx, loaded);
   });
@@ -1666,8 +1731,9 @@ export default function loopExtension(pi: ExtensionAPI): void {
     pendingFailure = undefined;
     currentSessionManagerRef = ctx.sessionManager;
     pendingWakes.clear();
-    waitingForWake = false;
+    waitingForWake = undefined;
     wakeContext = ctx;
+    parentTurnActive = false;
     handledSettlementKey = undefined;
     const loaded = latestStateFromContext(ctx);
     const owned = loaded && stateBelongsToContext(loaded, ctx) ? loaded : undefined;
@@ -1697,7 +1763,9 @@ export default function loopExtension(pi: ExtensionAPI): void {
     reportHerdrBlocked(undefined);
     clearWidget(ctx);
     currentSessionManagerRef = undefined;
-    waitingForWake = false;
+    parentTurnActive = false;
+    subagentLifecycleExpected = false;
+    waitingForWake = undefined;
     wakeContext = undefined;
     pendingWakes.clear();
   });

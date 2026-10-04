@@ -48,8 +48,18 @@ Durations use `ms`, `s`, `m`, `h`, or `d`. Delays range from 1s to 24h; use `off
 | Agent calls `loop_pause` | Pauses mid-iteration; resume continues that iteration |
 | Pending `/wait` or `until` watch | Iteration waits for its wake-up turn or cancellation |
 | Paused wait or recurring watch | Iteration waits until resumed or completed |
+| Async subagent workflow or supervisor request | Originating session and iteration stay alive through completion delivery and the parent's result-processing turn |
+| Subagent lifecycle API disappears or is unavailable after an async launch | Loop pauses with an upgrade diagnostic instead of discarding the session |
 
 Use `/loop delay` for a fixed gap, `/wait` for a same-session follow-up, and `until` for a condition that may become true sooner.
+
+### Async subagents
+
+A yielded assistant turn (for example, “review is running”) is not an iteration boundary while its subagent work remains outstanding. Loop uses the **pi-subagents session-liveness v1 API** to wait through execution, supervisor questions, result delivery, and queued completion notifications. After the parent receives the result, it can apply fixes or commit in the same session; rollover occurs only after that parent turn settles and all blockers clear. Multiple workflows are covered together. Failure or cancellation still requires the producer's final disposition, not merely a stop request.
+
+This requires a pi-subagents build exposing `pi-subagents:session-liveness:query:v1` and `pi-subagents:session-liveness:changed:v1`. Released 0.75.0 lacks that contract; an observed async launch with that version pauses the loop rather than guessing when it is safe to advance. Install a compatible build before resuming. Loops without subagents need no additional package.
+
+The gate reads a synchronous, session-scoped snapshot and reacts to lifecycle changes; it does not poll run files, add a grace delay, or force synchronous reviews. It rechecks at automatic rollover, including after a configured loop delay, and on recovery. Explicit `/loop next` remains a manual skip for a paused iteration.
 
 ## Run ID
 

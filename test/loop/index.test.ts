@@ -51,6 +51,7 @@ function createHarness(options: {
   cancelReplacement?: boolean;
   beforeWithSession?: (manager: Manager, replacementNumber: number) => void;
   modelAvailable?: boolean;
+  subagents?: boolean;
 } = {}) {
   const handlers = new Map<string, (...args: any[]) => any>();
   let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
@@ -67,6 +68,9 @@ function createHarness(options: {
   ]);
   let replacementNumber = 0;
   let idle = true;
+  let pendingMessages = false;
+  let subagentProvider = options.subagents === true;
+  const subagentWork = new Map<string, string[]>();
   let abortCount = 0;
   let widgetRenderRequests = 0;
   let activeContext: ExtensionCommandContext;
@@ -95,7 +99,7 @@ function createHarness(options: {
     isProjectTrusted: () => true,
     signal: undefined,
     abort: () => { abortCount += 1; },
-    hasPendingMessages: () => false,
+    hasPendingMessages: () => pendingMessages,
     shutdown: () => {},
     getContextUsage: () => undefined,
     compact: () => {},
@@ -185,6 +189,12 @@ function createHarness(options: {
     return { cancelled: false };
   };
 
+  pi.events.on("pi-subagents:session-liveness:query:v1", (value) => {
+    if (!subagentProvider) return;
+    const request = value as { version: number; sessionId: string; result?: unknown };
+    if (request.version !== 1 || request.sessionId !== current.id) return;
+    request.result = { version: 1, sessionId: current.id, busy: (subagentWork.get(current.id)?.length ?? 0) > 0 };
+  });
   loopExtension(pi);
   const initialContext = contextFor(current);
   activeContext = initialContext;
@@ -217,16 +227,28 @@ function createHarness(options: {
       return widgetRenderRequests;
     },
     requestWidgetRender: () => { widgetRenderRequests += 1; },
+    setSubagentWork: (work: string[], sessionId = current.id, announce = true) => {
+      subagentWork.set(sessionId, work);
+      if (announce) pi.events.emit("pi-subagents:session-liveness:changed:v1", { version: 1, sessionId });
+    },
+    setSubagentProvider: (available: boolean) => { subagentProvider = available; },
+    setPendingMessages: (pending: boolean) => { pendingMessages = pending; },
     settle: async () => {
+      idle = true;
       handlers.get("agent_settled")?.({}, activeContext);
       await new Promise((resolve) => setTimeout(resolve, 0));
       await new Promise((resolve) => setTimeout(resolve, 0));
     },
-    agentStart: () => handlers.get("before_agent_start")?.({
-      prompt: prompts.at(-1) ?? "",
-      systemPrompt: "base prompt",
-      systemPromptOptions: {},
-    }, activeContext),
+    agentStart: () => {
+      idle = false;
+      const result = handlers.get("before_agent_start")?.({
+        prompt: prompts.at(-1) ?? "",
+        systemPrompt: "base prompt",
+        systemPromptOptions: {},
+      }, activeContext);
+      handlers.get("agent_start")?.({}, activeContext);
+      return result;
+    },
     setIdle: (value: boolean) => { idle = value; },
     messageEnd: (stopReason: "stop" | "error" | "aborted", errorMessage?: string) =>
       handlers.get("message_end")?.({ message: { role: "assistant", stopReason, errorMessage } }, activeContext),
@@ -904,6 +926,211 @@ describe("loop lifecycle", () => {
     harness.setIdle(true);
     await harness.settle();
     expect(harness.prompts).toHaveLength(2);
+  });
+
+  test("async review keeps its session through yield, completion delivery, and parent result processing", async () => {
+    const harness = createHarness({ subagents: true });
+    await harness.command.handler("2 finish the ticket", harness.context);
+    const origin = harness.current;
+    harness.agentStart();
+    harness.setSubagentWork(["review:running"]);
+    harness.agentEnd("stop"); // “Review is running.” This is a yield, not an iteration boundary.
+    await harness.settle();
+    expect(harness.current).toBe(origin);
+    expect(harness.parents).toHaveLength(1);
+    expect(harness.state()).toMatchObject({ currentIteration: 1, remainingBudget: 1, phase: "running" });
+
+    // A terminal child is still owned while its result is discovered/batched.
+    harness.setSubagentWork(["review:delivery"]);
+    harness.emit("subagent:async-complete", { id: "review", sessionId: origin.file });
+    await harness.settle();
+    expect(harness.current).toBe(origin);
+    // Pi may accept a wake during settlement while reporting idle and no queued messages.
+    harness.setSubagentWork(["review:queued-wake"]);
+    await harness.settle();
+    expect(harness.current).toBe(origin);
+
+    harness.agentStart(); // The parent receives the completion in the originating session.
+    harness.setSubagentWork([]); // Provider releases the handoff at message_start, not send acceptance.
+    expect(harness.current).toBe(origin);
+    harness.setIdle(true); // Even an early idle observation cannot substitute for parent settlement.
+    harness.emit("pi-subagents:session-liveness:changed:v1", { version: 1, sessionId: origin.id });
+    expect(harness.parents).toHaveLength(1);
+    harness.agentEnd("stop"); // Parent has reviewed the result, applied fixes, and committed.
+    await harness.settle();
+    expect(harness.current).not.toBe(origin);
+    expect(harness.parents).toHaveLength(2);
+    expect(harness.state()?.currentIteration).toBe(2);
+  });
+
+  test("completion before yield cannot consume an iteration before its queued wake", async () => {
+    const harness = createHarness({ subagents: true });
+    await harness.command.handler("2 work", harness.context);
+    const origin = harness.current;
+    harness.agentStart();
+    harness.setSubagentWork(["review:running"]);
+    harness.setSubagentWork(["review:queued-wake"]);
+    await harness.settle();
+    expect(harness.current).toBe(origin);
+    harness.agentStart();
+    harness.setSubagentWork([]);
+    await harness.settle();
+    expect(harness.parents).toHaveLength(2);
+  });
+
+  test("multiple children, supervisor waits, failed delivery, and cancellation retain ownership", async () => {
+    const harness = createHarness({ subagents: true });
+    await harness.command.handler("2 work", harness.context);
+    const origin = harness.current;
+    harness.setSubagentWork(["review:running", "audit:supervisor"]);
+    await harness.settle();
+    harness.setSubagentWork(["review:send-failed", "audit:supervisor"]);
+    await harness.settle();
+    expect(harness.current).toBe(origin);
+    harness.agentStart();
+    harness.setSubagentWork(["audit:supervisor"]);
+    await harness.settle();
+    expect(harness.current).toBe(origin);
+    harness.setSubagentWork(["audit:cancel-requested"]);
+    expect(harness.current).toBe(origin);
+    harness.setSubagentWork(["audit:stopped-wake"]);
+    harness.agentStart();
+    harness.setSubagentWork([]);
+    await harness.settle();
+    expect(harness.parents).toHaveLength(2);
+  });
+
+  test("quiet completion resumes an idle boundary but cannot bypass wait/until", async () => {
+    const harness = createHarness({ subagents: true });
+    await harness.command.handler("2 work", harness.context);
+    harness.setSubagentWork(["quiet:running"]);
+    harness.emit("pi-wait:busy", true);
+    harness.emit("pi-until:busy", true);
+    await harness.settle();
+    harness.emit("pi-wait:busy", false);
+    expect(harness.parents).toHaveLength(1);
+    harness.setSubagentWork([]);
+    expect(harness.parents).toHaveLength(1);
+    harness.emit("pi-until:busy", false);
+    await Promise.resolve();
+    expect(harness.parents).toHaveLength(2);
+  });
+
+  test("wait cancellation cannot bypass a live child or queued parent messages", async () => {
+    const harness = createHarness({ subagents: true });
+    await harness.command.handler("2 work", harness.context);
+    harness.setSubagentWork(["review"]);
+    harness.emit("pi-wait:busy", true);
+    await harness.settle();
+    harness.emit("pi-wait:busy", false);
+    expect(harness.parents).toHaveLength(1);
+    harness.setPendingMessages(true);
+    harness.setSubagentWork([]);
+    expect(harness.parents).toHaveLength(1);
+    harness.setPendingMessages(false);
+    harness.agentStart();
+    await harness.settle();
+    expect(harness.parents).toHaveLength(2);
+  });
+
+  test("rechecks liveness at replacement after work starts during a loop delay", async () => {
+    const harness = createHarness({ subagents: true });
+    await harness.command.handler("2 --delay 1s work", harness.context);
+    await harness.settle();
+    harness.setSubagentWork(["review"]);
+    await harness.command.handler(`__continue ${harness.state()!.runId} 1`, commandContext(harness));
+    expect(harness.parents).toHaveLength(1);
+    await harness.command.handler("delay off", commandContext(harness));
+    expect(harness.parents).toHaveLength(1);
+    harness.agentStart();
+    harness.setSubagentWork([]);
+    await harness.settle();
+    expect(harness.parents).toHaveLength(2);
+  });
+
+  test("ignores stale session changes and clears waiting state on shutdown", async () => {
+    const harness = createHarness({ subagents: true });
+    await harness.command.handler("2 work", harness.context);
+    const origin = harness.current;
+    harness.setSubagentWork(["review"]);
+    await harness.settle();
+    harness.setSubagentWork([], "foreign-session");
+    expect(harness.parents).toHaveLength(1);
+    harness.sessionShutdown("quit");
+    harness.setSubagentWork([], origin.id);
+    expect(harness.parents).toHaveLength(1);
+    await harness.command.handler("2 new work", commandContext(harness));
+    harness.setSubagentWork(["late-old-work"], origin.id);
+    await harness.settle();
+    expect(harness.state()?.currentIteration).toBe(2);
+  });
+
+  test("reload recovery waits for restored work instead of prompting a duplicate reviewer", async () => {
+    const harness = createHarness({ subagents: true });
+    await harness.command.handler("2 finish the ticket", harness.context);
+    const origin = harness.current;
+    harness.setSubagentWork(["review"]);
+    await harness.settle();
+    harness.sessionShutdown("reload");
+    await harness.sessionStart("reload");
+    expect(harness.prompts).toEqual(["finish the ticket"]);
+    expect(harness.current).toBe(origin);
+    harness.agentStart();
+    harness.setSubagentWork([]);
+    await harness.settle();
+    expect(harness.parents).toHaveLength(2);
+  });
+
+  test("quiet completion during recovery continues the interrupted iteration in its session", async () => {
+    const harness = createHarness({ subagents: true });
+    await harness.command.handler("2 finish the ticket", harness.context);
+    const origin = harness.current;
+    harness.setSubagentWork(["review"]);
+    await harness.sessionStart("reload");
+    expect(harness.prompts).toHaveLength(1);
+    harness.setSubagentWork([]);
+    await Promise.resolve();
+    expect(harness.current).toBe(origin);
+    expect(harness.parents).toHaveLength(1);
+    expect(harness.prompts).toHaveLength(2);
+    expect(harness.prompts[1]).toContain("Current loop instructions:");
+  });
+
+  test("quiet completion cannot bypass a failed parent turn's retry", async () => {
+    const harness = createHarness({ subagents: true });
+    await harness.command.handler("2 finish the ticket", harness.context);
+    harness.setSubagentWork(["review"]);
+    await harness.settle();
+    harness.agentStart();
+    harness.agentEnd("error", "provider unavailable");
+    await harness.settle();
+    expect(harness.state()?.phase).toBe("retrying");
+    harness.setSubagentWork([]);
+    expect(harness.parents).toHaveLength(1);
+    expect(harness.state()?.phase).toBe("retrying");
+    harness.sessionShutdown("quit");
+  });
+
+  test("pauses rather than guessing when a required liveness provider disappears", async () => {
+    const harness = createHarness({ subagents: true });
+    await harness.command.handler("2 work", harness.context);
+    harness.setSubagentWork(["review"]);
+    await harness.settle();
+    harness.setSubagentProvider(false);
+    harness.setSubagentWork([]);
+    expect(harness.parents).toHaveLength(1);
+    expect(harness.state()?.status).toBe("paused");
+    expect(harness.state()?.pauseReason).toContain("session-liveness API unavailable");
+  });
+
+  test("older subagents pause with an upgrade diagnostic instead of silently rolling over", async () => {
+    const harness = createHarness();
+    await harness.command.handler("2 work", harness.context);
+    harness.emit("subagent:async-started", { id: "review", sessionId: harness.current.file });
+    await harness.settle();
+    expect(harness.parents).toHaveLength(1);
+    expect(harness.state()?.status).toBe("paused");
+    expect(harness.notifications.at(-1)).toContain("update pi-subagents");
   });
 
   test("ignores duplicate and stale settlement callbacks", async () => {
