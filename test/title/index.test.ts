@@ -186,6 +186,7 @@ describe("title command", () => {
       },
       getSessionName: () => sessionTitles.at(-1),
       setSessionName: (title: string) => sessionTitles.push(title),
+      appendEntry: () => {},
     } as unknown as ExtensionAPI;
     const ctx = {
       hasUI: true,
@@ -234,6 +235,7 @@ test("a deferred terminal update ignores a context invalidated by session replac
       if (stale) throw new Error("This extension ctx is stale after session replacement or reload.");
       return true;
     },
+    sessionManager: { getEntries: () => [] },
     ui: { setTitle: (title: string) => terminalTitles.push(title) },
   } as unknown as ExtensionCommandContext;
 
@@ -337,6 +339,7 @@ describe("automatic title generation", () => {
           sessionTitle = title;
           markTitleSet();
         },
+        appendEntry: () => {},
       } as unknown as ExtensionAPI;
       const ctx = {
         hasUI: true,
@@ -422,6 +425,7 @@ describe("automatic title generation", () => {
         setSessionName: (title: string) => {
           sessionTitle = title;
         },
+        appendEntry: () => {},
       } as unknown as ExtensionAPI;
       const ctx = {
         hasUI: true,

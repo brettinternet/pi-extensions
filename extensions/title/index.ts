@@ -265,6 +265,24 @@ export function titleFromCompletion(
   return title;
 }
 
+const TITLE_ENTRY = "pi-title";
+type TitleEntry = { title: string };
+
+/** Whether the current name was the latest write recorded by this extension. */
+function isRecordedAutomaticName(
+  entries: ReturnType<ExtensionContext["sessionManager"]["getEntries"]>,
+  name: string,
+): boolean {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index]!;
+    if (entry.type === "session_info") return false;
+    if (entry.type === "custom" && entry.customType === TITLE_ENTRY) {
+      return (entry.data as TitleEntry | undefined)?.title === name;
+    }
+  }
+  return false;
+}
+
 function initialSource(
   entries: Parameters<typeof firstCompletedExchange>[0],
 ): TitleRequestSource | undefined {
@@ -369,6 +387,8 @@ export default function titleExtension(pi: ExtensionAPI) {
         if (mode === "automatic" && !canWriteAutomatic()) return undefined;
         lastAutoName = title;
         pi.setSessionName(title);
+        // Lets a resumed session recognize this name as automatic and keep refreshing it.
+        if (!pinned) pi.appendEntry<TitleEntry>(TITLE_ENTRY, { title });
         applyTerminalTitle(ctx, title);
         deferTerminalTitle(ctx);
         if (candidate.source === "session" && ctx.hasUI) {
@@ -473,11 +493,13 @@ export default function titleExtension(pi: ExtensionAPI) {
   pi.on("session_start", (_event, ctx) => {
     completionContext = ctx;
     resetGeneration();
-    lastAutoName = undefined;
-    lastEvaluatedTurns = 0;
-    // An existing name has no source we can verify, so it is treated as the user's and
-    // this session is left alone. `/title regenerate` still replaces it on request.
-    pinned = pi.getSessionName() !== undefined;
+    // A resumed automatic title keeps refreshing, rebased on the active branch. Any other
+    // existing name is treated as the user's. `/title regenerate` still replaces it on request.
+    const name = pi.getSessionName();
+    const automatic = name !== undefined && isRecordedAutomaticName(ctx.sessionManager.getEntries(), name);
+    lastAutoName = automatic ? name : undefined;
+    lastEvaluatedTurns = automatic ? countCompletedExchanges(ctx.sessionManager.getBranch()) : 0;
+    pinned = name !== undefined && !automatic;
     deferTerminalTitle(ctx);
 
   });

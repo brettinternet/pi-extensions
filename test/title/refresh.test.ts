@@ -67,7 +67,11 @@ interface HarnessOptions {
   /** A name the session already had when it started. */
   name?: string;
   responses?: Array<() => Promise<Response>>;
+  /** Session entries persisted before this run, such as a previous title record. */
+  entries?: SessionEntry[];
 }
+
+type SessionEntry = { type: string; name?: string; customType?: string; data?: unknown };
 
 function harness(options: HarnessOptions) {
   process.env.PI_CODING_AGENT_DIR = options.dir;
@@ -78,6 +82,7 @@ function harness(options: HarnessOptions) {
   const notifications: Array<{ message: string; level: string }> = [];
   const responses = [...(options.responses ?? [])];
   const branch: BranchEntry[] = [];
+  const entries: SessionEntry[] = [...(options.entries ?? [])];
   let name = options.name;
   let command: { handler: (args: string, ctx: unknown) => Promise<void> } | undefined;
 
@@ -92,8 +97,12 @@ function harness(options: HarnessOptions) {
     setSessionName: (title: string) => {
       name = title;
       titles.push(title);
+      entries.push({ type: "session_info", name: title });
       // The host reports every name change, including this extension's own write.
       handlers.get("session_info_changed")!({ type: "session_info_changed", name: title }, ctx);
+    },
+    appendEntry: (customType: string, data: unknown) => {
+      entries.push({ type: "custom", customType, data });
     },
   } as unknown as ExtensionAPI;
 
@@ -113,7 +122,7 @@ function harness(options: HarnessOptions) {
         return { result: next };
       },
     },
-    sessionManager: { getBranch: () => [...branch] },
+    sessionManager: { getBranch: () => [...branch], getEntries: () => [...entries] },
     ui: {
       notify: (message: string, level = "info") => {
         notifications.push({ message, level });
@@ -137,6 +146,7 @@ function harness(options: HarnessOptions) {
     titles,
     notifications,
     branch,
+    entries,
     start: () => handlers.get("session_start")!({ type: "session_start", reason: "startup" }, ctx),
     /** A user message plus the request event that follows it. */
     prompt: async (text: string) => {
@@ -156,6 +166,7 @@ function harness(options: HarnessOptions) {
     },
     renameExternally: (title: string) => {
       name = title;
+      entries.push({ type: "session_info", name: title });
       handlers.get("session_info_changed")!({ type: "session_info_changed", name: title }, ctx);
     },
     /** Keep only the first `length` branch entries, then report the navigation. */
@@ -351,6 +362,51 @@ describe("refreshing titles", () => {
 
     expect(h.requests).toHaveLength(0);
     expect(h.titles).toEqual([]);
+  });
+
+  test("a resumed automatic title keeps refreshing from the resumed branch", async () => {
+    const first = harness({ dir: configDir({ refreshTurns: 1 }), responses: [ok("Initial title")] });
+    first.start();
+    await first.prompt("add retries to the upload API");
+    await first.waitForRequests(1);
+    await first.reply("added retries");
+
+    const resumed = harness({
+      dir: configDir({ refreshTurns: 1 }),
+      name: "Initial title",
+      entries: first.entries,
+      responses: [ok("Refreshed title")],
+    });
+    resumed.branch.push(...first.branch);
+    resumed.start();
+    await resumed.prompt("now add jitter");
+    await resumed.reply("added jitter");
+    await resumed.waitForRequests(1);
+
+    expect(resumed.titles).toEqual(["Refreshed title"]);
+  });
+
+  test("a resumed title renamed after its automatic write is left alone", async () => {
+    const h = harness({
+      dir: configDir({ refreshTurns: 1 }),
+      name: "Mine",
+      entries: [
+        { type: "session_info", name: "Mine" },
+        { type: "custom", customType: "pi-title", data: { title: "Mine" } },
+        { type: "session_info", name: "Other" },
+        { type: "session_info", name: "Mine" },
+      ],
+      responses: [ok("New title")],
+    });
+    h.branch.push(
+      { type: "message", message: { role: "user", content: "first" } },
+      { type: "message", message: { role: "assistant", content: "done" } },
+    );
+    h.start();
+    await h.prompt("next");
+    await h.reply("done again");
+
+    expect(h.requests).toHaveLength(0);
   });
 
   test("does not replace a name that changed while the refresh was in flight", async () => {
