@@ -10,7 +10,7 @@ pi install npm:pi-title
 /title                          show title and config
 /title My custom title          set a title
 /title set status               set a title that matches a subcommand
-/title regenerate               generate a new title
+/title regenerate               retitle from recent messages
 /title on                       enable automatic titles
 /title off                      disable automatic titles
 /title model openai/gpt-5-nano  use a specific model

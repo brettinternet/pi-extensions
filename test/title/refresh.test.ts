@@ -703,6 +703,29 @@ describe("refreshing titles", () => {
     expect(h.requests).toHaveLength(1);
   });
 
+  test("regeneration titles a single exchange from the opening request and reply", async () => {
+    const h = harness({ dir: configDir({ enabled: false }), responses: [ok("Explicit title")] });
+    h.start();
+    await h.prompt("first request");
+    await h.reply("first answer");
+    await h.regenerate();
+    expect(h.requests[0]).toContain("--- First user request ---");
+    expect(h.requests[0]).toContain("first answer");
+  });
+
+  test("regeneration titles a longer session from recent messages", async () => {
+    const h = harness({ dir: configDir({ enabled: false }), responses: [ok("Explicit title")] });
+    h.start();
+    await h.prompt("first request");
+    await h.reply("first answer");
+    h.turn("latest request");
+    await h.reply("latest answer");
+    await h.regenerate();
+    expect(h.requests[0]).toContain("--- Recent session transcript ---");
+    expect(h.requests[0]).toContain("user: latest request");
+    expect(h.requests[0]).toContain("assistant: latest answer");
+  });
+
   test("regeneration does not unpin a session that arrived named", async () => {
     const h = harness({ dir: configDir({ refreshTurns: 1 }), name: "My title", responses: [ok("Explicit title")] });
     h.start();

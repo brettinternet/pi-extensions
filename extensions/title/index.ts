@@ -283,6 +283,14 @@ function isRecordedAutomaticName(
   return false;
 }
 
+/** The opening exchange gives a one-exchange session more context than the bounded transcript. */
+function latestSource(
+  entries: Parameters<typeof firstCompletedExchange>[0],
+): TitleRequestSource | undefined {
+  const transcript = countCompletedExchanges(entries) > 1 ? recentTranscript(entries) : undefined;
+  return transcript ? { kind: "refresh", transcript } : initialSource(entries);
+}
+
 function initialSource(
   entries: Parameters<typeof firstCompletedExchange>[0],
 ): TitleRequestSource | undefined {
@@ -608,7 +616,7 @@ export default function titleExtension(pi: ExtensionAPI) {
             generationController?.abort();
             await backgroundGeneration.catch(() => undefined);
           }
-          const title = await generate(ctx, config, initialSource(ctx.sessionManager.getBranch()), "explicit");
+          const title = await generate(ctx, config, latestSource(ctx.sessionManager.getBranch()), "explicit");
           ctx.ui.notify(title ? `Session title: ${title}` : "No completed exchange to title", "info");
           return;
         }
