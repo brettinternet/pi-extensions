@@ -178,6 +178,7 @@ function harness(options: HarnessOptions) {
     /** Start an explicit regeneration; returns once the handler settles. */
     regenerate: () => command!.handler("regenerate", ctx),
     rename: (title: string) => command!.handler(`set ${title}`, ctx),
+    command: (args: string) => command!.handler(args, ctx),
     settle: () => handlers.get("agent_settled")!({ type: "agent_settled" }, ctx),
     shutdown: () => handlers.get("session_shutdown")!({ type: "session_shutdown" }, ctx),
     flush,
@@ -724,6 +725,27 @@ describe("refreshing titles", () => {
     expect(h.requests[0]).toContain("--- Recent session transcript ---");
     expect(h.requests[0]).toContain("user: latest request");
     expect(h.requests[0]).toContain("assistant: latest answer");
+  });
+
+  test("/title refresh shows, saves, and validates the interval", async () => {
+    const dir = configDir();
+    const h = harness({ dir });
+    await h.command("refresh");
+    await h.command("refresh 4");
+    expect((await titleConfig.loadConfig()).refreshTurns).toBe(4);
+    await h.command("refresh off");
+    expect((await titleConfig.loadConfig()).refreshTurns).toBe(0);
+    await h.command("refresh -1");
+    await h.command("refresh 2.5");
+    expect((await titleConfig.loadConfig()).refreshTurns).toBe(0);
+    expect(h.notifications).toEqual([
+      { message: "Title refresh: off", level: "info" },
+      { message: "Title refresh: every 4 answered turns", level: "info" },
+      { message: "Title refresh: off", level: "info" },
+      { message: "usage: /title refresh <turns|off>", level: "error" },
+      { message: "usage: /title refresh <turns|off>", level: "error" },
+    ]);
+    expect(h.titles).toEqual([]);
   });
 
   test("regeneration does not unpin a session that arrived named", async () => {
