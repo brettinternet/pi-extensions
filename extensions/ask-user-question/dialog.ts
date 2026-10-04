@@ -34,8 +34,10 @@ export class Questionnaire implements Focusable {
       else this.saveCustom(text);
       this.editing = undefined;
       this.followCursor = true;
-      if (mode === "custom" && draft.custom && questions.length === 1) this.finish(false);
-      else this.tui.requestRender();
+      if (mode === "custom" && draft.custom) {
+        if (questions.length === 1) this.finish(false);
+        else this.moveTab(1);
+      } else this.tui.requestRender();
     };
     signal?.addEventListener("abort", this.abort, { once: true });
     if (signal?.aborted) queueMicrotask(this.abort);
@@ -108,8 +110,8 @@ export class Questionnaire implements Focusable {
       this.tui.requestRender();
       return;
     }
-    if (matchesKey(data, Key.tab) || matchesKey(data, Key.right)) { this.moveTab(1); return; }
-    if (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left)) { this.moveTab(-1); return; }
+    if (matchesKey(data, Key.tab) || matchesKey(data, Key.right) || matchesKey(data, Key.ctrl("l")) || matchesKey(data, Key.ctrl("f"))) { this.moveTab(1); return; }
+    if (matchesKey(data, Key.shift("tab")) || matchesKey(data, Key.left) || matchesKey(data, Key.ctrl("h")) || matchesKey(data, Key.ctrl("b"))) { this.moveTab(-1); return; }
     // Fullscreen reserves unmodified PageUp/PageDown for the transcript.
     const pageDown = matchesKey(data, Key.alt("pageDown")) || matchesKey(data, Key.pageDown);
     const pageUp = matchesKey(data, Key.alt("pageUp")) || matchesKey(data, Key.pageUp);
@@ -134,11 +136,14 @@ export class Questionnaire implements Focusable {
       } else if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
         if (isKeyRepeat(data)) return;
         const draft = this.drafts[this.tab]!;
-        const submitSingle = this.questions.length === 1 && matchesKey(data, Key.enter);
+        const confirm = matchesKey(data, Key.enter);
+        const submitSingle = this.questions.length === 1 && confirm;
         if (this.cursor < q.options.length) {
-          if (submitSingle && q.multiSelect) draft.selected.add(this.cursor);
-          else select(q, draft, this.cursor);
+          if (confirm && q.multiSelect) {
+            if (submitSingle || !answered(draft)) draft.selected.add(this.cursor);
+          } else select(q, draft, this.cursor);
           if (submitSingle) { this.finish(false); return; }
+          if (confirm) { this.moveTab(1); return; }
           this.offset = 0;
           this.followCursor = true;
         } else if (matchesKey(data, Key.enter) && !isKeyRepeat(data)) {
@@ -237,10 +242,10 @@ export class Questionnaire implements Focusable {
     }
     this.maxOffset = Math.max(0, lines.length - height);
     this.offset = Math.max(0, Math.min(this.offset, this.maxOffset));
-    const help = reviewing ? "Enter submit · ↑↓/j/k scroll · Tab/Shift+Tab edit answers · Ctrl+] hide · Esc cancel"
-      : this.editing ? `Enter ${this.editing === "custom" && this.questions.length === 1 ? "submit" : "save"} · Shift+Enter newline · Ctrl+] hide · Esc back`
+    const help = reviewing ? "Enter submit · ↑↓/j/k scroll · Tab/⇧Tab/Ctrl+h/l/b/f edit · Ctrl+] hide · Esc cancel"
+      : this.editing ? `Enter ${this.editing === "custom" ? (this.questions.length === 1 ? "submit" : "next") : "save"} · Shift+Enter newline · Ctrl+] hide · Esc back`
       : this.questions.length === 1 ? "↑↓/j/k move · Space select · Enter submit · n note · Ctrl+] hide · Esc cancel"
-      : "↑↓/j/k move · Space/Enter select · Tab questions/review · n note · Ctrl+] hide · Esc cancel";
+      : "↑↓/j/k move · Space select · Enter next · Tab/Ctrl+h/l/b/f tabs · n note · Ctrl+] hide · Esc cancel";
     const scroll = lines.length > height ? `${this.offset + 1}–${Math.min(this.offset + height, lines.length)}/${lines.length} · Alt+PgUp/PgDn scroll · ` : "";
     return [truncateToWidth(heading, width), ...lines.slice(this.offset, this.offset + height),
       theme.fg("dim", truncateToWidth(`${scroll}${help}`, width)),

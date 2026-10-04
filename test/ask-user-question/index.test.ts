@@ -98,8 +98,8 @@ describe("terminal questionnaire", () => {
     expect(results).toHaveLength(0);
     expect(ui.render(80).join("\n")).toContain("Unanswered: Store, Second");
     ui.handleInput(tab); ui.handleInput(enter);
-    ui.handleInput(tab); ui.handleInput("n"); ui.handleInput("Second note"); ui.handleInput(enter);
-    ui.handleInput(enter); ui.handleInput(tab); ui.handleInput(enter);
+    ui.handleInput("n"); ui.handleInput("Second note"); ui.handleInput(enter);
+    ui.handleInput(enter); ui.handleInput(enter);
     expect(results[0]?.answers.map((a) => a.note)).toEqual(["First note", "Second note"]);
   });
   test("preview and empty options keep the same height and column width", () => {
@@ -276,23 +276,97 @@ describe("terminal questionnaire", () => {
       expect(results[0]?.answers[0]?.custom).toBe("replacement");
     }
   });
+  test("Enter advances through questions to Review without submitting or accepting repeats", () => {
+    const { ui, results } = dialog([question, { ...question, question: "Second question?", header: "Second" }]);
+    ui.handleInput(" ");
+    expect(ui.render(120).join("\n")).toContain("Which store?");
+    ui.handleInput(enter);
+    expect(ui.render(120).join("\n")).toContain("Second question?");
+    ui.handleInput("\x1b[13;1:2u");
+    expect(ui.render(120).join("\n")).toContain("Second question?");
+    ui.handleInput(enter);
+    expect(ui.render(120).join("\n")).toContain("Review your answers");
+    ui.handleInput("\x1b[13;1:2u");
+    expect(results).toHaveLength(0);
+    ui.handleInput(enter);
+    expect(results[0]?.answers.map((a) => a.selected)).toEqual([["SQLite"], ["SQLite"]]);
+  });
+  test("multi-question Enter confirms checked choices without toggling or adding focused options", () => {
+    for (const focusChecked of [false, true]) {
+      const { ui, results } = dialog([{ ...question, multiSelect: true }, question]);
+      ui.handleInput(" ");
+      if (!focusChecked) ui.handleInput(down);
+      ui.handleInput(enter); ui.handleInput(enter);
+      expect(results).toHaveLength(0);
+      ui.handleInput(enter);
+      expect(results[0]?.answers[0]?.selected).toEqual(["SQLite"]);
+    }
+    const { ui, results } = dialog([{ ...question, multiSelect: true }, question]);
+    ui.handleInput(down); ui.handleInput(enter); ui.handleInput(enter); ui.handleInput(enter);
+    expect(results[0]?.answers[0]?.selected).toEqual(["Postgres"]);
+  });
+  test("Ctrl+H/L/B/F navigate questions and Review in legacy and Kitty encodings", () => {
+    for (const [previous, next] of [["\x08", "\x0c"], ["\x02", "\x06"],
+      ["\x1b[104;5u", "\x1b[108;5u"], ["\x1b[98;5u", "\x1b[102;5u"]]) {
+      const { ui, results } = dialog([question, { ...question, question: "Second question?" }]);
+      ui.handleInput(next!);
+      expect(ui.render(120).join("\n")).toContain("Second question?");
+      ui.handleInput(next!);
+      expect(ui.render(120).join("\n")).toContain("Review your answers");
+      ui.handleInput(previous!);
+      expect(ui.render(120).join("\n")).toContain("Second question?");
+      ui.handleInput(previous!);
+      expect(ui.render(120).join("\n")).toContain("Which store?");
+      expect(results).toHaveLength(0);
+      ui.dispose();
+      const single = dialog();
+      single.ui.handleInput(previous!); single.ui.handleInput(next!);
+      expect(single.ui.render(120).join("\n")).toContain("Which store?");
+      single.ui.dispose();
+    }
+  });
+  test("question shortcuts stay inside custom and note editors", () => {
+    for (const note of [false, true]) {
+      const { ui, results } = dialog([question, { ...question, question: "Second question?" }]);
+      if (note) ui.handleInput("n");
+      else { ui.handleInput("k"); ui.handleInput(enter); }
+      ui.handleInput("abc");
+      for (const key of ["\x02", "\x06", "\x08", "\x0c", "\x1b[104;5u", "\x1b[108;5u", "\x1b[98;5u", "\x1b[102;5u"]) {
+        ui.handleInput(key);
+        expect(ui.render(120).join("\n")).toContain("Which store?");
+        expect(ui.render(120).join("\n")).not.toContain("Second question?");
+      }
+      expect(results).toHaveLength(0);
+      ui.dispose();
+    }
+  });
+  test("blank custom confirmation stays put; nonblank confirmation advances to Review", () => {
+    const { ui, results } = dialog([question, question]);
+    ui.handleInput(enter); ui.handleInput("k"); ui.handleInput(enter); ui.handleInput(enter);
+    expect(ui.render(120).join("\n")).not.toContain("Review your answers");
+    ui.handleInput(enter); ui.handleInput("Redis"); ui.handleInput(enter);
+    expect(ui.render(120).join("\n")).toContain("Review your answers");
+    expect(results).toHaveLength(0);
+    ui.handleInput(enter);
+    expect(results[0]?.answers[1]?.custom).toBe("Redis");
+  });
   test("cannot submit incomplete questions", () => {
     const { ui, results } = dialog([question, { ...question, header: "Second" }]);
-    ui.handleInput(enter); ui.handleInput(tab); ui.handleInput(tab); ui.handleInput(enter);
+    ui.handleInput(enter); ui.handleInput(tab); ui.handleInput(enter);
     expect(results).toHaveLength(0);
     expect(ui.render(80).join("\n")).toContain("Unanswered: Second");
     ui.handleInput("\x1b[Z"); ui.handleInput(down); ui.handleInput(enter);
     expect(results).toHaveLength(0);
-    ui.handleInput(tab); ui.handleInput(enter);
+    ui.handleInput(enter);
     expect(results[0]?.answers.map((answer) => answer.selected)).toEqual([["SQLite"], ["Postgres"]]);
   });
   test("only the final Review tab submits and shows updated choices, custom answers and notes", () => {
     const { ui, results } = dialog([question, { ...question, header: "Second", multiSelect: true }]);
     expect(ui.render(100).join("\n")).not.toContain("Submit answers");
     ui.handleInput(enter);
-    ui.handleInput(tab); ui.handleInput(enter); ui.handleInput(down); ui.handleInput(enter);
+    ui.handleInput(" "); ui.handleInput(down); ui.handleInput(" ");
     ui.handleInput(down); ui.handleInput(enter); ui.handleInput("Redis"); ui.handleInput(enter);
-    ui.handleInput("n"); ui.handleInput("Keep backups"); ui.handleInput(enter);
+    ui.handleInput("\x1b[Z"); ui.handleInput("n"); ui.handleInput("Keep backups"); ui.handleInput(enter);
     expect(ui.render(100).join("\n")).not.toContain("Submit answers");
     ui.handleInput(tab);
     const review = ui.render(100).join("\n");
@@ -304,7 +378,7 @@ describe("terminal questionnaire", () => {
     expect(ui.render(100).join("\n")).toBe(review);
     expect(results).toHaveLength(0);
     ui.handleInput(tab); ui.handleInput(down); ui.handleInput(enter);
-    ui.handleInput("\x1b[D");
+    ui.handleInput(tab);
     expect(ui.render(100).join("\n")).toContain("Store: Postgres");
     ui.handleInput(enter); ui.handleInput(enter);
     expect(results).toHaveLength(1);
@@ -312,10 +386,9 @@ describe("terminal questionnaire", () => {
   });
   test("review scrolls long summaries, stays bounded on resize and cancels without submitting", () => {
     const { ui, results, tui } = dialog([question, { ...question, header: "Second" }]);
-    ui.handleInput(enter); ui.handleInput(tab);
+    ui.handleInput(enter);
     ui.handleInput("k"); ui.handleInput(enter);
     ui.handleInput(`\x1b[200~${"世界 answer\n".repeat(30)}\x1b[201~`); ui.handleInput(enter);
-    ui.handleInput(tab);
     expect(ui.render(80).join("\n")).toContain("Review your answers");
     ui.handleInput("j");
     expect(ui.render(80).join("\n")).not.toContain("Review your answers");
@@ -350,13 +423,13 @@ describe("terminal questionnaire", () => {
   });
   test("custom text can be cleared without losing multi-select choices", () => {
     const { ui, results } = dialog([{ ...question, multiSelect: true }, { ...question, header: "Second" }]);
-    ui.handleInput(enter); ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
+    ui.handleInput(" "); ui.handleInput(down); ui.handleInput(down); ui.handleInput(enter);
     ui.handleInput("Redis"); ui.handleInput(enter);
     expect(results).toHaveLength(0);
-    ui.handleInput(enter);
+    ui.handleInput("\x1b[Z"); ui.handleInput("k"); ui.handleInput(enter);
     ui.handleInput("\x15"); ui.handleInput(enter);
     expect(ui.render(80).join("\n")).toContain("[✔] SQLite");
-    ui.handleInput(tab); ui.handleInput(enter); ui.handleInput(tab); ui.handleInput(enter);
+    ui.handleInput(tab); ui.handleInput(enter); ui.handleInput(enter);
     expect(results[0]?.answers[0]).toMatchObject({ selected: ["SQLite"], custom: "" });
   });
   test("custom text edits inline below its row while choices remain visible", () => {

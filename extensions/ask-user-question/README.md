@@ -32,10 +32,11 @@ The questionnaire replaces the prompt in the bottom editor dock, not an overlay.
 | Control | Action |
 | --- | --- |
 | Tab / Shift+Tab or ← / → | Change question tabs and the final Review tab when there are multiple questions; no effect with one |
+| Ctrl+H / Ctrl+B; Ctrl+L / Ctrl+F | Previous; next question or Review tab, outside editors only; no effect with one question |
 | ↑ / ↓, Ctrl+P / Ctrl+N, or k / j | Move focus |
 | Space on an option | Select without submitting |
-| Enter on an option | With one question, select and submit; with multiple, select in place |
-| Enter on `Type something.` | Open a full-width editor beneath the row; Enter submits nonblank text for one question or saves it for multiple; Shift+Enter adds a newline |
+| Enter on an option | With one question, select and submit; with multiple, confirm and advance to the next question or Review |
+| Enter on `Type something.` | Open a full-width editor beneath the row; Enter submits nonblank text for one question or saves it and advances for multiple; Shift+Enter adds a newline |
 | `n` | Open this question’s optional note editor; Enter saves the note and returns |
 | Escape | In the custom-answer editor, keep the draft and return to choices without submitting; in the note editor, discard edits and return; otherwise cancel all answers, even while collapsed |
 | Ctrl+C | Clear the focused editor via `app.clear` |
@@ -45,7 +46,7 @@ The questionnaire replaces the prompt in the bottom editor dock, not an overlay.
 
 Choice labels remain visible while typing; descriptions are hidden to make room.
 
-For a single multi-select question, Space toggles choices; Enter includes the focused option without removing checked choices, then submits. With multiple questions, Tab past the last question to **Review**: it summarizes all selected choices, custom answers, and notes before submission. **Submit answers** appears only on this final tab; Enter submits once every question is answered. Use Tab / Shift+Tab or ← / → to revisit and edit answers. Long summaries scroll with ↑ / ↓, j / k, Alt+PgUp / Alt+PgDn, or the mouse wheel. Inside an editor, `n` types the letter rather than opening a note.
+For a single multi-select question, Space toggles choices; Enter includes the focused option without removing checked choices, then submits. With multiple questions, Space selects or toggles in place. Enter selects a single choice, or confirms existing multi-select answers without toggling or adding the focused choice (if unanswered, it selects the focused option). Confirming nonblank custom text also advances; saving a note or blank custom text stays on the question. Confirmation on the last question advances to **Review**, never auto-submits: it summarizes all selected choices, custom answers, and notes before submission. **Submit answers** appears only on this final tab; Enter submits once every question is answered. Use Tab / Shift+Tab, ← / →, or Ctrl+H/B (previous) and Ctrl+L/F (next) to revisit and edit answers. Navigation shortcuts retain their normal text-editing behavior inside editors. Some legacy terminals encode Backspace as Ctrl+H, so that key also navigates backward outside editors. Long summaries scroll with ↑ / ↓, j / k, Alt+PgUp / Alt+PgDn, or the mouse wheel. Inside an editor, `n` types the letter rather than opening a note.
 
 Previews are optional framed Markdown for single-select questions. They appear beside choices at widths of at least 100 columns, or below them at narrower widths. A question reserves space for its largest visible preview even when the focused option has none, leaving that space blank without a placeholder or duplicate note hint. Questions without previews reserve no preview space. In fullscreen, the mouse wheel scrolls the questionnaire or conversation according to pointer position.
 
