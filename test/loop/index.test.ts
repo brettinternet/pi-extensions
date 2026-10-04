@@ -322,8 +322,19 @@ describe("loop parser and state", () => {
     expect(() => parseLoopCommand("delay 25h")).toThrow("24h");
     expect(() => parseLoopCommand("3 --delay nope fix")).toThrow("duration");
     expect(() => parseLoopCommand("3 --delay 1s")).toThrow("prompt");
-    expect(() => parseLoopCommand("for 4h watch the queue")).toThrow("timed loops require");
-    expect(() => parseLoopCommand("for 4h --delay off watch the queue")).toThrow("non-zero");
+    for (const args of ["for 4h watch the queue", "for 4h --delay off watch the queue", "for 4h --delay=off watch the queue"]) {
+      expect(parseLoopCommand(args)).toEqual({
+        kind: "startTimed",
+        duration: 4 * 60 * 60 * 1_000,
+        delay: 0,
+        prompt: "watch the queue",
+      });
+    }
+    expect(() => parseLoopCommand("for 4h")).toThrow("<prompt>");
+    expect(() => parseLoopCommand("for 4h --delay")).toThrow("duration and prompt");
+    expect(() => parseLoopCommand("for 4h --delay=off")).toThrow("prompt");
+    expect(() => parseLoopCommand("for 4h --delay nope work")).toThrow("duration");
+    expect(() => parseLoopCommand("for 31d work")).toThrow("30d");
     expect(() => parseLoopCommand("for 31d --delay 1h watch the queue")).toThrow("30d");
   });
 
@@ -367,20 +378,24 @@ describe("loop parser and state", () => {
     });
     expect(command.getArgumentCompletions?.("fo")).toContainEqual({
       value: "for ",
-      label: "for <duration> --delay <duration> <prompt>",
+      label: "for <duration> [--delay <duration>] <prompt>",
       description: "Run until a wall-clock deadline",
     });
     expect(command.getArgumentCompletions?.("for 4h ")).toEqual([{
+      value: "for 4h ",
+      label: "for 4h <prompt>",
+      description: "Run until 4h elapses",
+    }, {
       value: "for 4h --delay ",
       label: "for 4h --delay <duration> <prompt>",
-      description: "Run until 4h elapses",
+      description: "Set the delay between settled iterations",
     }]);
     expect(command.getArgumentCompletions?.("for 4h --delay ")).toContainEqual({
       value: "for 4h --delay 5m",
       label: "for 4h --delay 5m",
       description: "Set the delay between settled iterations",
     });
-    expect(command.getArgumentCompletions?.("for 4h --delay ")).not.toContainEqual(
+    expect(command.getArgumentCompletions?.("for 4h --delay ")).toContainEqual(
       expect.objectContaining({ value: "for 4h --delay off" }),
     );
     expect(command.getArgumentCompletions?.("for 4h --delay=")).toContainEqual({
@@ -615,6 +630,39 @@ describe("loop lifecycle", () => {
     expect(harness.prompts).toEqual(["watch the queue", "watch the queue"]);
   });
 
+  test("advances zero-delay timed loops at settlement and stops at the deadline", async () => {
+    const harness = createHarness();
+    await harness.command.handler("for 4h work", harness.context);
+    const endsAt = harness.state()!.endsAt;
+    expect(endsAt).toBeGreaterThan(Date.now());
+    expect(harness.state()).toMatchObject({ delay: 0, remainingBudget: 0 });
+
+    await harness.settle();
+    expect(harness.state()).toMatchObject({ status: "active", currentIteration: 2, endsAt });
+    expect(harness.current.getSessionId()).toBe("session-2");
+    expect(harness.prompts).toEqual(["work", "work"]);
+
+    harness.setState({ endsAt: Date.now() - 1 });
+    await harness.settle();
+    expect(harness.state()).toMatchObject({ status: "completed", currentIteration: 2 });
+    expect(harness.prompts).toHaveLength(2);
+  });
+
+  test("turns off a timed loop's delay while waiting", async () => {
+    const harness = createHarness();
+    await harness.command.handler("for 4h --delay 5m work", harness.context);
+    await harness.settle();
+    expect(harness.state()?.phase).toBe("waiting");
+    const endsAt = harness.state()!.endsAt;
+
+    await harness.command.handler("delay off", commandContext(harness));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(harness.state()).toMatchObject({ status: "active", currentIteration: 2, delay: 0, endsAt });
+    expect(harness.prompts).toEqual(["work", "work"]);
+    await harness.settle();
+    expect(harness.prompts).toHaveLength(3);
+  });
+
   test("updates a timed loop's remaining time from now", async () => {
     const harness = createHarness();
     await harness.command.handler("for 4h --delay 5m watch the queue", harness.context);
@@ -631,9 +679,11 @@ describe("loop lifecycle", () => {
     await countedWithoutDelay.command.handler("2 watch the queue", countedWithoutDelay.context);
     await countedWithoutDelay.command.handler("time 2h", commandContext(countedWithoutDelay));
     expect(countedWithoutDelay.notifications.at(-1)).toBe(
-      "timed loops require a non-zero delay; set /loop delay <duration> first",
+      "loop changed to timed mode with 2h left",
     );
-    expect(countedWithoutDelay.state()?.endsAt).toBeUndefined();
+    expect(countedWithoutDelay.state()?.endsAt).toBeGreaterThanOrEqual(before + 2 * 60 * 60 * 1_000);
+    await countedWithoutDelay.settle();
+    expect(countedWithoutDelay.state()).toMatchObject({ status: "active", currentIteration: 2, delay: 0 });
   });
 
   test("switches a counted loop to a timed loop", async () => {

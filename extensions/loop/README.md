@@ -9,6 +9,7 @@ pi install npm:@brettinternet/pi-loop
 ```text
 /loop 5 Fix the next failing test
 /loop 10 --delay 30m Check CI and fix failures
+/loop for 2h Fix failing tests
 /loop for 8h --delay 1h Review new issues
 /loop 10 /wait 10m /skill:myskill skill argument here
 ```
@@ -22,7 +23,7 @@ The last example chains commands. Built-in interactive commands can't be chained
 /loop 3               run 3 more iterations from now
 /loop +2              add 2 iterations
 /loop -1              remove 1 iteration
-/loop time 2h         stop 2h from now (requires a delay)
+/loop time 2h         stop 2h from now
 /loop delay 5m        change the gap between iterations
 /loop prompt <text>   replace the prompt
 /loop append <text>   append to the prompt
@@ -33,7 +34,7 @@ The last example chains commands. Built-in interactive commands can't be chained
 /loop                 same as end
 ```
 
-Durations use `ms`, `s`, `m`, `h`, or `d`. Delays range from 1s to 24h. Timed loops require `--delay` and run at most 30 days.
+Durations use `ms`, `s`, `m`, `h`, or `d`. Delays range from 1s to 24h; use `off` to disable a delay. Both counted and timed loops default to no delay between completed iterations. Timed loops run for at most 30 days and stop starting new iterations at the deadline; an active iteration can finish.
 
 ## Behavior
 

@@ -16,7 +16,7 @@ export const LOOP_STATE_ENTRY = "pi-loop-state-v1";
 export const LOOP_WIDGET_KEY = "pi-loop";
 export const LOOP_RUN_ID_ENV = "PI_LOOP_RUN_ID";
 export const LOOP_USAGE =
-  "usage: /loop <positive-count> [--delay <duration>] <prompt> | /loop for <duration> --delay <duration> <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop time <duration> | /loop delay <duration> | /loop prompt <text> | /loop append <text> | /loop status | /loop pause | /loop resume | /loop next | /loop end";
+  "usage: /loop <positive-count> [--delay <duration>] <prompt> | /loop for <duration> [--delay <duration>] <prompt> | /loop <positive-count> | /loop <+|-><count> | /loop time <duration> | /loop delay <duration> | /loop prompt <text> | /loop append <text> | /loop status | /loop pause | /loop resume | /loop next | /loop end";
 
 export const MIN_LOOP_DELAY_MS = 1_000;
 export const MAX_LOOP_DELAY_MS = 24 * 60 * 60 * 1_000;
@@ -153,14 +153,14 @@ function completeLoopArguments(prefix: string): ArgumentCompletion[] | null {
       return delayCompletions(
         prefix,
         `for ${timedDelay[1]} --delay${equals ? "=" : ""}`,
-        COMMON_LOOP_DELAYS.filter((value) => value !== "off"),
+        COMMON_LOOP_DELAYS,
         equals ? "" : " ",
       );
     }
     return [{
       value: `for ${timedDelay[1]} --delay `,
       label: `for ${timedDelay[1]} --delay <duration>`,
-      description: "Set the required delay between timed-loop iterations",
+      description: "Set the delay between settled iterations",
     }];
   }
 
@@ -170,14 +170,18 @@ function completeLoopArguments(prefix: string): ArgumentCompletion[] | null {
     const exactDuration = COMMON_LOOP_TIMEFRAMES.find((value) => durationPrefix.trim() === value);
     if (exactDuration && /\s$/.test(durationPrefix)) {
       return [{
+        value: `for ${exactDuration} `,
+        label: `for ${exactDuration} <prompt>`,
+        description: `Run until ${exactDuration} elapses`,
+      }, {
         value: `for ${exactDuration} --delay `,
         label: `for ${exactDuration} --delay <duration> <prompt>`,
-        description: `Run until ${exactDuration} elapses`,
+        description: "Set the delay between settled iterations",
       }];
     }
     return completeArguments(durationPrefix, COMMON_LOOP_TIMEFRAMES.map((value) => ({
       value: `for ${value} `,
-      label: `for ${value} --delay <duration> <prompt>`,
+      label: `for ${value} [--delay <duration>] <prompt>`,
       description: `Run until ${value} elapses`,
     })));
   }
@@ -218,7 +222,7 @@ function completeLoopArguments(prefix: string): ArgumentCompletion[] | null {
     { value: "delay ", label: "delay <duration>", description: "Set the delay between settled iterations" },
     { value: "prompt ", label: "prompt <text>", description: "Replace the future loop prompt" },
     { value: "append ", label: "append <text>", description: "Append to the future loop prompt" },
-    { value: "for ", label: "for <duration> --delay <duration> <prompt>", description: "Run until a wall-clock deadline" },
+    { value: "for ", label: "for <duration> [--delay <duration>] <prompt>", description: "Run until a wall-clock deadline" },
     { value: "+1", label: "+1", description: "Add one future iteration" },
     { value: "-1", label: "-1", description: "Remove one future iteration" },
     { value: "1 ", label: "1 <prompt>", description: "Run a prompt once" },
@@ -286,6 +290,20 @@ export function formatLoopDelay(delay: number): string {
   return `${delay}ms`;
 }
 
+function parseLoopPrompt(input: string): { delay: number; prompt: string } {
+  let delay = 0;
+  let prompt = input;
+  const delayOption = /^--delay(?:=|\s+)(\S+)(?:\s+([\s\S]+))?$/.exec(input);
+  if (delayOption) {
+    delay = parseLoopDuration(delayOption[1]);
+    prompt = delayOption[2]?.trim() ?? "";
+    if (!prompt) throw new Error(`a prompt is required after --delay; ${LOOP_USAGE}`);
+  } else if (/^--delay(?:\s|=|$)/.test(input)) {
+    throw new Error(`--delay requires a duration and prompt; ${LOOP_USAGE}`);
+  }
+  return { delay, prompt };
+}
+
 /** Parse public and internal /loop arguments without consulting current run state. */
 export function parseLoopCommand(args: string): ParsedLoopCommand {
   const input = args.trim();
@@ -332,16 +350,12 @@ export function parseLoopCommand(args: string): ParsedLoopCommand {
       : { kind: "appendPrompt", prompt: rest };
   }
   if (first === "for") {
-    const timed = /^(\S+)\s+--delay(?:=|\s+)(\S+)(?:\s+([\s\S]+))?$/.exec(rest);
+    const timed = /^(\S+)\s+([\s\S]+)$/.exec(rest);
     if (!timed) {
-      throw new Error(`timed loops require: for <duration> --delay <duration> <prompt>; ${LOOP_USAGE}`);
+      throw new Error(`timed loops require: for <duration> [--delay <duration>] <prompt>; ${LOOP_USAGE}`);
     }
     const duration = parseLoopTimeframe(timed[1]);
-    const delay = parseLoopDuration(timed[2]);
-    const prompt = timed[3]?.trim() ?? "";
-    if (delay === 0) throw new Error(`timed loops require a non-zero --delay; ${LOOP_USAGE}`);
-    if (!prompt) throw new Error(`a prompt is required after --delay; ${LOOP_USAGE}`);
-    return { kind: "startTimed", duration, delay, prompt };
+    return { kind: "startTimed", duration, ...parseLoopPrompt(timed[2]) };
   }
 
   // These commands are only emitted by the extension itself. Keeping them in
@@ -380,17 +394,7 @@ export function parseLoopCommand(args: string): ParsedLoopCommand {
     if (!isPositiveInteger(count)) throw new Error(`count must be a positive integer; ${LOOP_USAGE}`);
     if (!rest) return { kind: "retune", count };
 
-    let delay = 0;
-    let prompt = rest;
-    const delayOption = /^(--delay)(?:=|\s+)(\S+)(?:\s+([\s\S]+))?$/.exec(rest);
-    if (delayOption) {
-      delay = parseLoopDuration(delayOption[2]);
-      prompt = delayOption[3]?.trim() ?? "";
-      if (!prompt) throw new Error(`a prompt is required after --delay; ${LOOP_USAGE}`);
-    } else if (/^--delay(?:\s|=|$)/.test(rest)) {
-      throw new Error(`--delay requires a duration and prompt; ${LOOP_USAGE}`);
-    }
-    return { kind: "start", count, delay, prompt };
+    return { kind: "start", count, ...parseLoopPrompt(rest) };
   }
 
   throw new Error(`expected a positive count or a loop command; ${LOOP_USAGE}`);
@@ -443,7 +447,7 @@ export function parseLoopState(value: unknown): LoopState | undefined {
   ) return undefined;
   if (value.nextActionAt !== undefined && !isNonNegativeInteger(value.nextActionAt)) return undefined;
   if (value.settledAt !== undefined && !isNonNegativeInteger(value.settledAt)) return undefined;
-  if (value.endsAt !== undefined && (!isNonNegativeInteger(value.endsAt) || delay === 0)) return undefined;
+  if (value.endsAt !== undefined && !isNonNegativeInteger(value.endsAt)) return undefined;
   if (value.pauseReason !== undefined && typeof value.pauseReason !== "string") return undefined;
   if (value.pausedAt !== undefined && !isNonNegativeInteger(value.pausedAt)) return undefined;
   if (value.ownerSessionId !== undefined && typeof value.ownerSessionId !== "string") return undefined;
@@ -1269,10 +1273,6 @@ export default function loopExtension(pi: ExtensionAPI): void {
         notify(ctx, "a loop must be active, stopping, or paused to update its remaining time", "error");
         return;
       }
-      if (state.delay === 0) {
-        notify(ctx, "timed loops require a non-zero delay; set /loop delay <duration> first", "error");
-        return;
-      }
       const switchingModes = state.endsAt === undefined;
       const endsAt = Date.now() + parsed.duration;
       const nextActionAt = state.phase === "waiting" && state.nextActionAt !== undefined
@@ -1302,10 +1302,6 @@ export default function loopExtension(pi: ExtensionAPI): void {
     if (parsed.kind === "delay") {
       if (!state || isTerminal(state)) {
         notify(ctx, "a loop must be active, stopping, or paused to update its delay", "error");
-        return;
-      }
-      if (state.endsAt !== undefined && parsed.delay === 0) {
-        notify(ctx, "timed loops require a non-zero delay", "error");
         return;
       }
       const nextActionAt = state.phase === "waiting" && state.nextActionAt !== undefined
@@ -1707,7 +1703,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   });
 
   pi.registerCommand("loop", {
-    description: "<count> [--delay <duration>] <prompt> | for <duration> --delay <duration> <prompt> | controls — Run a bounded fresh-session loop",
+    description: "<count> [--delay <duration>] <prompt> | for <duration> [--delay <duration>] <prompt> | controls — Run a bounded fresh-session loop",
     getArgumentCompletions: (prefix) => completeLoopArguments(prefix),
     handler: async (args, ctx) => {
       try {
