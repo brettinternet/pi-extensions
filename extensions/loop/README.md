@@ -49,17 +49,25 @@ Durations use `ms`, `s`, `m`, `h`, or `d`. Delays range from 1s to 24h; use `off
 | Pending `/wait` or `until` watch | Iteration waits for its wake-up turn or cancellation |
 | Paused wait or recurring watch | Iteration waits until resumed or completed |
 | Async subagent workflow or supervisor request | Originating session and iteration stay alive through completion delivery and the parent's result-processing turn |
-| Subagent lifecycle API disappears or is unavailable after an async launch | Loop pauses with an upgrade diagnostic instead of discarding the session |
+| Subagent liveness provider disappears or is unavailable after an async launch | Loop pauses with a reload diagnostic instead of discarding the session |
 
 Use `/loop delay` for a fixed gap, `/wait` for a same-session follow-up, and `until` for a condition that may become true sooner.
 
 ### Async subagents
 
-A yielded assistant turn (for example, “review is running”) is not an iteration boundary while its subagent work remains outstanding. Loop uses the **pi-subagents session-liveness v1 API** to wait through execution, supervisor questions, result delivery, and queued completion notifications. After the parent receives the result, it can apply fixes or commit in the same session; rollover occurs only after that parent turn settles and all blockers clear. Multiple workflows are covered together. Failure or cancellation still requires the producer's final disposition, not merely a stop request.
+A yielded assistant turn (for example, “review is running”) is not an iteration boundary while its subagent work remains outstanding. Loop uses pi-subagents' existing **pi-web session-liveness v1 registry** to wait through execution, supervisor questions, result delivery, and queued completion notifications. After the parent receives the result, it can apply fixes or commit in the same session; rollover occurs only after that parent turn settles and all blockers clear. Multiple workflows are covered together. Failure or cancellation still requires the producer's final disposition, not merely a stop request.
 
-This requires a pi-subagents build exposing `pi-subagents:session-liveness:query:v1` and `pi-subagents:session-liveness:changed:v1`. Released 0.75.0 lacks that contract; an observed async launch with that version pauses the loop rather than guessing when it is safe to advance. Install a compatible build before resuming. Loops without subagents need no additional package.
+Use a pi-subagents build containing upstream #2683 and the queued-wake reload fix. The registry is `Symbol.for("@agegr/pi-web/session-liveness/v1")`; the former fork-only query/changed events are no longer used. Loop installs its adapter before session startup and forwards registrations if a compatible host registry already exists. Providers are matched by the session UUID, not the session-file path. A missing provider after an observed async launch pauses the loop rather than guessing. Older registry implementations cannot be version-detected, so install the required fixes and restart Pi. Loops without subagents need no additional package.
 
-The gate reads a synchronous, session-scoped snapshot and reacts to lifecycle changes; it does not poll run files, add a grace delay, or force synchronous reviews. It rechecks at automatic rollover, including after a configured loop delay, and on recovery. Explicit `/loop next` remains a manual skip for a paused iteration.
+The gate checks immediately at settlement, automatic rollover (including after a configured loop delay), and recovery. While subagents block a boundary, it checks only the in-memory registry every 250 ms because the registry has no change notification; completion events also request an immediate recheck. There is no run-file polling, arbitrary grace period, or forced synchronous review. The check timer stops on parent turn start, pause, or shutdown. Explicit `/loop next` remains a manual skip for a paused iteration.
+
+Cross-package SDK regression (a source checkout is required; no real model calls or child processes):
+
+```sh
+PI_SUBAGENTS_TEST_SOURCE=/path/to/pi-subagents bun test test/loop/subagents-sdk.test.ts
+```
+
+This exercises both extension load orders, parent yield and result processing, and reload with an accepted queued completion. The suite is skipped when that environment variable is absent.
 
 ## Run ID
 
