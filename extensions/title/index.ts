@@ -2,9 +2,14 @@ import { randomUUID } from "node:crypto";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { completeArguments, completeModelArgument } from "./completions.ts";
 import { configPath, loadConfig, saveConfig, type Config } from "./config.js";
-import { cleanTitle, firstCompletedExchange, TITLE_SYSTEM_PROMPT } from "./title.js";
+import { cleanTitle, countCompletedExchanges, firstCompletedExchange, recentTranscript, TITLE_SYSTEM_PROMPT } from "./title.js";
 
 type TitleSource = { user: string; assistant?: string };
+
+/** What the model is asked to title: the opening request, or a later refresh. */
+type TitleRequestSource =
+  | ({ kind: "initial" } & TitleSource)
+  | { kind: "refresh"; transcript: string };
 
 const AUTOMATIC_MODEL_CANDIDATES = [
   "openai/gpt-5-nano",
@@ -180,7 +185,17 @@ export function resolveModelChain(
   return { candidates, ...(configuredFailure ? { configuredFailure } : {}) };
 }
 
-function buildTitleRequest(source: TitleSource): TitleRequest {
+function buildTitleRequest(source: TitleRequestSource): TitleRequest {
+  const body = source.kind === "initial"
+    ? [
+        "--- First user request ---",
+        source.user.slice(0, 4800),
+        ...(source.assistant
+          ? ["--- First assistant response ---", source.assistant.slice(0, 2400)]
+          : []),
+      ]
+    : ["--- Recent session transcript ---", source.transcript];
+
   return {
     systemPrompt: TITLE_SYSTEM_PROMPT,
     messages: [
@@ -189,14 +204,7 @@ function buildTitleRequest(source: TitleSource): TitleRequest {
         content: [
           {
             type: "text",
-            text: [
-              "--- First user request ---",
-              source.user.slice(0, 4800),
-              ...(source.assistant
-                ? ["--- First assistant response ---", source.assistant.slice(0, 2400)]
-                : []),
-              "--- End session data ---",
-            ].join("\n"),
+            text: [...body, "--- End session data ---"].join("\n"),
           },
         ],
         timestamp: Date.now(),
@@ -257,6 +265,13 @@ export function titleFromCompletion(
   return title;
 }
 
+function initialSource(
+  entries: Parameters<typeof firstCompletedExchange>[0],
+): TitleRequestSource | undefined {
+  const exchange = firstCompletedExchange(entries);
+  return exchange ? { kind: "initial", ...exchange } : undefined;
+}
+
 export default function titleExtension(pi: ExtensionAPI) {
   let generating = false;
   let generationController: AbortController | undefined;
@@ -264,6 +279,12 @@ export default function titleExtension(pi: ExtensionAPI) {
   let lifecycle = 0;
   let completionContext: ExtensionContext | undefined;
   let titleTimer: ReturnType<typeof setTimeout> | undefined;
+  /** The last title this extension wrote, to tell its own writes from the user's. */
+  let lastAutoName: string | undefined;
+  /** Completed exchanges when the last automatic request started. */
+  let lastEvaluatedTurns = 0;
+  /** Set when the session arrived named, or the user named it. */
+  let pinned = false;
 
   function isStaleContextError(error: unknown): boolean {
     return error instanceof Error && error.message.startsWith("This extension ctx is stale");
@@ -273,7 +294,12 @@ export default function titleExtension(pi: ExtensionAPI) {
     if (ctx.hasUI && title) ctx.ui.setTitle(title);
   }
 
+  function canWriteAutomatic(): boolean {
+    return !pinned && pi.getSessionName() === lastAutoName;
+  }
+
   function setTitle(ctx: ExtensionContext, title: string): void {
+    pinned = true;
     pi.setSessionName(title);
     applyTerminalTitle(ctx, title);
     deferTerminalTitle(ctx);
@@ -297,19 +323,18 @@ export default function titleExtension(pi: ExtensionAPI) {
 
   async function generate(
     ctx: ExtensionContext,
-    overwrite: boolean,
-    source: TitleSource | undefined = firstCompletedExchange(ctx.sessionManager.getBranch()),
+    config: Config,
+    source: TitleRequestSource | undefined,
+    mode: "automatic" | "explicit" = "automatic",
   ): Promise<string | undefined> {
-    if (generating || (!overwrite && pi.getSessionName()) || !source) return undefined;
+    if (generating || !source) return undefined;
+    if (mode === "automatic" && (!config.enabled || !canWriteAutomatic())) return undefined;
 
     generating = true;
     const controller = new AbortController();
     generationController = controller;
     const expectedLifecycle = lifecycle;
     try {
-      const config = await loadConfig();
-      if (!config.enabled && !overwrite) return undefined;
-
       const chain = resolveModelChain(ctx, config);
       if (chain.candidates.length === 0) {
         throw new Error(chain.configuredFailure ?? "no title model is available");
@@ -320,7 +345,7 @@ export default function titleExtension(pi: ExtensionAPI) {
       let lastError: unknown;
       for (const candidate of chain.candidates) {
         if (controller.signal.aborted || lifecycle !== expectedLifecycle) return undefined;
-        if (!overwrite && pi.getSessionName()) return undefined;
+        if (mode === "automatic" && !canWriteAutomatic()) return undefined;
 
         let title: string;
         try {
@@ -341,7 +366,8 @@ export default function titleExtension(pi: ExtensionAPI) {
         }
 
         // Only model failures advance the chain; session/UI errors must not issue another request.
-        if (!overwrite && pi.getSessionName()) return undefined;
+        if (mode === "automatic" && !canWriteAutomatic()) return undefined;
+        lastAutoName = title;
         pi.setSessionName(title);
         applyTerminalTitle(ctx, title);
         deferTerminalTitle(ctx);
@@ -367,22 +393,39 @@ export default function titleExtension(pi: ExtensionAPI) {
     }
   }
 
-  function generateInBackground(ctx: ExtensionContext, source: TitleSource | undefined): void {
-    if (backgroundGeneration) return;
+  /** Report a background failure the same way wherever an attempt was started. */
+  function reportBackgroundFailure(ctx: ExtensionContext, expectedLifecycle: number, error: unknown): void {
+    if (lifecycle !== expectedLifecycle || isStaleContextError(error)) return;
+    const message = error instanceof Error ? error.message : String(error);
+    try {
+      if (ctx.hasUI) ctx.ui.notify(message, "error");
+      else console.warn(`[pi-title] ${message}`);
+    } catch {
+      // Reading the context can fail once it has been invalidated; never let that
+      // escape as an unhandled rejection.
+      console.warn(`[pi-title] ${message}`);
+    }
+  }
+
+  /** Returns whether a request was started, so callers can avoid consuming a slot. */
+  function generateInBackground(
+    ctx: ExtensionContext,
+    config: Config,
+    source: TitleRequestSource | undefined,
+  ): boolean {
+    if (backgroundGeneration || generating || !source) return false;
 
     const expectedLifecycle = lifecycle;
-    const request = generate(ctx, false, source);
+    const request = generate(ctx, config, source);
     backgroundGeneration = request;
     void request
       .catch((error) => {
-        if (lifecycle !== expectedLifecycle || isStaleContextError(error)) return;
-        const message = error instanceof Error ? error.message : String(error);
-        if (ctx.hasUI) ctx.ui.notify(message, "error");
-        else console.warn(`[pi-title] ${message}`);
+        reportBackgroundFailure(ctx, expectedLifecycle, error);
       })
       .finally(() => {
         if (backgroundGeneration === request) backgroundGeneration = undefined;
       });
+    return true;
   }
 
   function resetGeneration(): void {
@@ -395,9 +438,46 @@ export default function titleExtension(pi: ExtensionAPI) {
     generating = false;
   }
 
+  async function evaluateAutomatic(ctx: ExtensionContext, openingRequest?: string): Promise<void> {
+    const expectedLifecycle = lifecycle;
+    try {
+      if (!canWriteAutomatic() || generating || backgroundGeneration) return;
+      if (openingRequest !== undefined && lastAutoName !== undefined) return;
+
+      const branch = ctx.sessionManager.getBranch();
+      const config = await loadConfig();
+      if (lifecycle !== expectedLifecycle || !config.enabled || !canWriteAutomatic()) return;
+
+      const turns = countCompletedExchanges(branch);
+      if (lastAutoName === undefined) {
+        const source = openingRequest === undefined
+          ? initialSource(branch)
+          : { kind: "initial" as const, user: openingRequest };
+        if (generateInBackground(ctx, config, source)) {
+          // The opening exchange anchors the cadence even before its answer arrives.
+          lastEvaluatedTurns = Math.max(1, turns);
+        }
+        return;
+      }
+
+      if (config.refreshTurns === 0 || turns < lastEvaluatedTurns + config.refreshTurns) return;
+      const transcript = recentTranscript(branch);
+      if (transcript && generateInBackground(ctx, config, { kind: "refresh", transcript })) {
+        lastEvaluatedTurns = turns;
+      }
+    } catch (error) {
+      reportBackgroundFailure(ctx, expectedLifecycle, error);
+    }
+  }
+
   pi.on("session_start", (_event, ctx) => {
     completionContext = ctx;
     resetGeneration();
+    lastAutoName = undefined;
+    lastEvaluatedTurns = 0;
+    // An existing name has no source we can verify, so it is treated as the user's and
+    // this session is left alone. `/title regenerate` still replaces it on request.
+    pinned = pi.getSessionName() !== undefined;
     deferTerminalTitle(ctx);
 
   });
@@ -407,23 +487,26 @@ export default function titleExtension(pi: ExtensionAPI) {
     resetGeneration();
   });
 
-  pi.on("session_info_changed", (_event, ctx) => {
+  pi.on("session_info_changed", (event, ctx) => {
+    if (event.name !== undefined && event.name !== lastAutoName) pinned = true;
     deferTerminalTitle(ctx);
   });
 
-  pi.on("before_agent_start", (event, ctx) => {
-    generateInBackground(ctx, { user: event.prompt });
+  pi.on("before_agent_start", (event, ctx) => evaluateAutomatic(ctx, event.prompt));
+
+  pi.on("session_tree", (_event, ctx) => {
+    // The active branch changed, so the cadence is rebased on the branch that is now
+    // active and any refresh from the abandoned branch is dropped.
+    resetGeneration();
+    const branch = ctx.sessionManager.getBranch();
+    lastEvaluatedTurns = countCompletedExchanges(branch);
+    // Discarding the previous work may have cancelled the only attempt to name a
+    // still-unnamed session, so let the active branch produce one. Rebasing first
+    // means this can only be the initial evaluation, never an immediate refresh.
+    return evaluateAutomatic(ctx);
   });
 
-  pi.on("message_end", (event, ctx) => {
-    if (event.message.role !== "assistant") return;
-
-    const exchange = firstCompletedExchange([
-      ...ctx.sessionManager.getBranch(),
-      { type: "message", message: event.message },
-    ]);
-    if (exchange) generateInBackground(ctx, exchange);
-  });
+  pi.on("agent_settled", (_event, ctx) => evaluateAutomatic(ctx));
 
   pi.registerCommand("title", {
     description: "[status | on | off | model [provider/model[:thinking]|auto|active] | regenerate | set <title>] — Set or configure titles",
@@ -468,6 +551,7 @@ export default function titleExtension(pi: ExtensionAPI) {
               `title: ${pi.getSessionName() ?? "none"}`,
               `enabled: ${config.enabled}`,
               `model: ${config.model ?? "active session model"}`,
+              `refresh turns: ${config.refreshTurns}`,
               `config: ${configPath()}`,
             ].join("\n"),
             "info",
@@ -502,7 +586,7 @@ export default function titleExtension(pi: ExtensionAPI) {
             generationController?.abort();
             await backgroundGeneration.catch(() => undefined);
           }
-          const title = await generate(ctx, true);
+          const title = await generate(ctx, config, initialSource(ctx.sessionManager.getBranch()), "explicit");
           ctx.ui.notify(title ? `Session title: ${title}` : "No completed exchange to title", "info");
           return;
         }

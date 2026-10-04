@@ -1,6 +1,6 @@
 # pi-title
 
-Title each session automatically from its first request. Titles persist, and manual titles are never replaced.
+Title each session automatically from its first request, with optional refreshes as the conversation develops. Manual titles are never replaced automatically.
 
 ```sh
 pi install npm:pi-title
@@ -26,9 +26,28 @@ pi install npm:pi-title
   "enabled": true,
   "model": null,       // null = session model, "auto", or "provider/model[:effort]"
   "maxTokens": 30,
-  "maxLength": 60
+  "maxLength": 60,
+  "refreshTurns": 0    // completed turns between refreshes; 0 (default) titles once and stops
 }
 ```
+
+## Refreshing titles
+
+Set `refreshTurns` in the config file; `/title status` shows its value. `0` (the default)
+titles once. With `4`, refreshes normally run after the fifth completed exchange, then every
+fourth exchange. With `1`, they run after each completed exchange following the opening one.
+Only user messages answered with assistant text count, and refreshes are evaluated at `agent_settled`.
+
+Refreshes use recent user/assistant text, capped at 8 messages, 600 characters per message,
+and 4,000 characters total. Tool output is excluded. Each evaluation uses one config snapshot.
+
+A busy title request postpones refreshing until a later settled turn; a failed refresh spends
+its cadence slot. Tree navigation cancels pending generation and rebases the cadence on the
+active branch, generating an initial title if the session is still unnamed.
+
+Sessions that arrive named—including resumed sessions—and manually renamed sessions are left
+alone. A rename during generation wins. `/title regenerate` explicitly replaces a title even
+when automatic titles are disabled, but does not reset the cadence or unpin a manually named session.
 
 ## Model fallback
 

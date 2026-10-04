@@ -284,6 +284,7 @@ describe("automatic title generation", () => {
           if (stale) throw new Error("This extension ctx is stale after session replacement or reload.");
           return true;
         },
+        sessionManager: { getBranch: () => [] },
         ui: { notify: () => { throw new Error("old session must not be notified"); } },
       } as unknown as ExtensionCommandContext;
       titleExtension(pi);
@@ -362,16 +363,14 @@ describe("automatic title generation", () => {
         ctx,
       );
 
-      expect(result).toBeUndefined();
+      // Only configuration loading is awaited; the model response is still pending.
+      await result;
       await started;
       expect(sessionTitle).toBeUndefined();
       expect(titleRequest?.messages?.[0]?.content?.[0]?.text).toContain("Implement background titles");
       expect(titleRequest?.messages?.[0]?.content?.[0]?.text).not.toContain("assistant response");
 
-      handlers.get("message_end")!(
-        { message: { role: "assistant", content: [{ type: "text", text: "Implemented it" }] } },
-        ctx,
-      );
+      handlers.get("agent_settled")!({ type: "agent_settled" }, ctx);
       expect(requestCount).toBe(1);
 
       resolveCompletion({ content: [{ type: "text", text: "Background Session Titles" }], stopReason: "stop" });
@@ -455,10 +454,7 @@ describe("automatic title generation", () => {
       } as unknown as ExtensionCommandContext;
 
       titleExtension(pi);
-      handlers.get("message_end")!(
-        { message: { role: "assistant", content: [{ type: "text", text: "Implemented it" }] } },
-        ctx,
-      );
+      handlers.get("agent_settled")!({ type: "agent_settled" }, ctx);
       await automaticStarted;
 
       const regenerate = command!.handler("regenerate", ctx);
