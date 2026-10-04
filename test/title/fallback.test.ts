@@ -52,6 +52,7 @@ function harness(model: string | null, responses: Array<Response | Error | (() =
       return titles.at(-1);
     },
     setSessionName: (title: string) => { titles.push(title); },
+    appendEntry: () => {},
   } as unknown as ExtensionAPI;
   const base = context();
   const ctx = {

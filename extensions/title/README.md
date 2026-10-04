@@ -1,6 +1,6 @@
 # pi-title
 
-Title each session automatically from its first request. Titles persist, and manual titles are never replaced.
+Title each session from its first request, and optionally refresh it as the conversation develops. Manual titles are never replaced automatically.
 
 ```sh
 pi install npm:pi-title
@@ -10,7 +10,9 @@ pi install npm:pi-title
 /title                          show title and config
 /title My custom title          set a title
 /title set status               set a title that matches a subcommand
-/title regenerate               generate a new title
+/title regenerate               retitle from recent messages
+/title every 4                  retitle every 4 answered turns
+/title every off                title once
 /title on                       enable automatic titles
 /title off                      disable automatic titles
 /title model openai/gpt-5-nano  use a specific model
@@ -26,9 +28,23 @@ pi install npm:pi-title
   "enabled": true,
   "model": null,       // null = session model, "auto", or "provider/model[:effort]"
   "maxTokens": 30,
-  "maxLength": 60
+  "maxLength": 60,
+  "refreshTurns": 0    // retitle every N answered turns; 0 = title once
 }
 ```
+
+## Refreshing titles
+
+```text
+"refreshTurns": 4
+
+turn 1  → initial title from the first request
+turn 5  → refreshed from recent messages
+turn 9  → refreshed again
+```
+
+Refreshes read the last 8 user and assistant messages (up to 4,000 characters, no tool output).
+Naming the session yourself stops them.
 
 ## Model fallback
 
