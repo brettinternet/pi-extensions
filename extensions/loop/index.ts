@@ -9,6 +9,7 @@ import type {
 } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth } from "@earendil-works/pi-tui";
 import { Type } from "typebox";
+import { installSessionLivenessRegistry } from "./session-liveness.ts";
 
 type ThinkingLevel = ReturnType<ExtensionAPI["getThinkingLevel"]>;
 
@@ -682,28 +683,41 @@ export default function loopExtension(pi: ExtensionAPI): void {
   let parentTurnActive = false;
   let subagentLifecycleExpected = false;
 
-  // Public pi-subagents/session-liveness v1 contract. Keep the packages optional
-  // and independently installable: no runtime import from another Pi package.
+  const querySubagents = installSessionLivenessRegistry();
+  let subagentCheckTimer: ReturnType<typeof setTimeout> | undefined;
+
+  function clearSubagentCheck(): void {
+    if (subagentCheckTimer !== undefined) clearTimeout(subagentCheckTimer);
+    subagentCheckTimer = undefined;
+  }
+
+  function scheduleSubagentCheck(): void {
+    if (subagentCheckTimer !== undefined) return;
+    subagentCheckTimer = setTimeout(() => {
+      subagentCheckTimer = undefined;
+      const state = wakeContext && currentState(wakeContext);
+      if (!waitingForWake || parentTurnActive || !state || !statusIsActive(state)) return;
+      // Rearm before checking: a temporary non-idle state (e.g. compaction)
+      // must not lose the check. deferBoundary cancels it once subagents clear.
+      scheduleSubagentCheck();
+      resumeBoundary();
+    }, 250);
+    subagentCheckTimer.unref?.();
+  }
+
   function subagentsBusy(ctx: ExtensionContext): boolean | undefined {
-    const sessionId = ctx.sessionManager.getSessionId();
-    const request: { version: 1; sessionId: string; result?: unknown } = { version: 1, sessionId };
-    pi.events.emit("pi-subagents:session-liveness:query:v1", request);
-    const result = request.result;
-    if (result && typeof result === "object" && "version" in result && result.version === 1
-      && "sessionId" in result && result.sessionId === sessionId
-      && "busy" in result && typeof result.busy === "boolean") {
-      subagentLifecycleExpected = true;
-      return result.busy;
-    }
-    return result !== undefined || subagentLifecycleExpected ? undefined : false;
+    const busy = querySubagents(ctx.sessionManager.getSessionId());
+    if (busy !== undefined) subagentLifecycleExpected = true;
+    return busy ?? (subagentLifecycleExpected ? undefined : false);
   }
 
   function deferBoundary(ctx: ExtensionContext, state: LoopState, purpose: "boundary" | "recovery" = "boundary"): boolean {
     const busy = subagentsBusy(ctx);
+    if (busy !== true) clearSubagentCheck();
     if (busy === undefined) {
       waitingForWake = undefined;
       handledSettlementKey = undefined;
-      const reason = "subagent session-liveness API unavailable; update pi-subagents before resuming this loop";
+      const reason = "subagent session-liveness registry unavailable; reload compatible pi-subagents before resuming this loop";
       pauseLoop(ctx, state, reason);
       notify(ctx, `loop paused: ${reason}`, "error");
       return true;
@@ -713,6 +727,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
     handledSettlementKey = undefined;
     waitingForWake = purpose;
     wakeContext = ctx;
+    if (busy) scheduleSubagentCheck();
     return true;
   }
 
@@ -731,14 +746,12 @@ export default function loopExtension(pi: ExtensionAPI): void {
     }
   }
 
-  pi.events.on("pi-subagents:session-liveness:changed:v1", (value) => {
-    if (!value || typeof value !== "object" || !("version" in value) || value.version !== 1
-      || !("sessionId" in value) || value.sessionId !== wakeContext?.sessionManager.getSessionId()) return;
-    subagentLifecycleExpected = true;
-    resumeBoundary();
-  });
-  // Older owners lack the liveness API. Never silently roll over after observing
-  // their work; pause with an upgrade diagnostic instead of guessing its lifetime.
+  // Completion events are recheck hints, never proof of idle. Silent registry
+  // changes are covered by the in-memory timer only while a boundary is held.
+  for (const channel of ["subagent:async-complete", "subagent:foreground-complete"]) {
+    pi.events.on(channel, () => resumeBoundary());
+  }
+  // Never silently roll over after observing work from an unregistered owner.
   pi.events.on("subagent:async-started", (value) => {
     if (!value || typeof value !== "object" || !("sessionId" in value) || !wakeContext) return;
     const identity = contextIdentity(wakeContext);
@@ -859,6 +872,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   }
 
   function pauseLoop(ctx: ExtensionContext, state: LoopState, reason: string): void {
+    clearSubagentCheck();
     clearContinuationWait();
     clearRetryWait();
     const {
@@ -1630,6 +1644,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_start", (event, ctx) => {
+    clearSubagentCheck();
     clearContinuationWait();
     clearRetryWait();
     clearRecoveryTimer();
@@ -1668,6 +1683,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("agent_start", (_event, ctx) => {
+    clearSubagentCheck();
     const loaded = currentState(ctx);
     if (!loaded || !statusIsActive(loaded)) return;
     parentTurnActive = true;
@@ -1724,6 +1740,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_tree", (_event, ctx) => {
+    clearSubagentCheck();
     clearContinuationWait();
     clearRetryWait();
     clearRecoveryTimer();
@@ -1746,6 +1763,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
   });
 
   pi.on("session_shutdown", (event, ctx) => {
+    clearSubagentCheck();
     clearContinuationWait();
     clearRetryWait();
     clearRecoveryTimer();
