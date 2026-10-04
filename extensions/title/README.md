@@ -29,3 +29,16 @@ pi install npm:pi-title
   "maxLength": 60
 }
 ```
+
+## Model fallback
+
+The configured model is tried first. If it is unavailable, fails, or returns no usable
+title, the active session model is tried next. Each distinct model is attempted once;
+the extension does not retry. Cancellation stops the chain.
+
+Fallback is automatic, including for explicitly configured models. **The session
+model may cost more than the configured title model.** Both calls use the title
+token budget. Using `/title model active` uses only the session model.
+
+When fallback succeeds, the UI warning names the failed model and the model used.
+If neither model works, the error includes both failures.

@@ -133,6 +133,78 @@ export function resolveModel(
   throw new Error(`configured model is unavailable: ${config.model}`);
 }
 
+/** A model the title can be generated with, in fallback order. */
+export interface TitleModelCandidate {
+  model: TitleModel;
+  thinkingLevel?: ThinkingLevel;
+  /** `configured` is the requested model, `session` is the fallback. */
+  source: "configured" | "session";
+}
+
+export interface TitleModelChain {
+  candidates: TitleModelCandidate[];
+  /** Why the configured model could not be used at all, when it could not. */
+  configuredFailure?: string;
+}
+
+function sameModel(left: TitleModel, right: TitleModel): boolean {
+  return left.provider === right.provider && left.id === right.id;
+}
+
+/**
+ * Build the ordered title model chain: the configured model first, then the
+ * active session model as a fallback. A configured model that cannot be
+ * resolved at all is recorded and skipped instead of aborting the attempt.
+ */
+export function resolveModelChain(
+  ctx: Pick<ExtensionContext, "model" | "modelRegistry">,
+  config: Config,
+): TitleModelChain {
+  const candidates: TitleModelCandidate[] = [];
+  let configuredFailure: string | undefined;
+
+  if (config.model) {
+    try {
+      const { model, thinkingLevel } = resolveModel(ctx, config);
+      if (model) candidates.push({ model, thinkingLevel, source: "configured" });
+    } catch (error) {
+      configuredFailure = error instanceof Error ? error.message : String(error);
+    }
+  }
+
+  const sessionModel = ctx.model;
+  if (sessionModel && !candidates.some((candidate) => sameModel(candidate.model, sessionModel))) {
+    candidates.push({ model: sessionModel, source: config.model ? "session" : "configured" });
+  }
+
+  return { candidates, ...(configuredFailure ? { configuredFailure } : {}) };
+}
+
+function buildTitleRequest(source: TitleSource): TitleRequest {
+  return {
+    systemPrompt: TITLE_SYSTEM_PROMPT,
+    messages: [
+      {
+        role: "user",
+        content: [
+          {
+            type: "text",
+            text: [
+              "--- First user request ---",
+              source.user.slice(0, 4800),
+              ...(source.assistant
+                ? ["--- First assistant response ---", source.assistant.slice(0, 2400)]
+                : []),
+              "--- End session data ---",
+            ].join("\n"),
+          },
+        ],
+        timestamp: Date.now(),
+      },
+    ],
+  };
+}
+
 export function completionOptions(config: Config, thinkingLevel?: ThinkingLevel) {
   const thinkingTokens = thinkingLevel && thinkingLevel !== "off"
     ? THINKING_TOKEN_BUDGETS[thinkingLevel]
@@ -238,47 +310,52 @@ export default function titleExtension(pi: ExtensionAPI) {
       const config = await loadConfig();
       if (!config.enabled && !overwrite) return undefined;
 
-      const { model, thinkingLevel } = resolveModel(ctx, config);
-      if (!model) throw new Error("no title model is available");
+      const chain = resolveModelChain(ctx, config);
+      if (chain.candidates.length === 0) {
+        throw new Error(chain.configuredFailure ?? "no title model is available");
+      }
 
-      const response = await completeTitle(
-        ctx,
-        model,
-        {
-          systemPrompt: TITLE_SYSTEM_PROMPT,
-          messages: [
-            {
-              role: "user",
-              content: [
-                {
-                  type: "text",
-                  text: [
-                    "--- First user request ---",
-                    source.user.slice(0, 4800),
-                    ...(source.assistant
-                      ? ["--- First assistant response ---", source.assistant.slice(0, 2400)]
-                      : []),
-                    "--- End session data ---",
-                  ].join("\n"),
-                },
-              ],
-              timestamp: Date.now(),
-            },
-          ],
-        },
-        config,
-        thinkingLevel,
-        controller.signal,
-      );
+      const request = buildTitleRequest(source);
+      const failures: string[] = chain.configuredFailure ? [chain.configuredFailure] : [];
+      let lastError: unknown;
+      for (const candidate of chain.candidates) {
+        if (controller.signal.aborted || lifecycle !== expectedLifecycle) return undefined;
+        if (!overwrite && pi.getSessionName()) return undefined;
 
-      if (controller.signal.aborted || lifecycle !== expectedLifecycle) return undefined;
-      const title = titleFromCompletion(response, config.maxLength);
-      if (!overwrite && pi.getSessionName()) return undefined;
+        let title: string;
+        try {
+          const response = await completeTitle(
+            ctx, candidate.model, request, config, candidate.thinkingLevel, controller.signal,
+          );
+          if (controller.signal.aborted || lifecycle !== expectedLifecycle ||
+              response.stopReason === "aborted") return undefined;
+          title = titleFromCompletion(response, config.maxLength);
+        } catch (error) {
+          const message = error instanceof Error ? error.message : String(error);
+          if (controller.signal.aborted || lifecycle !== expectedLifecycle ||
+              (error instanceof Error && error.name === "AbortError")) return undefined;
+          if (isStaleContextError(error)) throw error;
+          lastError = error;
+          failures.push(`${candidate.model.provider}/${candidate.model.id}: ${message}`);
+          continue;
+        }
 
-      pi.setSessionName(title);
-      applyTerminalTitle(ctx, title);
-      deferTerminalTitle(ctx);
-      return title;
+        // Only model failures advance the chain; session/UI errors must not issue another request.
+        if (!overwrite && pi.getSessionName()) return undefined;
+        pi.setSessionName(title);
+        applyTerminalTitle(ctx, title);
+        deferTerminalTitle(ctx);
+        if (candidate.source === "session" && ctx.hasUI) {
+          ctx.ui.notify(
+            `Title model fallback: ${failures.join("; ")}; used ${candidate.model.provider}/${candidate.model.id}`,
+            "warning",
+          );
+        }
+        return title;
+      }
+
+      if (failures.length === 1) throw lastError;
+      throw new Error(`title model failed: ${failures.join("; ")}`);
     } catch (error) {
       if (controller.signal.aborted) return undefined;
       throw error;
