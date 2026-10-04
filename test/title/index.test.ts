@@ -203,8 +203,8 @@ describe("title command", () => {
     expect(command!.getArgumentCompletions?.("model act")).toEqual([
       { value: "model active", label: "active", description: "Use the active session model" },
     ]);
-    expect(command!.getArgumentCompletions?.("refresh 4")).toEqual([
-      { value: "refresh 4", label: "4", description: "Refresh every 4 answered turns" },
+    expect(command!.getArgumentCompletions?.("every 4")).toEqual([
+      { value: "every 4", label: "4", description: "Refresh every 4 answered turns" },
     ]);
     await command!.handler("My custom title", ctx);
     await command!.handler("set status", ctx);

@@ -539,13 +539,13 @@ export default function titleExtension(pi: ExtensionAPI) {
   pi.on("agent_settled", (_event, ctx) => evaluateAutomatic(ctx));
 
   pi.registerCommand("title", {
-    description: "[status | on | off | model [provider/model[:thinking]|auto|active] | refresh [turns|off] | regenerate | set <title>] — Set or configure titles",
+    description: "[status | on | off | model [provider/model[:thinking]|auto|active] | every [turns|off] | regenerate | set <title>] — Set or configure titles",
     getArgumentCompletions: (prefix) => {
-      if (/^refresh\s/i.test(prefix)) {
+      if (/^every\s/i.test(prefix)) {
         return completeArguments(prefix, [
-          { value: "refresh 0", label: "0", description: "Title once" },
+          { value: "every 0", label: "0", description: "Title once" },
           ...[1, 2, 4, 8].map((turns) => ({
-            value: `refresh ${turns}`,
+            value: `every ${turns}`,
             label: String(turns),
             description: `Refresh every ${turns} answered turn${turns === 1 ? "" : "s"}`,
           })),
@@ -562,7 +562,7 @@ export default function titleExtension(pi: ExtensionAPI) {
         { value: "on", label: "on", description: "Enable automatic titles" },
         { value: "off", label: "off", description: "Disable automatic titles" },
         { value: "model ", label: "model", description: "Show or select the title model" },
-        { value: "refresh ", label: "refresh", description: "Show or set the refresh interval" },
+        { value: "every ", label: "every", description: "Show or set the refresh interval" },
         { value: "regenerate", label: "regenerate", description: "Generate a replacement title" },
         { value: "set ", label: "set <title>", description: "Set a title matching a subcommand name" },
       ]);
@@ -572,7 +572,7 @@ export default function titleExtension(pi: ExtensionAPI) {
       const [action, ...rest] = input.split(/\s+/).filter(Boolean);
 
       try {
-        const configActions = new Set(["status", "on", "off", "model", "refresh", "regenerate", "set"]);
+        const configActions = new Set(["status", "on", "off", "model", "every", "regenerate", "set"]);
         if (action && !configActions.has(action)) {
           setTitle(ctx, input);
           return;
@@ -622,12 +622,12 @@ export default function titleExtension(pi: ExtensionAPI) {
           return;
         }
 
-        if (action === "refresh") {
+        if (action === "every") {
           const value = rest.join(" ").trim();
           if (value) {
             const turns = value === "off" ? 0 : Number(value);
             if (!/^(\d+|off)$/.test(value) || !Number.isSafeInteger(turns)) {
-              throw new Error("usage: /title refresh <turns|off>");
+              throw new Error("usage: /title every <turns|off>");
             }
             config.refreshTurns = turns;
             await saveConfig(config);

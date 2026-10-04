@@ -727,23 +727,23 @@ describe("refreshing titles", () => {
     expect(h.requests[0]).toContain("assistant: latest answer");
   });
 
-  test("/title refresh shows, saves, and validates the interval", async () => {
+  test("/title every shows, saves, and validates the interval", async () => {
     const dir = configDir();
     const h = harness({ dir });
-    await h.command("refresh");
-    await h.command("refresh 4");
+    await h.command("every");
+    await h.command("every 4");
     expect((await titleConfig.loadConfig()).refreshTurns).toBe(4);
-    await h.command("refresh off");
+    await h.command("every off");
     expect((await titleConfig.loadConfig()).refreshTurns).toBe(0);
-    await h.command("refresh -1");
-    await h.command("refresh 2.5");
+    await h.command("every -1");
+    await h.command("every 2.5");
     expect((await titleConfig.loadConfig()).refreshTurns).toBe(0);
     expect(h.notifications).toEqual([
       { message: "Title refresh: off", level: "info" },
       { message: "Title refresh: every 4 answered turns", level: "info" },
       { message: "Title refresh: off", level: "info" },
-      { message: "usage: /title refresh <turns|off>", level: "error" },
-      { message: "usage: /title refresh <turns|off>", level: "error" },
+      { message: "usage: /title every <turns|off>", level: "error" },
+      { message: "usage: /title every <turns|off>", level: "error" },
     ]);
     expect(h.titles).toEqual([]);
   });
