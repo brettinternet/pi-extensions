@@ -182,7 +182,7 @@ export default function (pi: ExtensionAPI): void {
         scope === "project" ? () => load(root, !isStandard) : undefined),
       { overlay: true, overlayOptions: { anchor: "center", width: "90%", maxHeight: "80%", margin: 1 } },
     );
-    if (selected !== undefined) ctx.ui.setEditorText(selected);
+    if (selected !== undefined) ctx.ui.pasteToEditor(selected);
   };
 
   pi.registerShortcut("ctrl+r", { description: "Search prompt history (Tab: project/global)", handler: open });

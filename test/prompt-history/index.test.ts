@@ -5,7 +5,8 @@ import { join } from "node:path";
 import { loadPrompts, parseSession, type Prompt } from "../../extensions/prompt-history/history.ts";
 import { searchPrompts } from "../../extensions/prompt-history/search.ts";
 import registerPromptHistory, { HistoryPicker } from "../../extensions/prompt-history/index.ts";
-import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
+import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { Editor, type TUI } from "@earendil-works/pi-tui";
 
 const created: string[] = [];
 afterEach(async () => {
@@ -255,6 +256,52 @@ test("loads global history on first Tab without blocking project search", async 
   finish([...prompts, { cwd: "/other", text: "Remote", timestamp: Date.now() }]);
   await new Promise((resolve) => setTimeout(resolve, 0));
   expect(picker.render(80).join("\n")).toContain("Remote");
+});
+
+test("history selection pastes at the cursor and cancellation preserves the draft", async () => {
+  const root = await mkdtemp(join(tmpdir(), "pi-prompt-history-insert-test-"));
+  created.push(root);
+  await mkdir(join(root, "project"));
+  await writeFile(join(root, "project", "session.jsonl"), session("/project"));
+  let open!: (ctx: ExtensionContext) => Promise<void>;
+  registerPromptHistory({
+    registerShortcut: (_key: string, options: { handler: typeof open }) => { open = options.handler; },
+    registerCommand: () => {},
+  } as unknown as ExtensionAPI);
+  const editor = new Editor({ requestRender: () => {} } as TUI, {
+    borderColor: (text) => text,
+    selectList: {} as any,
+  });
+  let submitted = false;
+  editor.onSubmit = () => { submitted = true; };
+  for (const draft of ["", "before after", "before\nafter"]) {
+    for (const selected of ["First prompt\nwith details", undefined]) {
+      editor.setText(draft);
+      // Leave the cursor before "after", or at the beginning of an empty draft.
+      for (let i = 0; i < 5; i++) editor.handleInput("\x1b[D");
+      const cursor = editor.getCursor();
+      let pastes = 0;
+      await open({
+        mode: "tui",
+        cwd: "/project",
+        sessionManager: { getSessionDir: () => join(root, "project") },
+        ui: {
+          getEditorText: () => editor.getExpandedText(),
+          custom: async () => selected,
+          setEditorText: () => { throw new Error("Must not replace the draft"); },
+          pasteToEditor: (text: string) => {
+            pastes++;
+            editor.handleInput(`\x1b[200~${text}\x1b[201~`);
+          },
+        },
+      } as unknown as ExtensionContext);
+      const offset = draft.length ? draft.length - 5 : 0;
+      expect(editor.getExpandedText()).toBe(draft.slice(0, offset) + (selected ?? "") + draft.slice(offset));
+      expect(pastes).toBe(selected === undefined ? 0 : 1);
+      if (selected === undefined) expect(editor.getCursor()).toEqual(cursor);
+      expect(submitted).toBe(false);
+    }
+  }
 });
 
 test("registers Ctrl+R and command scope completions", () => {
