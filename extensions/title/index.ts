@@ -6,9 +6,6 @@ import { cleanTitle, firstCompletedExchange, TITLE_SYSTEM_PROMPT } from "./title
 
 type TitleSource = { user: string; assistant?: string };
 
-// Some providers report cancellation as plain error text instead of an AbortError.
-const TITLE_ABORT_PATTERN = /\bAbortError\b|\b(?:operation|request|fetch|stream|call|prompt)\s+(?:was\s+|is\s+|has been\s+)?(?:aborted|cancell?ed)\b|\b(?:aborted|cancell?ed)\s+(?:by|due to)\s+(?:the\s+)?(?:user|caller|signal|request|client)\b/i;
-
 const AUTOMATIC_MODEL_CANDIDATES = [
   "openai/gpt-5-nano",
   "openrouter/openai/gpt-5-nano",
@@ -336,8 +333,7 @@ export default function titleExtension(pi: ExtensionAPI) {
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
           if (controller.signal.aborted || lifecycle !== expectedLifecycle ||
-              (error instanceof Error && error.name === "AbortError") ||
-              TITLE_ABORT_PATTERN.test(message)) return undefined;
+              (error instanceof Error && error.name === "AbortError")) return undefined;
           if (isStaleContextError(error)) throw error;
           lastError = error;
           failures.push(`${candidate.model.provider}/${candidate.model.id}: ${message}`);

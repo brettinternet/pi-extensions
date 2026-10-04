@@ -155,13 +155,10 @@ describe("title model fallback", () => {
     expect(h.attempts).toEqual([active]);
     expect(h.notifications).toEqual([{ message: "503 unavailable", level: "error" }]);
   });
-  test("cancellation stops the chain, including provider text and partial responses", async () => {
+  test("cancellation stops the chain, including partial responses", async () => {
     for (const response of [
       { ...ok(), stopReason: "aborted" },
       new DOMException("Cancelled", "AbortError"),
-      new Error("The operation was aborted"),
-      failed("The request was cancelled"),
-      failed("Cancelled by the user"),
     ]) {
       const h = harness(configured, [response, ok()]);
       await h.run();
@@ -171,12 +168,14 @@ describe("title model fallback", () => {
       expect(h.notifications.every((notification) => notification.level === "info")).toBe(true);
     }
   });
-  test("model names containing cancellation words still fall back", async () => {
-    const h = harness(configured, [failed("404: model 'cancelled-small' not found"), ok()]);
-    await h.run();
-    expect(h.attempts).toEqual([configured, active]);
-    expect(h.titles).toEqual(["Upload retries"]);
-    h.shutdown();
+  test("provider cancellation text falls back when the title request was not cancelled", async () => {
+    for (const failure of [new Error("The operation was aborted"), failed("The request was cancelled")]) {
+      const h = harness(configured, [failure, ok()]);
+      await h.run();
+      expect(h.attempts).toEqual([configured, active]);
+      expect(h.titles).toEqual(["Upload retries"]);
+      h.shutdown();
+    }
   });
   test("shutdown during a failed request prevents fallback", async () => {
     const h = harness(configured, [async () => { h.shutdown(); return failed("503 unavailable"); }, ok()]);
@@ -186,9 +185,13 @@ describe("title model fallback", () => {
     expect(h.notifications.every((notification) => notification.level === "info")).toBe(true);
   });
   test("stale context and terminal failures do not trigger fallback", async () => {
-    const stale = harness(configured, [async () => { stale.invalidate(); return ok(); }, ok()]);
+    const stale = harness(configured, [async () => {
+      stale.invalidate();
+      throw new Error("This extension ctx is stale after session replacement or reload.");
+    }, ok()]);
     await stale.run();
     expect(stale.attempts).toEqual([configured]);
+    expect(stale.titles).toEqual([]);
     const terminal = harness(configured, [ok(), ok()]);
     terminal.breakTerminal();
     await terminal.run();
