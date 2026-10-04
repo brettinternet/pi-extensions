@@ -543,8 +543,7 @@ export default function titleExtension(pi: ExtensionAPI) {
     getArgumentCompletions: (prefix) => {
       if (/^every\s/i.test(prefix)) {
         return completeArguments(prefix, [
-          { value: "every off", label: "off", description: "Disable periodic retitling" },
-          { value: "every 0", label: "0", description: "Title once" },
+          { value: "every off", label: "off", description: "Title once" },
           ...[1, 2, 4, 8].map((turns) => ({
             value: `every ${turns}`,
             label: String(turns),
