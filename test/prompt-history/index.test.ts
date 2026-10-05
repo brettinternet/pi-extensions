@@ -281,13 +281,26 @@ test("history selection pastes at the cursor and cancellation preserves the draf
       for (let i = 0; i < 5; i++) editor.handleInput("\x1b[D");
       const cursor = editor.getCursor();
       let pastes = 0;
+      let textAtClose: string | undefined;
       await open({
         mode: "tui",
         cwd: "/project",
         sessionManager: { getSessionDir: () => join(root, "project") },
         ui: {
           getEditorText: () => editor.getExpandedText(),
-          custom: async () => selected,
+          custom: async (factory: Parameters<ExtensionContext["ui"]["custom"]>[0]) => {
+            let result: unknown;
+            const picker = await factory({ requestRender: () => {} } as TUI,
+              { fg: (_color: string, value: string) => value } as any, {} as any, (value) => {
+                // Pi can render on nextTick before the awaiting handler resumes.
+                textAtClose = editor.getExpandedText();
+                result = value;
+              });
+            picker.handleInput!("\x03");
+            picker.handleInput!(selected === undefined ? "\x1b" : "First");
+            if (selected !== undefined) picker.handleInput!("\r");
+            return result;
+          },
           setEditorText: () => { throw new Error("Must not replace the draft"); },
           pasteToEditor: (text: string) => {
             pastes++;
@@ -297,6 +310,7 @@ test("history selection pastes at the cursor and cancellation preserves the draf
       } as unknown as ExtensionContext);
       const offset = draft.length ? draft.length - 5 : 0;
       expect(editor.getExpandedText()).toBe(draft.slice(0, offset) + (selected ?? "") + draft.slice(offset));
+      expect(textAtClose).toBe(editor.getExpandedText());
       expect(pastes).toBe(selected === undefined ? 0 : 1);
       if (selected === undefined) expect(editor.getCursor()).toEqual(cursor);
       expect(submitted).toBe(false);

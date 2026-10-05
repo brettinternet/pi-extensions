@@ -1,6 +1,6 @@
 # Prompt History
 
-Press `Ctrl+R` (or run `/prompt-history`) to search prompts from saved Pi sessions. Enter inserts the full prompt at the editor cursor, preserving existing text without sending it.
+Press `Ctrl+R` (or run `/prompt-history`) to search prompts from saved Pi sessions. Enter inserts the full prompt at the editor cursor, preserving existing text without sending it. The insertion appears in the same redraw that closes the picker.
 
 | Key | Action |
 | --- | --- |
