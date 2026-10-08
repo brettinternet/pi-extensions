@@ -1,4 +1,4 @@
-import { afterEach, expect, test } from "bun:test";
+import { afterEach, expect, spyOn, test } from "bun:test";
 import { mkdtemp, mkdir, readFile, stat, utimes, writeFile, unlink, rmdir } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { join } from "node:path";
@@ -163,6 +163,32 @@ test("search ranks exact phrases before separate words and fuzzy matches, then r
   ], "/project", "project", "alpha beta");
   expect(deep[0]?.prompt.timestamp).toBe(1);
   expect(searchPrompts([{ cwd: "/project", text: "İ hello", timestamp: 1 }], "/project", "project", "hello")[0]?.ranges).toEqual([[2, 7]]);
+});
+
+test("picker ages use local calendar days across midnight and daylight-saving changes", () => {
+  const previousTZ = process.env.TZ;
+  process.env.TZ = "America/Los_Angeles";
+  const clock = spyOn(Date, "now");
+  try {
+    for (const [now, timestamp, label] of [
+      ["2026-04-15T07:30:00Z", "2026-04-15T06:30:00Z", "yesterday"],
+      ["2026-04-15T06:30:00Z", "2026-04-14T08:00:00Z", "today"],
+      ["2026-03-09T07:30:00Z", "2026-03-08T08:30:00Z", "yesterday"],
+      ["2026-03-09T07:30:00Z", "2026-03-07T08:30:00Z", "2d"],
+      ["2026-11-02T07:30:00Z", "2026-11-01T07:15:00Z", "today"],
+    ]) {
+      clock.mockReturnValue(Date.parse(now!));
+      const prompts = parseSession(JSON.stringify({ type: "message", timestamp,
+        message: { role: "user", content: "dated prompt" } }));
+      const picker = new HistoryPicker(prompts, "", { requestRender: () => {} },
+        { fg: (_color: string, value: string) => value } as any, () => {}, "", "global");
+      expect(picker.render(80).join("\n")).toContain(`dated prompt  ${label}`);
+    }
+  } finally {
+    clock.mockRestore();
+    if (previousTZ === undefined) delete process.env.TZ;
+    else process.env.TZ = previousTZ;
+  }
 });
 
 test("picker searches, toggles scope, restores complete selection and cancels", () => {

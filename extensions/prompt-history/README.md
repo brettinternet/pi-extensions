@@ -11,7 +11,7 @@ Press `Ctrl+R` (or run `/prompt-history`) to search prompts from saved Pi sessio
 | `Ctrl+C` | Clear the search input without closing history |
 | `Esc` or `Ctrl+R` | Close and keep the original editor text |
 
-An empty query lists newest first. Search ranks exact phrases, then all words, then fuzzy matches, and highlights matches. Global results show each prompt's directory.
+An empty query lists newest first. Search ranks exact phrases, then all words, then fuzzy matches, and highlights matches. Global results show each prompt's directory. Relative ages (`today`, `yesterday`, `2d`, `1w`, `1mo`) use calendar days in your system's local timezone, not elapsed 24-hour periods; weeks and months are approximate.
 
 Pi binds `Ctrl+R` to rename in `/resume`. To avoid the conflict warning, remap it and run `/reload`:
 

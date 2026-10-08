@@ -29,8 +29,13 @@ function highlight(text: string, ranges: Array<[number, number]>, theme: Theme):
 }
 
 function age(timestamp: number): string {
-  const days = Math.max(0, Math.floor((Date.now() - timestamp) / 86_400_000));
+  const now = new Date(Date.now());
+  const then = new Date(timestamp);
+  // Compare local calendar dates on a uniform scale: local days can be 23 or 25 hours.
+  const days = Math.max(0, (Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()) -
+    Date.UTC(then.getFullYear(), then.getMonth(), then.getDate())) / 86_400_000);
   if (days < 1) return "today";
+  if (days === 1) return "yesterday";
   if (days < 7) return `${days}d`;
   if (days < 35) return `${Math.floor(days / 7)}w`;
   return `${Math.floor(days / 30)}mo`;
