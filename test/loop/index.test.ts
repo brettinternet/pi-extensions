@@ -58,11 +58,11 @@ function createHarness(options: {
   delete (globalThis as any)[Symbol.for("@agegr/pi-web/session-liveness/v1")];
   const handlers = new Map<string, (...args: any[]) => any>();
   let command: Parameters<ExtensionAPI["registerCommand"]>[1] | undefined;
-  let tool: Parameters<ExtensionAPI["registerTool"]>[0] | undefined;
+  const tools = new Map<string, Parameters<ExtensionAPI["registerTool"]>[0]>();
   const notifications: string[] = [];
   const widgets: Array<{ key: string; value: unknown }> = [];
   const prompts: string[] = [];
-  const promptOptions: Array<{ expandPromptTemplates?: boolean } | undefined> = [];
+  const promptOptions: Array<{ expandPromptTemplates?: boolean; deliverAs?: "followUp" | "steer" } | undefined> = [];
   const parents: Array<string | undefined> = [];
   const herdrEvents: unknown[] = [];
   const eventListeners = new Map<string, Array<(value: unknown) => void>>();
@@ -146,7 +146,7 @@ function createHarness(options: {
       command = value;
     },
     registerTool: (value: Parameters<ExtensionAPI["registerTool"]>[0]) => {
-      tool = value;
+      tools.set(value.name, value);
     },
     appendEntry: (customType: string, data: unknown) => current.entries.push({ type: "custom", customType, data }),
     setModel: async (model: { provider: string; id: string }) => {
@@ -219,7 +219,8 @@ function createHarness(options: {
   return {
     handlers,
     command: command!,
-    tool: tool!,
+    tool: tools.get("loop_pause")!,
+    resumeTool: tools.get("loop_resume")!,
     context: initialContext,
     get current() {
       return current;
@@ -829,6 +830,52 @@ describe("loop lifecycle", () => {
     }]);
     await harness.settle();
     expect(harness.prompts).toEqual(["perform unattended work"]);
+  });
+
+  test("agent resume preserves the current iteration and rejects duplicate or absent resumes", async () => {
+    const harness = createHarness();
+    const resume = (reason = "User said credentials are fixed; continue") =>
+      (harness.resumeTool.execute as any)("resume", { reason }, undefined, undefined, harness.commandContext());
+    expect((await resume()).details.resumed).toBeFalse();
+    expect(harness.state()).toBeUndefined();
+    await harness.command.handler("3 work", harness.context);
+    await (harness.tool.execute as any)("pause", { reason: "credentials needed" }, undefined, undefined, harness.commandContext());
+    await harness.settle();
+    const session = harness.current;
+    const runId = harness.state()?.runId;
+    harness.agentStart();
+    await expect(resume("  ")).rejects.toThrow("instruction");
+    expect(harness.state()?.status).toBe("paused");
+    expect((await resume()).details.resumed).toBeTrue();
+    expect(harness.current).toBe(session);
+    expect(harness.state()).toMatchObject({ runId, status: "active", currentIteration: 1, remainingBudget: 2 });
+    expect(harness.state()?.pauseReason).toBeUndefined();
+    expect(harness.promptOptions.at(-1)).toEqual({ deliverAs: "followUp" });
+    expect(harness.prompts.at(-1)).toContain("Current loop instructions:\nwork");
+    const promptCount = harness.prompts.length;
+    expect((await resume()).details.resumed).toBeFalse();
+    expect(harness.prompts).toHaveLength(promptCount);
+  });
+
+  test.each([false, true])("agent boundary resume waits for settlement and respects deadline (expired=%s)", async (expired) => {
+    const harness = createHarness();
+    await harness.command.handler(expired ? "for 4h work" : "3 work", harness.context);
+    harness.agentStart();
+    await harness.command.handler("pause", harness.commandContext());
+    await harness.settle();
+    expect(harness.state()).toMatchObject({ status: "paused", phase: "waiting" });
+    if (expired) harness.setState({ endsAt: Date.now() - 1 });
+    const session = harness.current;
+    harness.agentStart();
+    const result = await (harness.resumeTool.execute as any)("resume", { reason: "User asked to continue" }, undefined, undefined, harness.commandContext());
+    expect(result.details.resumed).toBeTrue();
+    expect(harness.current).toBe(session);
+    expect(harness.prompts).toEqual(["work"]);
+    await harness.settle();
+    expect(harness.state()).toMatchObject(expired
+      ? { status: "completed", currentIteration: 1 }
+      : { status: "active", currentIteration: 2, remainingBudget: 1 });
+    expect(harness.prompts).toEqual(expired ? ["work"] : ["work", "work"]);
   });
 
   test("completes an expired timed loop instead of resuming blocked work", async () => {

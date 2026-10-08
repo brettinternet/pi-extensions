@@ -46,12 +46,15 @@ Durations use `ms`, `s`, `m`, `h`, or `d`. Delays range from 1s to 24h; use `off
 | Abort | Loop pauses |
 | `/loop pause` between iterations | Pauses immediately |
 | Agent calls `loop_pause` | Pauses mid-iteration; resume continues that iteration |
+| Agent calls `loop_resume` | Resumes only a paused loop, preserving its iteration and budget; boundary rollover waits for the current turn to settle |
 | Pending `/wait` or `until` watch | Iteration waits for its wake-up turn or cancellation |
 | Paused wait or recurring watch | Iteration waits until resumed or completed |
 | Async subagent workflow or supervisor request | Originating session and iteration stay alive through completion delivery and the parent's result-processing turn |
 | Subagent liveness provider disappears or is unavailable after an async launch | Loop pauses with a reload diagnostic instead of discarding the session |
 
 Use `/loop delay` for a fixed gap, `/wait` for a same-session follow-up, and `until` for a condition that may become true sooner.
+
+The agent can call `loop_resume({ reason: "…" })` after an explicit user instruction (such as “fixed it, continue”) or verified resolution of the recorded blocker. The reason must state that instruction or evidence. This is agent guidance, not an automated verification of the blocker. The tool does not start a new loop, reset a budget, or cancel a pending stop/pause. Expired timed loops complete without starting more work. A paused agent still needs a user message or external wake to call the tool.
 
 ### Async subagents
 

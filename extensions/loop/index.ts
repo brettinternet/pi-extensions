@@ -1305,6 +1305,32 @@ export default function loopExtension(pi: ExtensionAPI): void {
     }
   }
 
+  async function resumeLoop(
+    ctx: ExtensionContext,
+    state: LoopState,
+    advance: (state: LoopState) => void | Promise<void>,
+  ): Promise<void> {
+    const atBoundary = state.phase === "waiting" || (state.endsAt !== undefined && Date.now() >= state.endsAt);
+    const {
+      pauseReason: _pauseReason,
+      pausedAt: _pausedAt,
+      nextActionAt: _nextActionAt,
+      settledAt: _settledAt,
+      ...withoutPause
+    } = state;
+    const resumed: LoopState = {
+      ...withoutPause,
+      status: "active",
+      retryCount: 0,
+      phase: "running",
+    };
+    persist(pi, resumed);
+    renderWidget(ctx, resumed);
+    handledSettlementKey = undefined;
+    if (atBoundary) await advance(resumed);
+    else continueCurrentIteration(ctx, resumed);
+  }
+
   async function handleCommand(args: string, ctx: ExtensionCommandContext): Promise<void> {
     const parsed = parseLoopCommand(args);
 
@@ -1484,28 +1510,7 @@ export default function loopExtension(pi: ExtensionAPI): void {
         await advanceAtBoundary(ctx, state.runId, state.currentIteration, true);
         return;
       }
-      const pausedAtBoundary = state.phase === "waiting";
-      const {
-        pauseReason: _pauseReason,
-        pausedAt: _pausedAt,
-        nextActionAt: _nextActionAt,
-        settledAt: _settledAt,
-        ...withoutPause
-      } = state;
-      const resumed: LoopState = {
-        ...withoutPause,
-        status: "active",
-        retryCount: 0,
-        phase: "running",
-      };
-      persist(pi, resumed);
-      renderWidget(ctx, resumed);
-      handledSettlementKey = undefined;
-      if (pausedAtBoundary) {
-        await advanceAtBoundary(ctx, resumed.runId, resumed.currentIteration);
-      } else {
-        continueCurrentIteration(ctx, resumed);
-      }
+      await resumeLoop(ctx, state, (resumed) => advanceAtBoundary(ctx, resumed.runId, resumed.currentIteration));
       return;
     }
 
@@ -1609,6 +1614,42 @@ export default function loopExtension(pi: ExtensionAPI): void {
     };
     await replaceForIteration(ctx, initial);
   }
+
+  pi.registerTool({
+    name: "loop_resume",
+    label: "Resume Loop",
+    description: "Resume a paused /loop only when the user explicitly asks or you have verified that its recorded blocker is resolved. Supply that instruction or evidence as the reason. Never starts a new loop or resets its budget. Requires an existing turn; does not wake a paused agent on its own.",
+    executionMode: "sequential",
+    parameters: Type.Object({
+      reason: Type.String({
+        minLength: 1,
+        maxLength: 500,
+        description: "Explicit user instruction to resume, or verified evidence that the recorded pause blocker is resolved",
+      }),
+    }),
+    async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
+      const reason = params.reason.trim();
+      if (!reason) throw new Error("A user instruction or verified blocker resolution is required");
+      const state = currentState(ctx);
+      if (!state || state.status !== "paused") {
+        return {
+          content: [{ type: "text", text: "No paused loop can be resumed." }],
+          details: { resumed: false },
+        };
+      }
+      // agent_start ignores paused loops, but this tool is running in an active turn.
+      parentTurnActive = true;
+      await resumeLoop(ctx, state, (resumed) => {
+        // Session replacement is command-only and must wait for this turn to settle.
+        deferBoundary(ctx, resumed);
+      });
+      const resumed = currentState(ctx)?.status === "active";
+      return {
+        content: [{ type: "text", text: resumed ? "Loop resumed; continuation is queued after this turn." : "Loop could not resume; inspect /loop status." }],
+        details: { resumed, reason },
+      };
+    },
+  });
 
   pi.registerTool({
     name: "loop_pause",
