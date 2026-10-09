@@ -1,9 +1,9 @@
 import { describe, expect, test } from "bun:test";
 import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-agent";
 import askUserQuestion from "../../extensions/ask-user-question/index.ts";
-import herdrAgentStateExtension, {
-  registerHerdrAgentState,
-} from "../../extensions/herdr-agent-state/index.ts";
+import agentStateExtension, {
+  registerAgentState,
+} from "../../extensions/agent-state/index.ts";
 
 class EventBus {
   readonly handlers = new Map<string, Set<(value: unknown) => void>>();
@@ -23,6 +23,7 @@ class EventBus {
 function setup(
   sendRequest?: (request: Record<string, unknown>) => Promise<void>,
   now: () => number = () => 1_000,
+  transport: { env?: Record<string, string | undefined>; output?: { isTTY?: boolean; write: (sequence: string) => unknown } } = {},
 ) {
   const events = new EventBus();
   const hooks = new Map<string, (event: unknown, ctx: ExtensionContext) => unknown>();
@@ -40,9 +41,11 @@ function setup(
       getSessionId: () => "session-1",
     },
   } as unknown as ExtensionContext;
-  const bridge = registerHerdrAgentState(pi, {
+  const bridge = registerAgentState(pi, {
     env: { HERDR_ENV: "1", HERDR_SOCKET_PATH: "/tmp/herdr.sock", HERDR_PANE_ID: "pane-1" },
     now,
+    output: { isTTY: false, write: () => {} },
+    ...transport,
     sendRequest: sendRequest ?? (async () => {}),
   });
   return { pi, events, hooks, ctx, bridge };
@@ -62,7 +65,57 @@ async function start(hooks: Map<string, (event: unknown, ctx: ExtensionContext) 
   await hooks.get("session_start")!({}, ctx);
 }
 
-describe("Herdr Pi agent state integration", () => {
+describe("Pi agent state integration", () => {
+  test("reports OSC outside Herdr, sanitizes bounded UTF-8 messages, and clears on shutdown", async () => {
+    const sequences: string[] = [];
+    const requests: Record<string, unknown>[] = [];
+    const { events, hooks, ctx, bridge } = setup(async (request) => { requests.push(request); }, undefined, {
+      env: {}, output: { isTTY: true, write: (sequence) => sequences.push(sequence) },
+    });
+    await start(hooks, ctx);
+    expect(sequences).toEqual(["\x1b]7501;state=idle:app=pi\x1b\\"]);
+    events.emit("herdr:busy", { active: true, label: "a\n\x1b\x07\x7f\x85:=" + "😀".repeat(1000) });
+    const sequence = sequences.at(-1)!;
+    expect(sequence.startsWith("\x1b]7501;state=working:app=pi:msg=")).toBe(true);
+    expect(sequence.endsWith("\x1b\\")).toBe(true);
+    expect(Buffer.byteLength(sequence)).toBeLessThanOrEqual(4096);
+    const encoded = sequence.split(":msg=")[1]!.slice(0, -2);
+    const message = Buffer.from(encoded, "base64");
+    expect(encoded.length).toBeLessThanOrEqual(2732);
+    expect(message.byteLength).toBeLessThanOrEqual(2048);
+    expect(message.toString()).toBe("a:=" + "😀".repeat(511));
+    events.emit("herdr:blocked", { active: true, scope: "root", label: "Approval?" });
+    expect(sequences.at(-1)).toBe("\x1b]7501;state=blocked:app=pi:msg=QXBwcm92YWw/\x1b\\");
+    events.emit("herdr:blocked", { active: false, scope: "root" });
+    expect(sequences.at(-1)).toBe(sequence);
+    events.emit("herdr:busy", { active: false });
+    expect(sequences.at(-1)).toBe("\x1b]7501;state=idle:app=pi\x1b\\");
+    hooks.get("session_shutdown")!({}, ctx);
+    expect(sequences.at(-1)).toBe("\x1b]7501;state=clear:app=pi\x1b\\");
+    const count = sequences.length;
+    hooks.get("session_shutdown")!({}, ctx);
+    events.emit("herdr:busy", { active: true });
+    await bridge.flush();
+    expect(sequences).toHaveLength(count);
+    expect(requests).toEqual([]);
+  });
+
+  test("never emits OSC in non-TUI modes or to redirected stdout", async () => {
+    for (const mode of ["json", "rpc", "print", "tui"] as const) {
+      const sequences: string[] = [];
+      const { events, hooks, ctx, bridge } = setup(undefined, undefined, {
+        output: { isTTY: mode !== "tui", write: (sequence) => sequences.push(sequence) },
+      });
+      const context = { ...ctx, mode } as ExtensionContext;
+      await start(hooks, context);
+      hooks.get("agent_start")!({}, context);
+      events.emit("herdr:busy", { active: true });
+      hooks.get("session_shutdown")!({}, context);
+      await bridge.flush();
+      expect(sequences).toEqual([]);
+    }
+  });
+
   test("restores busy state received before the interactive session starts", async () => {
     const reports: Record<string, unknown>[] = [];
     const { events, hooks, ctx, bridge } = setup(collectStateReports(reports));
@@ -247,7 +300,7 @@ describe("Herdr Pi agent state integration", () => {
     });
   });
 
-  test("does nothing outside Herdr or outside the interactive TUI", async () => {
+  test("does nothing without a transport or outside the interactive TUI", async () => {
     const reports: Record<string, unknown>[] = [];
     const headless = setup(collectStateReports(reports));
     const headlessCtx = { ...headless.ctx, mode: "json" } as ExtensionContext;
@@ -260,7 +313,7 @@ describe("Herdr Pi agent state integration", () => {
       events: new EventBus(),
       on: () => {},
     } as unknown as ExtensionAPI;
-    herdrAgentStateExtension(inert);
+    agentStateExtension(inert);
     inert.events.emit("herdr:busy", { active: true });
   });
 

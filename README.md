@@ -8,7 +8,7 @@ Extensions and a theme for the [Pi coding agent](https://pi.dev).
 | [Colima Sandbox](extensions/colima-sandbox/README.md) | Runs Pi's file and shell tools in a disposable container |
 | [Copy Prompt](extensions/copy-prompt/README.md) | `Alt+C` copies the editor text |
 | [Footer](extensions/footer/README.md) | Shows context, cache, cost, and Git status |
-| [Herdr Agent State](extensions/herdr-agent-state/README.md) | Keeps Herdr panes busy while async subagents run |
+| [Agent State](extensions/agent-state/README.md) | Reports Pi and async subagent activity via OSC 7501 and Herdr |
 | [Live Codex](extensions/live-codex/README.md) | Voice mode backed by OpenAI Codex |
 | [Loop](extensions/loop/README.md) | `/loop 10 <prompt>` runs a prompt in fresh sessions |
 | [Progress](extensions/progress/README.md) | Shows agent activity below the editor |

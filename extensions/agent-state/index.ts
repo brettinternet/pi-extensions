@@ -14,10 +14,27 @@ type HerdrEnvironment = Record<string, string | undefined>;
 type StateBridgeOptions = {
   env?: HerdrEnvironment;
   now?: () => number;
+  output?: { isTTY?: boolean; write: (sequence: string) => unknown };
   sendRequest?: (request: Record<string, unknown>) => Promise<void>;
 };
 
 const SOURCE = "herdr:pi";
+
+function statusSequence(state: AgentState | "clear", message?: string): string {
+  let text = "";
+  let bytes = 0;
+  // Truncate on code point boundaries and exclude controls forbidden by OSC 7501.
+  for (const character of message ?? "") {
+    const point = character.codePointAt(0)!;
+    if (point <= 0x1f || (point >= 0x7f && point <= 0x9f)) continue;
+    const size = Buffer.byteLength(character);
+    if (bytes + size > 2048) break;
+    text += character;
+    bytes += size;
+  }
+  const msg = text ? `:msg=${Buffer.from(text).toString("base64")}` : "";
+  return `\x1b]7501;state=${state}:app=pi${msg}\x1b\\`;
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -83,14 +100,16 @@ async function sendRequest(request: Record<string, unknown>, env: HerdrEnvironme
   await sendRequestAttempt(request, env, 1500);
 }
 
-export function registerHerdrAgentState(
+export function registerAgentState(
   pi: Pick<ExtensionAPI, "on" | "events">,
   options: StateBridgeOptions = {},
 ): { flush: () => Promise<void> } {
   const env = options.env ?? process.env;
   const paneId = env.HERDR_PANE_ID;
-  const enabled = env.HERDR_ENV === "1" && !!env.HERDR_SOCKET_PATH && !!paneId;
-  if (!enabled) return { flush: async () => {} };
+  const herdrEnabled = env.HERDR_ENV === "1" && !!env.HERDR_SOCKET_PATH && !!paneId;
+  const output = options.output ?? process.stdout;
+  const oscEnabled = output.isTTY === true;
+  if (!herdrEnabled && !oscEnabled) return { flush: async () => {} };
 
   const now = options.now ?? Date.now;
   const send = options.sendRequest ?? ((request) => sendRequest(request, env));
@@ -152,8 +171,11 @@ export function registerHerdrAgentState(
     if (!force && next.state === lastState && next.message === lastMessage) return;
     lastState = next.state;
     lastMessage = next.message;
-    pending = { ...next, seq: nextSeq() };
-    void drain();
+    if (oscEnabled) output.write(statusSequence(next.state, next.message));
+    if (herdrEnabled) {
+      pending = { ...next, seq: nextSeq() };
+      void drain();
+    }
   };
 
   const updateSession = (ctx: ExtensionContext): void => {
@@ -161,7 +183,7 @@ export function registerHerdrAgentState(
   };
 
   const reportSession = async (reason?: string): Promise<void> => {
-    if (Object.keys(sessionRef).length === 0) return;
+    if (!herdrEnabled || Object.keys(sessionRef).length === 0) return;
     await send({
       id: `${SOURCE}:session:${Date.now()}:${Math.random().toString(36).slice(2)}`,
       method: "pane.report_agent_session",
@@ -252,6 +274,7 @@ export function registerHerdrAgentState(
   });
 
   pi.on("session_shutdown", () => {
+    if (rootSession && oscEnabled) output.write(statusSequence("clear"));
     rootSession = false;
     pending = undefined;
     busyCount = 0;
@@ -262,6 +285,6 @@ export function registerHerdrAgentState(
   return { flush: async () => { while (draining || pending) await (draining ?? drain()); } };
 }
 
-export default function herdrAgentStateExtension(pi: ExtensionAPI): void {
-  registerHerdrAgentState(pi);
+export default function agentStateExtension(pi: ExtensionAPI): void {
+  registerAgentState(pi);
 }
