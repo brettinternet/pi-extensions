@@ -1,21 +1,22 @@
 {
-  "name": "pi-title",
-  "version": "0.1.8",
-  "description": "Automatic session titles for the Pi coding agent",
+  "name": "pi-agent-state",
+  "version": "0.1.0",
+  "description": "Reports Pi and async subagent activity via OSC 7501 and Herdr",
   "type": "module",
   "license": "MIT",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/brettinternet/pi-extensions.git",
-    "directory": "extensions/title"
+    "directory": "extensions/agent-state"
   },
-  "homepage": "https://github.com/brettinternet/pi-extensions#title",
+  "homepage": "https://github.com/brettinternet/pi-extensions/tree/main/extensions/agent-state",
   "bugs": {
     "url": "https://github.com/brettinternet/pi-extensions/issues"
   },
   "files": [
-    "*.ts",
-    "README.md"
+    "index.ts",
+    "README.md",
+    "LICENSE"
   ],
   "publishConfig": {
     "access": "public"
@@ -23,13 +24,12 @@
   "keywords": [
     "pi-package",
     "pi-extension",
-    "session-title"
+    "agent-state",
+    "osc-7501",
+    "herdr"
   ],
   "engines": {
     "node": ">=22.19.0"
-  },
-  "dependencies": {
-    "jsonc-parser": "^3.3.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": "*"

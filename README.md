@@ -39,6 +39,7 @@ One published extension:
 pi install npm:@brettinternet/pi-copy-prompt
 pi install npm:@brettinternet/pi-loop
 pi install npm:@brettinternet/pi-progress
+pi install npm:pi-agent-state
 pi install npm:pi-live-codex
 pi install npm:pi-title
 pi install npm:pi-until

@@ -1,4 +1,4 @@
-# Agent State
+# pi-agent-state
 
 Reports Pi and async subagent activity using the terminal-neutral [Program Status Protocol (OSC 7501, revision 0.3)](https://www.superlogical.com/rex/docs/build/program-status). Also retains Herdr socket reporting and session identity for restore.
 
@@ -11,6 +11,14 @@ Reports Pi and async subagent activity using the terminal-neutral [Program Statu
 OSC reports address the root record with `app=pi`. Messages are control-free, UTF-8 base64, limited to 2048 decoded bytes. Each report replaces the previous status; shutdown clears it. Settled interactive turns report `idle`, not `done`, because Pi is waiting for the next instruction.
 
 Reports are emitted only in interactive TUI mode with TTY stdout. No capability query is needed: the protocol permits unsolicited reports, and unsupported terminals ignore them. JSON, RPC, print, and redirected output never receive escape sequences.
+
+## Install
+
+```sh
+pi install npm:pi-agent-state
+```
+
+If you already load Agent State through the full `pi-extensions` package or a local path, disable that copy before installing this package to avoid duplicate reports.
 
 ## Herdr compatibility
 
