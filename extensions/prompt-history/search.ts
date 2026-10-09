@@ -57,21 +57,24 @@ export function searchPrompts(prompts: readonly Prompt[], cwd: string, scope: "p
       continue;
     }
 
-    // A short, bounded subsequence finds typos without matching arbitrary letters
+    // A short, bounded subsequence finds omitted letters without matching arbitrary letters
     // scattered through a very long prompt.
     const characters = [...needle.replace(/\s/g, "")];
     if (characters.length < 3) continue;
-    const ranges: Array<[number, number]> = [];
-    let next = 0;
-    for (const character of characters) {
-      const position = text.indexOf(character, next);
-      if (position < 0 || (ranges.length > 0 && position - next > 8)) break;
-      ranges.push([position, position + character.length]);
-      next = position + character.length;
-    }
-    if (ranges.length === characters.length && next - ranges[0]![0] <= characters.length * 3) {
-      matches.push({ prompt, preview, ranges: originalRanges(preview, ranges),
-        score: -(next - ranges[0]![0]) - ranges[0]![0], tier: 1 });
+    for (let start = text.indexOf(characters[0]!); start >= 0; start = text.indexOf(characters[0]!, start + 1)) {
+      const ranges: Array<[number, number]> = [];
+      let next = start;
+      for (const character of characters) {
+        const position = text.indexOf(character, next);
+        if (position < 0 || (ranges.length > 0 && position - next > 8)) break;
+        ranges.push([position, position + character.length]);
+        next = position + character.length;
+      }
+      if (ranges.length === characters.length && next - start <= characters.length * 3) {
+        matches.push({ prompt, preview, ranges: originalRanges(preview, ranges),
+          score: -next, tier: 1 });
+        break;
+      }
     }
   }
   return matches.sort((a, b) => b.tier - a.tier || b.score - a.score || b.prompt.timestamp - a.prompt.timestamp);

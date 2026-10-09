@@ -165,6 +165,16 @@ test("search ranks exact phrases before separate words and fuzzy matches, then r
   expect(searchPrompts([{ cwd: "/project", text: "İ hello", timestamp: 1 }], "/project", "project", "hello")[0]?.ranges).toEqual([[2, 7]]);
 });
 
+test("fuzzy search retries later starts when earlier letters exceed gap or span limits", () => {
+  for (const text of ["Run the checks, then review", "re12345678v12345678w review"]) {
+    const matches = searchPrompts([{ cwd: "/project", text, timestamp: 1 }], "/project", "project", "REVW");
+    expect(matches).toHaveLength(1);
+    expect(matches[0]?.tier).toBe(1);
+    const start = text.indexOf("review");
+    expect(matches[0]?.ranges).toEqual([[start, start + 1], [start + 1, start + 2], [start + 2, start + 3], [start + 5, start + 6]]);
+  }
+});
+
 test("picker ages use local calendar days across midnight and daylight-saving changes", () => {
   const previousTZ = process.env.TZ;
   process.env.TZ = "America/Los_Angeles";
