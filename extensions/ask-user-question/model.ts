@@ -26,6 +26,18 @@ export const outputSchema = Type.Object({
 export type Result = Static<typeof outputSchema>;
 export interface Draft { selected: Set<number>; custom: string; note: string }
 
+export const snapshotSchema = Type.Object({
+  drafts: Type.Array(Type.Object({ selected: Type.Array(Type.Integer({ minimum: 0 })), custom: Type.String(), note: Type.String() })),
+  tab: Type.Integer({ minimum: 0 }),
+  cursor: Type.Integer({ minimum: 0 }),
+  editing: Type.Optional(Type.Union([Type.Literal("custom"), Type.Literal("note")])),
+  text: Type.String(),
+});
+export type Snapshot = Static<typeof snapshotSchema>;
+export const newSnapshot = (questions: Question[]): Snapshot => ({
+  drafts: questions.map(() => ({ selected: [], custom: "", note: "" })), tab: 0, cursor: 0, text: "",
+});
+
 export function validate(questions: Question[]): void {
   for (const q of questions) {
     if (!q.question.trim() || !q.header.trim()) throw new Error("Question and header must not be blank.");

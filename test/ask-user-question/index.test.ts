@@ -1,5 +1,10 @@
 import { describe, expect, test } from "bun:test";
-import { initTheme, type KeybindingsManager, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
+import { spawn } from "node:child_process";
+import { createInterface } from "node:readline";
+import { mkdtempSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { initTheme, SessionManager, type KeybindingsManager, type ExtensionAPI, type ExtensionContext, type Theme } from "@earendil-works/pi-coding-agent";
 import { Container, CURSOR_MARKER, Text, visibleWidth, type TUI, type TuiMouseEvent } from "@earendil-works/pi-tui";
 // Exercise the installed host's actual fixed-dock layout, not an overlay mock.
 import { createChatViewport } from "../../node_modules/@earendil-works/pi-coding-agent/dist/modes/interactive/chat-viewport.js";
@@ -7,6 +12,7 @@ import { renderLayoutFrame } from "../../node_modules/@earendil-works/pi-tui/dis
 import { Value } from "typebox/value";
 import extension, { askNative } from "../../extensions/ask-user-question/index.js";
 import { Questionnaire } from "../../extensions/ask-user-question/dialog.js";
+import { readState, STATE_ENTRY } from "../../extensions/ask-user-question/state.js";
 import { parameters, summary, validate, type Question, type Result } from "../../extensions/ask-user-question/model.js";
 
 const question: Question = { header: "Store", question: "Which store?", options: [
@@ -23,6 +29,154 @@ const enter = "\r", down = "\x1b[B", tab = "\t", escape = "\x1b";
 const wheel = (wheelDelta: number, overrides: Partial<TuiMouseEvent> = {}): TuiMouseEvent => ({
   type: "wheel", button: "none", x: 5, y: 5, screenX: 5, screenY: 5, width: 80, height: 20,
   shift: false, alt: false, ctrl: false, wheelDelta, ...overrides,
+});
+
+function sessionHarness(manager: SessionManager, persistMessages = true) {
+  let tool: any;
+  let ui: Questionnaire | undefined;
+  const events = new Map<string, (event: unknown, ctx: ExtensionContext) => Promise<void>>();
+  const sent: any[] = [];
+  const ctx = { hasUI: true, mode: "tui", sessionManager: manager, ui: {
+    custom: (factory: any) => new Promise((done) => {
+      ui = factory({ requestRender() {}, terminal: { rows: 24 } }, theme, undefined, done);
+    }),
+  } } as unknown as ExtensionContext;
+  extension({
+    registerTool: (value: unknown) => { tool = value; },
+    on: (name: string, handler: any) => events.set(name, handler),
+    appendEntry: (type: string, data: unknown) => manager.appendCustomEntry(type, data),
+    sendMessage: (message: any, options: unknown) => {
+      sent.push({ message, options });
+      if (persistMessages) manager.appendCustomMessageEntry(message.customType, message.content, message.display, message.details);
+    },
+    events: { emit() {} },
+    getActiveTools: () => ["ask_user_question"], setActiveTools() {},
+  } as unknown as ExtensionAPI);
+  return { ctx, sent, get ui() { return ui!; },
+    start: () => events.get("session_start")!({}, ctx),
+    shutdown: () => events.get("session_shutdown")!({ reason: "quit" }, ctx),
+    execute: (questions = [question], signal?: AbortSignal) => tool.execute("call-1", { questions }, signal, undefined, ctx),
+  };
+}
+
+function savedSession() {
+  const manager = SessionManager.create(process.cwd(), mkdtempSync(join(tmpdir(), "ask-question-test-")));
+  manager.appendMessage({ role: "user", content: "Ask me", timestamp: Date.now() });
+  return manager;
+}
+
+describe("restart recovery", () => {
+  test("actual RPC startup consumes recovery responses before initialization finishes", async () => {
+    const manager = savedSession();
+    const first = sessionHarness(manager);
+    const original = first.execute([question, { ...question, question: "Second store?", header: "Second" }]).catch(() => undefined);
+    await first.shutdown(); await original;
+    const child = spawn("node", ["node_modules/@earendil-works/pi-coding-agent/dist/cli.js", "--mode", "rpc",
+      "--offline", "--no-extensions", "--no-skills", "--no-themes", "--no-prompt-templates", "--no-context-files",
+      "--extension", join(process.cwd(), "extensions/ask-user-question/index.ts"), "--session", manager.getSessionFile()!],
+    { env: { ...process.env, PI_CODING_AGENT_DIR: mkdtempSync(join(tmpdir(), "ask-question-agent-")), PI_TELEMETRY: "0" }, stdio: "pipe" });
+    let stderr = "";
+    child.stderr.on("data", (data) => { stderr += data; });
+    const exited = new Promise((resolve) => child.once("exit", resolve));
+    const lines = createInterface({ input: child.stdout });
+    const titles: string[] = [];
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await new Promise<void>((resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`RPC recovery timed out: ${stderr}`)), 8000);
+        child.once("error", reject);
+        child.once("exit", (code) => reject(new Error(`RPC exited (${code}): ${stderr}`)));
+        lines.on("line", (line) => {
+          const event = JSON.parse(line);
+          if (event.type !== "extension_ui_request" || event.method !== "select") return;
+          titles.push(event.title);
+          if (titles.length === 1) child.stdin.write(JSON.stringify({ type: "extension_ui_response", id: event.id, value: event.options[0] }) + "\n");
+          else resolve(); // Leave the second question open; never invoke a model.
+        });
+      });
+      expect(titles).toEqual(["Which store?", "Second store?"]);
+      expect(readState(SessionManager.open(manager.getSessionFile()!).getBranch())?.snapshot.drafts[0]?.selected).toEqual([0]);
+    } finally {
+      clearTimeout(timer); lines.close(); child.kill("SIGTERM"); await exited;
+    }
+  }, 15000);
+  test("disk restart restores choices, notes, tab and unfinished editor text, then delivers once", async () => {
+    const manager = savedSession();
+    const first = sessionHarness(manager);
+    const original = first.execute([question, { ...question, header: "Second" }]).catch(() => undefined);
+    first.ui.handleInput(" "); first.ui.handleInput("n"); first.ui.handleInput("Keep backups"); first.ui.handleInput(enter);
+    first.ui.handleInput(tab); first.ui.handleInput(down); first.ui.handleInput(down); first.ui.handleInput(enter);
+    first.ui.handleInput("unfinished");
+    // Open only what reached disk, without a shutdown checkpoint (hard crash).
+    const reopened = SessionManager.open(manager.getSessionFile()!);
+    await first.shutdown(); await original;
+    const second = sessionHarness(reopened);
+    const recovering = second.start();
+    expect(second.ui.render(80).join("\n")).toContain("unfinished");
+    second.ui.handleInput(" answer"); second.ui.handleInput(enter);
+    expect(second.ui.render(80).join("\n")).toContain("Keep backups");
+    second.ui.handleInput(enter); await recovering;
+    expect(second.sent).toHaveLength(1);
+    expect(second.sent[0].message.details.result.answers).toMatchObject([
+      { selected: ["SQLite"], note: "Keep backups" }, { selected: [], custom: "unfinished answer" },
+    ]);
+    expect(second.sent[0].options.triggerTurn).toBe(true);
+    const third = sessionHarness(SessionManager.open(reopened.getSessionFile()!));
+    await third.start(); expect(third.ui).toBeUndefined(); expect(third.sent).toHaveLength(0);
+  });
+
+  test("abort before shutdown keeps draft; explicit Escape is terminal even without a tool receipt", async () => {
+    const manager = savedSession();
+    const first = sessionHarness(manager);
+    const controller = new AbortController();
+    const running = first.execute([question], controller.signal).catch((error: Error) => error.message);
+    first.ui.handleInput(" "); first.ui.handleInput("n"); first.ui.handleInput("unfinished note");
+    controller.abort();
+    expect(await running).toContain("Draft saved");
+    await first.shutdown();
+    const second = sessionHarness(SessionManager.open(manager.getSessionFile()!));
+    const recovering = second.start();
+    expect(second.ui.render(80).join("\n")).toContain("unfinished note");
+    second.ui.handleInput(escape); second.ui.handleInput(escape); await recovering;
+    expect(second.sent[0].message.details.result).toEqual({ cancelled: true, answers: [] });
+    expect(readState(second.ctx.sessionManager.getBranch())).toBeUndefined();
+  });
+
+  test("completed result survives a crash before its tool receipt, but a recorded receipt prevents replay", async () => {
+    const manager = savedSession();
+    const first = sessionHarness(manager);
+    const running = first.execute(); first.ui.handleInput(enter);
+    const response = await running;
+    const beforeReceipt = SessionManager.open(manager.getSessionFile()!);
+    manager.appendMessage({ role: "toolResult", toolCallId: "call-1", toolName: "ask_user_question",
+      content: response.content, details: response.details, isError: false, timestamp: Date.now() });
+    const recorded = sessionHarness(SessionManager.open(manager.getSessionFile()!));
+    await recorded.start(); expect(recorded.ui).toBeUndefined(); expect(recorded.sent).toHaveLength(0);
+    // Use an in-memory copy of the crash point to avoid concurrent file writers.
+    const recovery = sessionHarness(SessionManager.inMemory(process.cwd(), undefined, [beforeReceipt.getHeader()!, ...beforeReceipt.getEntries()]));
+    await recovery.start(); expect(recovery.ui).toBeUndefined();
+    expect(recovery.sent[0].message.details.result).toEqual(response.details);
+    const delayed = sessionHarness(SessionManager.inMemory(process.cwd(), undefined,
+      [beforeReceipt.getHeader()!, ...beforeReceipt.getEntries()]), false);
+    await delayed.start(); await delayed.start();
+    expect(delayed.sent).toHaveLength(1);
+    expect(readState(delayed.ctx.sessionManager.getBranch())?.result).toEqual(response.details);
+  });
+
+  test("recovery follows the selected branch and rejects corrupt snapshots without falling back", async () => {
+    const manager = savedSession();
+    const root = manager.getLeafId()!;
+    const first = sessionHarness(manager);
+    const running = first.execute().catch(() => undefined);
+    first.ui.handleInput(" "); await first.shutdown(); await running;
+    const pending = manager.getLeafId()!;
+    manager.branch(root);
+    const other = sessionHarness(manager); await other.start(); expect(other.ui).toBeUndefined();
+    manager.branch(pending);
+    const state = readState(manager.getBranch())!;
+    manager.appendCustomEntry(STATE_ENTRY, { ...state, snapshot: { ...state.snapshot, tab: 99 } });
+    const corrupt = sessionHarness(manager); await corrupt.start(); expect(corrupt.ui).toBeUndefined();
+  });
 });
 
 describe("schema", () => {
@@ -588,6 +742,32 @@ test("RPC supports multiple selections and custom text", async () => {
   const value = await askNative([{ ...question, multiSelect: true }], native(["SQLite", "Postgres", "Type something", "Continue"]));
   expect(value.answers[0]).toMatchObject({ selected: ["SQLite", "Postgres"], custom: "custom" });
 });
+test("RPC asks unanswered questions even when a TUI draft was left on Review", async () => {
+  const questions = [question, { ...question, header: "Second" }];
+  const { ui } = dialog(questions);
+  ui.handleInput(tab); ui.handleInput(tab);
+  const value = await askNative(questions, native(["SQLite", "Postgres"]), undefined, ui.snapshot());
+  expect(value.answers.map((answer) => answer.selected)).toEqual([["SQLite"], ["Postgres"]]);
+  ui.dispose();
+});
+test("RPC restart resumes accepted input without repeating completed questions", async () => {
+  const questions = [question, { ...question, header: "Second", multiSelect: true }];
+  const controller = new AbortController();
+  const ctx = native(["SQLite", "Type something"]);
+  let snapshot: import("../../extensions/ask-user-question/model.js").Snapshot | undefined;
+  const select = ctx.ui.select;
+  let count = 0;
+  ctx.ui.select = async (title, options, opts) => {
+    if (++count === 3) { controller.abort(); return undefined; }
+    return select(title, options, opts);
+  };
+  await askNative(questions, ctx, controller.signal, undefined, (value) => { snapshot = structuredClone(value); });
+  const resumed = native(["Postgres", "Continue"]);
+  const value = await askNative(questions, resumed, undefined, snapshot);
+  expect(value.answers).toMatchObject([
+    { selected: ["SQLite"], custom: "" }, { selected: ["Postgres"], custom: "custom" },
+  ]);
+});
 test("RPC can withdraw custom text while retaining selected options", async () => {
   const ctx = native(["SQLite", "Type something", "Type something", "Continue"]);
   const inputs = ["Redis", ""];
@@ -617,7 +797,7 @@ test("registers sequential model-only tool and removes it without UI", async () 
   let tool: any;
   let start: any;
   let active = ["read", "ask_user_question"];
-  extension({ registerTool: (value: unknown) => { tool = value; }, on: (_event: string, handler: unknown) => { start = handler; },
+  extension({ registerTool: (value: unknown) => { tool = value; }, on: (event: string, handler: unknown) => { if (event === "session_start") start = handler; }, appendEntry() {},
     getActiveTools: () => active, setActiveTools: (value: string[]) => { active = value; },
   } as unknown as ExtensionAPI);
   expect(tool.exposure).toBe("model-only"); expect(tool.executionMode).toBe("sequential");

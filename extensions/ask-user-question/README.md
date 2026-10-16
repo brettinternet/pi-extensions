@@ -54,6 +54,16 @@ After submission, the compact transcript receipt shows each full question above 
 
 Notes are not answers; an optional `note` string appears in results and compact transcript receipts. RPC mode uses native select, input, and final confirm dialogs, without a note editor. The tool is disabled in print and JSON modes. See [UPSTREAM-REVIEW.md](./UPSTREAM-REVIEW.md) for deferred features.
 
+## Restart recovery
+
+Pending questionnaires are saved in the session and reopen when you resume it, reload extensions, or return to that branch. TUI recovery preserves choices, saved notes, the current question and unfinished custom-answer or note text. Layout details such as collapse and scroll position reset. RPC recovery preserves accepted choices and input; native hosts do not expose unfinished typing.
+
+Escape cancellation and submitted answers are recorded so completed questionnaires do not reopen. Process shutdown or tool abort preserves the draft instead of cancelling it. Recovery requires a saved session and an interactive TUI or RPC host; noninteractive sessions leave pending questions untouched.
+
+The original tool execution cannot survive a process restart. After recovery, the extension sends a visible message containing the questions and answers (or cancellation), then requests an agent continuation. Saved submission records and transcript receipts prevent replay after delivery, including a restart between submission and the original tool result being recorded.
+
+Drafts, including unfinished text, are stored as session entries on each changed input event. They are excluded from model context until submission, but remain in the session file even after cancellation; do not enter secrets you do not want saved there.
+
 ## Development
 
 ```sh

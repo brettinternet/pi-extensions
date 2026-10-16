@@ -1,6 +1,6 @@
 import { getMarkdownTheme, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, Editor, Key, Markdown, isKeyRepeat, matchesKey, truncateToWidth, wrapTextWithAnsi, type Focusable, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { answered, newDrafts, result, select, summary, type Question, type Result } from "./model.js";
+import { answered, newDrafts, result, select, summary, type Question, type Result, type Snapshot } from "./model.js";
 
 /** One interaction owns its drafts, editor, and cancellation listener. */
 export class Questionnaire implements Focusable {
@@ -20,8 +20,14 @@ export class Questionnaire implements Focusable {
 
   constructor(private readonly questions: Question[], private readonly tui: TUI, private readonly theme: Theme,
     private readonly done: (value: Result) => void, private readonly signal?: AbortSignal,
-    private readonly keys?: Pick<KeybindingsManager, "matches">) {
-    this.drafts = newDrafts(questions);
+    private readonly keys?: Pick<KeybindingsManager, "matches">,
+    initial?: Snapshot, private readonly onChange?: (snapshot: Snapshot) => void) {
+    this.drafts = initial ? initial.drafts.map((draft) => ({ ...draft, selected: new Set(draft.selected) })) : newDrafts(questions);
+    if (initial) {
+      this.tab = initial.tab;
+      this.cursor = initial.cursor;
+      this.editing = initial.editing;
+    }
     this.editor = new Editor(tui, {
       borderColor: (s) => theme.fg("accent", s),
       selectList: { selectedPrefix: (s) => theme.fg("accent", s), selectedText: (s) => theme.fg("accent", s),
@@ -39,6 +45,7 @@ export class Questionnaire implements Focusable {
         else this.moveTab(1);
       } else this.tui.requestRender();
     };
+    if (initial) this.editor.setText(initial.text);
     signal?.addEventListener("abort", this.abort, { once: true });
     if (signal?.aborted) queueMicrotask(this.abort);
   }
@@ -75,8 +82,21 @@ export class Questionnaire implements Focusable {
     return { handled: true };
   }
 
+  snapshot(): Snapshot {
+    return {
+      drafts: this.drafts.map((draft) => ({ ...draft, selected: [...draft.selected] })),
+      tab: this.tab, cursor: this.cursor, editing: this.editing,
+      text: this.editing ? this.editor.getExpandedText() : "",
+    };
+  }
+
   handleInput(data: string): void {
     if (this.finished) return;
+    try { this.input(data); }
+    finally { if (!this.finished) this.onChange?.(this.snapshot()); }
+  }
+
+  private input(data: string): void {
     if (matchesKey(data, Key.escape)) {
       if (this.editing && !this.collapsed) {
         if (this.editing === "custom") this.saveCustom(this.editor.getExpandedText());
