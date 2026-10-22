@@ -1,6 +1,8 @@
 import { getMarkdownTheme, type KeybindingsManager, type Theme } from "@earendil-works/pi-coding-agent";
 import { CURSOR_MARKER, Editor, Key, Markdown, isKeyRepeat, matchesKey, truncateToWidth, wrapTextWithAnsi, type Focusable, type TUI, type TuiMouseEvent, type TuiMouseEventResult } from "@earendil-works/pi-tui";
-import { answered, newDrafts, result, select, summary, type Question, type Result, type Snapshot } from "./model.js";
+import { answered, chat, newDrafts, result, rowCount, select, type Question, type Result, type Snapshot } from "./model.js";
+
+const DIGITS = ["1", "2", "3", "4", "5", "6", "7", "8", "9"] as const;
 
 /** One interaction owns its drafts, editor, and cancellation listener. */
 export class Questionnaire implements Focusable {
@@ -16,7 +18,7 @@ export class Questionnaire implements Focusable {
   private readonly drafts;
   private readonly editor: Editor;
   private readonly previews = new Map<string, Markdown>();
-  private readonly abort = () => this.finish(true);
+  private readonly abort = () => this.finish("cancel");
 
   constructor(private readonly questions: Question[], private readonly tui: TUI, private readonly theme: Theme,
     private readonly done: (value: Result) => void, private readonly signal?: AbortSignal,
@@ -40,10 +42,9 @@ export class Questionnaire implements Focusable {
       else this.saveCustom(text);
       this.editing = undefined;
       this.followCursor = true;
-      if (mode === "custom" && draft.custom) {
-        if (questions.length === 1) this.finish(false);
-        else this.moveTab(1);
-      } else this.tui.requestRender();
+      // Multi-select custom text is one more checked answer; Submit confirms the set.
+      if (mode === "custom" && draft.custom && !questions[this.tab]!.multiSelect) this.next();
+      else this.tui.requestRender();
     };
     if (initial) this.editor.setText(initial.text);
     signal?.addEventListener("abort", this.abort, { once: true });
@@ -57,11 +58,36 @@ export class Questionnaire implements Focusable {
     draft.custom = text.trim();
     if (draft.custom && !this.questions[this.tab]!.multiSelect) draft.selected.clear();
   }
-  private finish(cancelled: boolean): void {
+  private finish(kind: "submit" | "cancel" | "chat"): void {
     if (this.finished) return;
     this.finished = true;
     this.dispose();
-    this.done(result(this.questions, this.drafts, cancelled));
+    this.done(kind === "chat" ? chat() : result(this.questions, this.drafts, kind === "cancel"));
+  }
+  private next(): void {
+    if (this.questions.length === 1) this.finish("submit");
+    else this.moveTab(1);
+  }
+  /** Enter (confirm) or Space on the focused row. */
+  private activate(confirm: boolean): void {
+    if (this.tab === this.questions.length) {
+      if (!confirm) return;
+      if (this.cursor === 1) this.finish("cancel");
+      else if (this.drafts.every(answered)) this.finish("submit");
+      return;
+    }
+    const q = this.questions[this.tab]!;
+    const draft = this.drafts[this.tab]!;
+    if (this.cursor < q.options.length) {
+      select(q, draft, this.cursor);
+      if (confirm && !q.multiSelect) this.next();
+    } else if (!confirm) return;
+    else if (this.cursor === q.options.length) {
+      this.editing = "custom";
+      this.followCursor = true;
+      this.editor.setText(draft.custom);
+    } else if (this.cursor === rowCount(q) - 1) this.finish("chat");
+    else if (answered(draft)) this.next();
   }
   private moveTab(delta: number): void {
     if (this.questions.length === 1) return;
@@ -103,7 +129,7 @@ export class Questionnaire implements Focusable {
         this.editing = undefined;
         this.followCursor = true;
         this.tui.requestRender();
-      } else this.finish(true);
+      } else this.finish("cancel");
       return;
     }
     if (matchesKey(data, Key.ctrl("]"))) {
@@ -123,6 +149,7 @@ export class Questionnaire implements Focusable {
       this.tui.requestRender();
       return;
     }
+    if (matchesKey(data, "c") && this.tab < this.questions.length) { this.finish("chat"); return; }
     if (matchesKey(data, "n") && this.tab < this.questions.length) {
       this.editing = "note";
       this.editor.setText(this.drafts[this.tab]!.note);
@@ -141,41 +168,25 @@ export class Questionnaire implements Focusable {
     } else {
       const up = (this.keys?.matches(data, "tui.select.up") ?? matchesKey(data, Key.up)) || matchesKey(data, Key.ctrl("p")) || matchesKey(data, "k");
       const down = (this.keys?.matches(data, "tui.select.down") ?? matchesKey(data, Key.down)) || matchesKey(data, Key.ctrl("n")) || matchesKey(data, "j");
-      if (this.tab === this.questions.length) {
-        if (matchesKey(data, Key.enter) && !isKeyRepeat(data) && this.drafts.every(answered)) this.finish(false);
-        else if (up || down) { this.offset += up ? -1 : 1; this.followCursor = false; }
-        this.tui.requestRender();
-        return;
-      }
-      const q = this.questions[this.tab]!;
-      const last = q.options.length;
+      const q = this.questions[this.tab];
+      const rows = rowCount(q);
+      // Digits pick numbered rows: options and Type something., or Submit/Cancel on Review.
+      const digit = DIGITS.findIndex((key) => matchesKey(data, key));
       if (up || down) {
-        this.cursor = (this.cursor + (up ? -1 : 1) + last + 1) % (last + 1);
+        this.cursor = (this.cursor + (up ? -1 : 1) + rows) % rows;
         this.offset = 0;
         this.followCursor = true;
+      } else if (digit >= 0 && digit < (q ? q.options.length + 1 : rows)) {
+        this.cursor = digit;
+        this.followCursor = true;
+        this.activate(true);
       } else if (matchesKey(data, Key.enter) || matchesKey(data, Key.space)) {
         if (isKeyRepeat(data)) return;
-        const draft = this.drafts[this.tab]!;
-        const confirm = matchesKey(data, Key.enter);
-        const submitSingle = this.questions.length === 1 && confirm;
-        if (this.cursor < q.options.length) {
-          if (confirm && q.multiSelect) {
-            if (submitSingle || !answered(draft)) draft.selected.add(this.cursor);
-          } else select(q, draft, this.cursor);
-          if (submitSingle) { this.finish(false); return; }
-          if (confirm) { this.moveTab(1); return; }
-          this.offset = 0;
-          this.followCursor = true;
-        } else if (matchesKey(data, Key.enter) && !isKeyRepeat(data)) {
-          if (this.cursor === q.options.length) {
-            this.editing = "custom";
-            this.followCursor = true;
-            this.editor.setText(draft.custom);
-          }
-        }
+        this.followCursor = true;
+        this.activate(matchesKey(data, Key.enter));
       }
     }
-    this.tui.requestRender();
+    if (!this.finished) this.tui.requestRender();
   }
 
   private renderPreview(text: string, width: number): string[] {
@@ -201,7 +212,8 @@ export class Questionnaire implements Focusable {
     }).join(" ");
     if (this.questions.length > 1) heading += " " + (reviewing
       ? theme.bg("selectedBg", theme.fg("text", " Review ")) : theme.fg("muted", " Review "));
-    const height = Math.max(1, Math.min(16, Math.floor(this.tui.terminal.rows * 0.6)) - 2);
+    // Chrome: tab heading, a blank spacer, and the help line.
+    const height = Math.max(1, Math.min(16, Math.floor(this.tui.terminal.rows * 0.6)) - 3);
     const hasPreviews = !reviewing && !this.editing && q.options.some((option) => !!option.preview);
     const sideBySide = hasPreviews && width >= 100;
     const listWidth = sideBySide ? Math.floor(width * 0.4) : width;
@@ -212,7 +224,14 @@ export class Questionnaire implements Focusable {
     let lines: string[] = [];
     const add = (text: string) => lines.push(...wrapTextWithAnsi(text, listWidth));
     add(theme.fg("text", theme.bold(reviewing ? "Review your answers" : q.question)));
+    lines.push("");
     let anchor = 0;
+    const row = (i: number, text: string) => {
+      if (i === this.cursor) anchor = lines.length;
+      add(`${i === this.cursor ? theme.fg("accent", "❯ ") : "  "}${text}`);
+    };
+    const label = (text: string, active: boolean, color: "success" | "text" | "dim" = "text") =>
+      theme.fg(active && color === "text" ? "accent" : color, active ? theme.bold(text) : text);
     const renderEditor = () => {
       this.editor.focused = this.focused;
       lines.push(...this.editor.render(width));
@@ -220,30 +239,41 @@ export class Questionnaire implements Focusable {
       anchor = cursorLine < 0 ? Math.max(0, lines.length - 1) : cursorLine;
     };
     if (reviewing) {
-      add(theme.fg("text", summary(result(this.questions, this.drafts, false))));
+      result(this.questions, this.drafts, false).answers.forEach((answer, i) => {
+        add(`${theme.fg("muted", "●")} ${theme.fg("text", answer.question)}`);
+        add(answered(this.drafts[i]!) ? theme.fg("success", `  → ${[...answer.selected, ...(answer.custom ? [answer.custom] : [])].join(", ")}`)
+          : theme.fg("warning", "  → Unanswered"));
+        if (answer.note) add(theme.fg("muted", `    Note: ${answer.note}`));
+      });
+      lines.push("");
       const ready = this.drafts.every(answered);
-      if (!ready) add(theme.fg("dim", `Unanswered: ${this.questions.filter((_, i) => !answered(this.drafts[i]!)).map((question) => question.header).join(", ")}`));
-      add(theme.fg(ready ? "accent" : "dim", `${ready ? "❯ " : "  "}Submit answers`));
+      row(0, `${theme.fg("muted", "1.")} ${label("Submit answers", this.cursor === 0, ready ? "text" : "dim")}`);
+      row(1, `${theme.fg("muted", "2.")} ${label("Cancel", this.cursor === 1)}`);
     } else if (this.editing === "note") {
       add(theme.fg("muted", "Note (Enter saves; Esc discards changes):"));
       renderEditor();
     } else {
-      const labels = [...q.options.map((o) => o.label), "Type something."];
-      labels.forEach((label, i) => {
-        const active = i === this.cursor;
-        if (active) anchor = lines.length;
+      // Descriptions align under labels: pointer, "1. ", and a multi-select box.
+      const indent = " ".repeat(q.multiSelect ? 9 : 5);
+      const detail = (text: string) => lines.push(...wrapTextWithAnsi(text, Math.max(1, listWidth - indent.length))
+        .map((line) => theme.fg("muted", indent + line)));
+      [...q.options.map((o) => o.label), "Type something."].forEach((text, i) => {
         const checked = i < q.options.length ? draft.selected.has(i) : !!draft.custom;
-        const marker = q.multiSelect ? (checked ? "[✔]" : "[ ]") : (checked ? "●" : "○");
-        const pointer = active ? theme.fg("accent", "❯ ") : "  ";
-        const styledLabel = active ? theme.fg("accent", theme.bold(label)) : theme.fg("text", label);
-        add(`${pointer}${theme.fg(checked ? "accent" : "muted", marker)} ${styledLabel}`);
+        const box = q.multiSelect ? theme.fg(checked ? "success" : "muted", checked ? "[✓] " : "[ ] ") : "";
+        const tick = checked && !q.multiSelect ? theme.fg("success", " ✓") : "";
+        row(i, `${theme.fg("muted", `${i + 1}.`)} ${box}${label(text, i === this.cursor, checked ? "success" : "text")}${tick}`);
         if (i === q.options.length && this.editing === "custom") renderEditor();
         else if (this.editing !== "custom") {
-          if (q.options[i]) add(theme.fg("muted", `    ${q.options[i]!.description}`));
-          else if (draft.custom) add(theme.fg("muted", `    ${draft.custom}`));
+          if (q.options[i]) detail(q.options[i]!.description);
+          else if (draft.custom) detail(draft.custom);
         }
       });
-      if (draft.note) add(theme.fg("muted", `Note: ${draft.note}`));
+      if (q.multiSelect) row(q.options.length + 1, `   ${label("Submit", this.cursor === q.options.length + 1, answered(draft) ? "text" : "dim")}`);
+      if (draft.note) detail(`Note: ${draft.note}`);
+      if (this.editing !== "custom") {
+        add(theme.fg("borderMuted", "─".repeat(listWidth)));
+        row(rowCount(q) - 1, `${theme.fg("muted", "c.")} ${label("Chat about this", this.cursor === rowCount(q) - 1)}`);
+      }
       // Reserve the largest visible preview footprint even on options without one.
       // Keep the column width too, so descriptions do not rewrap on focus changes.
       if (sideBySide) {
@@ -262,12 +292,13 @@ export class Questionnaire implements Focusable {
     }
     this.maxOffset = Math.max(0, lines.length - height);
     this.offset = Math.max(0, Math.min(this.offset, this.maxOffset));
-    const help = reviewing ? "Enter submit · ↑↓/j/k scroll · Tab/⇧Tab/Ctrl+h/l/b/f edit · Ctrl+] hide · Esc cancel"
-      : this.editing ? `Enter ${this.editing === "custom" ? (this.questions.length === 1 ? "submit" : "next") : "save"} · Shift+Enter newline · Ctrl+] hide · Esc back`
-      : this.questions.length === 1 ? "↑↓/j/k move · Space select · Enter submit · n note · Ctrl+] hide · Esc cancel"
-      : "↑↓/j/k move · Space select · Enter next · Tab/Ctrl+h/l/b/f tabs · n note · Ctrl+] hide · Esc cancel";
+    const tabs = this.questions.length > 1;
+    const advance = tabs ? "next" : "submit";
+    const help = reviewing ? "Enter select · Tab edit · Esc cancel"
+      : this.editing ? `Enter ${this.editing === "custom" && !q.multiSelect ? advance : "save"} · Shift+Enter newline · Esc back`
+      : `Enter ${q.multiSelect ? "toggle" : advance} · ${tabs ? "Tab switch · " : ""}n note · Ctrl+] hide · Esc cancel`;
     const scroll = lines.length > height ? `${this.offset + 1}–${Math.min(this.offset + height, lines.length)}/${lines.length} · Alt+PgUp/PgDn scroll · ` : "";
-    return [truncateToWidth(heading, width), ...lines.slice(this.offset, this.offset + height),
+    return [truncateToWidth(heading, width), "", ...lines.slice(this.offset, this.offset + height),
       theme.fg("dim", truncateToWidth(`${scroll}${help}`, width)),
     ].map((line) => truncateToWidth(line, width));
   }

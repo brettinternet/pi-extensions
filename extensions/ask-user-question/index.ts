@@ -2,8 +2,10 @@ import type { ExtensionAPI, ExtensionContext } from "@earendil-works/pi-coding-a
 import { Text } from "@earendil-works/pi-tui";
 import { Value } from "typebox/value";
 import { Questionnaire } from "./dialog.js";
-import { answered, newSnapshot, outputSchema, parameters, result, select, summary, validate, type Question, type Result, type Snapshot } from "./model.js";
+import { answered, chat, newSnapshot, outputSchema, parameters, result, select, summary, validate, type Question, type Result, type Snapshot } from "./model.js";
 import { readState, RECOVERY_MESSAGE, STATE_ENTRY, type QuestionState } from "./state.js";
+
+const CHAT_LABEL = "Chat about this";
 
 export async function askNative(questions: Question[], ctx: ExtensionContext, signal?: AbortSignal,
   initial = newSnapshot(questions), onChange?: (snapshot: Snapshot) => void): Promise<Result> {
@@ -20,8 +22,10 @@ export async function askNative(questions: Question[], ctx: ExtensionContext, si
       const options = q.options.map((o, i) => `${draft.selected.has(i) ? "[✓] " : ""}${i + 1}. ${o.label} — ${o.description}${o.preview ? `\n${o.preview}` : ""}`);
       options.push("Type something.");
       if (q.multiSelect && answered(draft)) options.push("Continue");
+      options.push(CHAT_LABEL);
       const choice = await ctx.ui.select(q.question, options, { signal });
       if (signal?.aborted || choice === undefined) return cancel();
+      if (choice === CHAT_LABEL) return chat();
       const selected = options.indexOf(choice);
       if (selected < 0) throw new Error("Host returned an unknown option.");
       if (selected < q.options.length) select(q, draft, selected);
@@ -96,7 +100,7 @@ export default function askUserQuestion(pi: ExtensionAPI): void {
       pi.sendMessage({ customType: RECOVERY_MESSAGE, display: true,
         content: `Recovered ask_user_question (${state.toolCallId}) after interruption.\n${state.questions.map((q) => `${q.header}: ${q.question}`).join("\n")}\n\n${summary(value)}`,
         details: { toolCallId: state.toolCallId, result: value },
-      }, { triggerTurn: true, deliverAs: "followUp" });
+      }, { triggerTurn: !value.chat, deliverAs: "followUp" });
     } finally { recovering = false; }
   }
 
@@ -128,7 +132,7 @@ export default function askUserQuestion(pi: ExtensionAPI): void {
         return new Text(theme.fg(context.isError ? "error" : "toolOutput", fullText), 0, 0);
       }
       const value = response.details;
-      const text = value.cancelled ? "Cancelled — no answers submitted" : value.answers.map((answer) => {
+      const text = value.chat ? "Chose to chat about this" : value.cancelled ? "Cancelled — no answers submitted" : value.answers.map((answer) => {
         const selected = answer.selected.map((label) => label.replace(/\s*\(Recommended\)\s*$/i, ""));
         return `${answer.question}\n  ${answer.header}: ${[...selected, ...(answer.custom ? [answer.custom] : []), ...(answer.note ? [`Note: ${answer.note}`] : [])].join("; ")}`;
       }).join("\n\n");
@@ -143,7 +147,8 @@ export default function askUserQuestion(pi: ExtensionAPI): void {
       persist(state);
       const value = await show(state, ctx, signal);
       if (!value) throw new Error("Questionnaire interrupted. Draft saved; resume this session to answer it.");
-      return { content: [{ type: "text", text: summary(value) }], details: value, structuredContent: value };
+      // Chat hands the prompt back to the user instead of letting the model continue.
+      return { content: [{ type: "text", text: summary(value) }], details: value, structuredContent: value, ...(value.chat ? { terminate: true } : {}) };
     },
   });
   pi.on("session_start", async (_event, ctx) => {

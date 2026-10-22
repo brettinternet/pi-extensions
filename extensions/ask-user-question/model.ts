@@ -15,6 +15,8 @@ export const parameters = Type.Object({
 export type Question = Static<typeof parameters>["questions"][number];
 export const outputSchema = Type.Object({
   cancelled: Type.Boolean(),
+  /** The user chose to discuss the questions instead of answering; implies cancelled. */
+  chat: Type.Optional(Type.Literal(true)),
   answers: Type.Array(Type.Object({
     question: Type.String(),
     header: Type.String(),
@@ -53,6 +55,9 @@ export function validate(questions: Question[]): void {
   }
 }
 
+/** Focusable rows: options, Type something., Submit (multi-select only), Chat about this. Review has Submit and Cancel. */
+export const rowCount = (q: Question | undefined): number => q ? q.options.length + (q.multiSelect ? 3 : 2) : 2;
+export const chat = (): Result => ({ cancelled: true, chat: true, answers: [] });
 export const newDrafts = (questions: Question[]): Draft[] => questions.map(() => ({ selected: new Set<number>(), custom: "", note: "" }));
 export const answered = (draft: Draft): boolean => draft.selected.size > 0 || !!draft.custom.trim();
 export function select(q: Question, draft: Draft, index: number): void {
@@ -73,6 +78,7 @@ export function result(questions: Question[], drafts: Draft[], cancelled: boolea
   })) };
 }
 export function summary(value: Result): string {
+  if (value.chat) return "The user wants to discuss these questions before answering. Do not assume answers; wait for their next message.";
   return value.cancelled ? "User cancelled the questionnaire. No answers were submitted." : value.answers.map((a) =>
     `${a.header}: ${[...a.selected, ...(a.custom ? [`User wrote: ${a.custom}`] : []), ...(a.note ? [`Note: ${a.note}`] : [])].join("; ")}`,
   ).join("\n");

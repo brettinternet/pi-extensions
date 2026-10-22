@@ -1,7 +1,7 @@
 import type { SessionEntry } from "@earendil-works/pi-coding-agent";
 import { Type, type Static } from "typebox";
 import { Value } from "typebox/value";
-import { outputSchema, parameters, snapshotSchema, validate } from "./model.js";
+import { outputSchema, parameters, rowCount, snapshotSchema, validate } from "./model.js";
 
 export const STATE_ENTRY = "ask-user-question-state";
 export const RECOVERY_MESSAGE = "ask-user-question-recovered";
@@ -26,7 +26,7 @@ export function readState(entries: readonly SessionEntry[]): QuestionState | und
       const { questions, snapshot } = candidate;
       try { validate(questions); } catch { continue; }
       if (snapshot.drafts.length !== questions.length || snapshot.tab > (questions.length > 1 ? questions.length : 0) ||
-        snapshot.cursor > (questions[snapshot.tab]?.options.length ?? 0) ||
+        snapshot.cursor >= rowCount(questions[snapshot.tab]) ||
         (snapshot.editing && snapshot.tab >= questions.length) ||
         snapshot.drafts.some((draft, i) => draft.selected.some((index) => index >= questions[i]!.options.length))) continue;
       state = candidate;
