@@ -394,7 +394,7 @@ test("cancellation questions do not abort foreground work", async () => {
   await harness.session.stop();
 });
 
-test("typed note is attached and mirrored exactly once", async () => {
+test("shared text reaches voice immediately without work and accompanies the next request once", async () => {
   const harness = createHarness();
   await harness.session.start();
   const note = "  preserve this\n\tconst value = 1;\n";
@@ -403,6 +403,24 @@ test("typed note is attached and mirrored exactly once", async () => {
     name: "screenshot.png",
     content: { type: "image", data: "image-data", mimeType: "image/png" },
   }]);
+
+  await flush();
+  assert.equal(harness.sentToAgent.length, 0);
+  const sharedText = harness.transport().sent.filter((message) =>
+    message.type === "session.context.append" &&
+    contextText(message).startsWith("User-shared text"),
+  );
+  assert.equal(sharedText.length, 1);
+  assert.equal(sharedText[0]?.type === "session.context.append" && sharedText[0].channel, "commentary");
+  assert.equal(contextText(sharedText[0]!).endsWith(note), true);
+  assert.deepEqual(harness.userTranscripts.at(-1), { text: note, finalized: true });
+  const sharedImages = harness.transport().sent.filter((message) =>
+    message.type === "session.context.append" &&
+    contextText(message).startsWith("User-shared images"),
+  );
+  assert.equal(sharedImages.length, 1);
+  assert.match(contextText(sharedImages[0]!), /screenshot\.png/);
+  assert.equal(sharedImages[0]?.type === "session.context.append" && sharedImages[0].channel, "commentary");
 
   harness.transport().emit(delegation("with-note", "Run the checks"));
   await flush();
@@ -413,14 +431,6 @@ test("typed note is attached and mirrored exactly once", async () => {
     { type: "text", text: note },
     { type: "image", data: "image-data", mimeType: "image/png" },
   ]);
-  const mirrored = harness.transport().sent.filter((message) =>
-    message.type === "delegation.context.append" &&
-    message.delegation_item_id === "with-note" &&
-    contextText(message) === note &&
-    message.channel === "commentary",
-  );
-  assert.equal(mirrored.length, 1);
-
   harness.session.handleAgentSettled();
   await flush();
   harness.transport().emit(delegation("without-note", "Run it again"));
@@ -431,9 +441,30 @@ test("typed note is attached and mirrored exactly once", async () => {
   const second = harness.sentToAgent[1] as { content: unknown[] };
   assert.deepEqual(second.content, [{ type: "text", text: "Run it again" }]);
   assert.equal(harness.transport().sent.filter((message) =>
-    message.type === "delegation.context.append" &&
-    contextText(message) === note,
+    contextText(message).includes(note),
   ).length, 1);
+  await harness.session.stop();
+});
+
+test("shared text waits for connection and survives sharing while voice is paused", async () => {
+  const connection = deferred();
+  const harness = createHarness(connection.promise);
+  const starting = harness.session.start();
+  harness.session.stageTypedNote("connection error details");
+  assert.equal(harness.transport().sent.length, 0);
+  connection.resolve();
+  await starting;
+  await flush();
+  assert.match(harness.transport().sent.map(contextText).join(""), /connection error details/);
+  assert.equal(harness.sentToAgent.length, 0);
+
+  await harness.session.pause();
+  harness.session.stageTypedNote("additional error details while paused");
+  await harness.session.resume();
+  await flush();
+  assert.match(harness.transport().sent.map(contextText).join(""), /additional error details while paused/);
+  assert.equal(harness.sentToAgent.length, 0);
+  assert.equal(harness.session.takePendingTypedNote(), "connection error details\nadditional error details while paused");
   await harness.session.stop();
 });
 
@@ -538,6 +569,11 @@ test("typed notes are bounded without normalizing their content", async () => {
   await harness.session.start();
   const note = `  ${"x".repeat(MAX_TYPED_NOTE_CHARS)}\ntruncated`;
   harness.session.stageTypedNote(note);
+  await flush();
+  const shared = harness.transport().sent.filter((message) => message.type === "session.context.append");
+  assert.equal(shared.every((message) => message.channel === "commentary"), true);
+  assert.equal(shared.map(contextText).join(""), `User-shared text (reference only; await spoken instructions):\n\n${note.slice(0, MAX_TYPED_NOTE_CHARS)}`);
+  assert.equal(harness.sentToAgent.length, 0);
   harness.transport().emit(delegation("bounded-note", "Use the bounded note"));
   await flush();
 

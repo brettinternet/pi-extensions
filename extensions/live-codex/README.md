@@ -19,9 +19,11 @@ Requires Node 22.19+ and a microphone.
 | `Ctrl+L` | Toggle live mode |
 | `Esc` | End voice mode |
 | `Space` (empty editor) | Mute or resume |
-| Type, then `Enter` | Send a text note |
+| Type or paste, then `Enter` | Share text with voice without starting work |
 
-Drop images into the session to share them.
+Shared text appears in the live transcript and reaches voice immediately as silent reference context. Then describe what you want aloud; the next backend request includes the text. Enter alone does not request analysis or approve an action.
+
+Drop image files into the session to attach them to the next backend request. Voice receives the filenames, not the image contents; it can discuss the images after the backend returns its findings. Dropping images does not start work. Clipboard image paste is not supported by the live editor.
 
 Requests made while one is running are queued, with status updates and cancellation. Voice also tracks background work such as subagents, can cancel it, and can answer confirmation requests from other extensions.
 
