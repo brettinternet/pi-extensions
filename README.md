@@ -17,7 +17,6 @@ Extensions and a theme for the [Pi coding agent](https://pi.dev).
 | [Title](extensions/title/README.md) | Generates session titles |
 | [Until](extensions/until/README.md) | Watches shell conditions and schedules follow-ups |
 | [Wait](extensions/wait/README.md) | `/wait 10m <prompt>` sends a prompt later |
-| [Workbench](extensions/workbench/README.md) | Opens Neovim, LazyGit, and jobs in Herdr panes |
 
 Every command completes arguments with `Tab`, including subcommands, voices, and models. Thinking levels complete after `:`.
 

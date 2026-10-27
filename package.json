@@ -57,7 +57,6 @@
       "./extensions/lsp/index.ts",
       "./extensions/title/index.ts",
       "./extensions/footer/index.ts",
-      "./extensions/workbench/index.ts",
       "./extensions/agent-state/index.ts",
       "./extensions/until/index.ts"
     ],
