@@ -14,7 +14,7 @@ test("real fullscreen input routes questionnaire scrolling separately from conve
   const terminal: Terminal = {
     columns: 80, rows: 24, kittyProtocolActive: false,
     start(onInput) { input = onInput; }, stop() {}, async drainInput() {}, write() {},
-    moveBy() {}, hideCursor() {}, showCursor() {}, clearLine() {}, clearFromCursor() {}, clearScreen() {}, setTitle() {}, setProgress() {},
+    moveBy() {}, hideCursor() {}, showCursor() {}, clearLine() {}, clearFromCursor() {}, clearScreen() {}, setTitle() {}, setProgress() {}, setProgramStatus() {},
   };
   const screen = new TestScreen(terminal, false, undefined, { mouse: true, wheelScrollLines: 3 });
   const ui = new Questionnaire([{

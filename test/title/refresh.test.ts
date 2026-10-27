@@ -151,7 +151,7 @@ function harness(options: HarnessOptions) {
     /** A user message plus the request event that follows it. */
     prompt: async (text: string) => {
       branch.push({ type: "message", message: { role: "user", content: text } });
-      await handlers.get("before_agent_start")!({ type: "before_agent_start", prompt: text }, ctx);
+      await handlers.get("before_agent_start")!({ type: "before_agent_start", messageType: "user", prompt: text }, ctx);
       await flush();
     },
     /** A later user message, without the request event. */

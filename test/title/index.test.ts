@@ -296,7 +296,7 @@ describe("automatic title generation", () => {
         ui: { notify: () => { throw new Error("old session must not be notified"); } },
       } as unknown as ExtensionCommandContext;
       titleExtension(pi);
-      handlers.get("before_agent_start")!({ prompt: "Old session request" }, ctx);
+      handlers.get("before_agent_start")!({ messageType: "user", prompt: "Old session request" }, ctx);
       await started;
       stale = true;
       resolveCompletion({ content: [{ type: "text", text: "Old session title" }], stopReason: "stop" });
@@ -368,7 +368,7 @@ describe("automatic title generation", () => {
 
       titleExtension(pi);
       const result = handlers.get("before_agent_start")!(
-        { prompt: "Implement background titles" },
+        { messageType: "user", prompt: "Implement background titles" },
         ctx,
       );
 

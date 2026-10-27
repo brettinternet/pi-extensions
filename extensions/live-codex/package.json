@@ -35,7 +35,7 @@
     "node": ">=22.19.0"
   },
   "dependencies": {
-    "@oh-my-pi/pi-natives": "18.4.9",
+    "@oh-my-pi/pi-natives": "18.13.2",
     "ws": "8.22.0"
   },
   "peerDependencies": {

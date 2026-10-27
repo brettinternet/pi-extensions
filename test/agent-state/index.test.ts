@@ -232,7 +232,7 @@ describe("Pi agent state integration", () => {
       const reports: Record<string, unknown>[] = [];
       const { pi, hooks, ctx, bridge } = setup(collectStateReports(reports));
       let tool: any;
-      askUserQuestion({ ...pi, on: () => () => {}, registerTool: (value) => { tool = value; } });
+      askUserQuestion({ ...pi, on: () => () => {}, appendEntry: () => {}, registerTool: (value) => { tool = value; } });
       await start(hooks, ctx);
       hooks.get("agent_start")!({}, ctx);
       const controller = new AbortController();
@@ -261,6 +261,7 @@ describe("Pi agent state integration", () => {
           finish({ cancelled: outcome !== "submit", answers: [] });
         }
         if (outcome === "error") await expect(execution).rejects.toThrow("UI failed");
+        else if (outcome === "abort") await expect(execution).rejects.toThrow("interrupted");
         else await execution;
         await bridge.flush();
       }

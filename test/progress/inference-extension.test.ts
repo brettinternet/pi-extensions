@@ -63,7 +63,7 @@ function inferenceEntries(run: ReturnType<typeof harness>): Array<{ type: string
 }
 
 function settleMeaningful(run: ReturnType<typeof harness>, prompt = "Implement inference"): void {
-  run.handlers.get("before_agent_start")!({ prompt }, run.ctx);
+  run.handlers.get("before_agent_start")!({ messageType: "user", prompt }, run.ctx);
   run.handlers.get("message_end")!({ message: { role: "assistant", content: "Implemented changes" } }, run.ctx);
   run.handlers.get("agent_settled")!({}, run.ctx);
 }
@@ -112,7 +112,7 @@ describe("progress inference lifecycle", () => {
         stopReason: "stop",
       })]);
       run.handlers.get("session_start")!({}, run.ctx);
-      run.handlers.get("before_agent_start")!({ prompt: "Active work" }, run.ctx);
+      run.handlers.get("before_agent_start")!({ messageType: "user", prompt: "Active work" }, run.ctx);
       completeEdit(run, "edit-1", "src/a.ts");
       completeEdit(run, "edit-2", "src/b.ts");
 
@@ -143,7 +143,7 @@ describe("progress inference lifecycle", () => {
     try {
       const run = harness([first, second]);
       run.handlers.get("session_start")!({}, run.ctx);
-      run.handlers.get("before_agent_start")!({ prompt: "Active work" }, run.ctx);
+      run.handlers.get("before_agent_start")!({ messageType: "user", prompt: "Active work" }, run.ctx);
       completeEdit(run, "edit-1", "src/a.ts");
       await Bun.sleep(650);
       expect(run.calls).toBe(1);

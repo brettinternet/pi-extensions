@@ -202,7 +202,7 @@ describe("progress extension", () => {
       now.mockReturnValue(3_601_000);
       expect(latestLines(widgets)).toEqual([]);
 
-      handlers.get("before_agent_start")!({ prompt: "Start" }, ctx);
+      handlers.get("before_agent_start")!({ messageType: "user", prompt: "Start" }, ctx);
       await flushRender();
       expect(latestLines(widgets)).toEqual(["progress <1m · ● thinking"]);
     } finally {
@@ -216,7 +216,7 @@ describe("progress extension", () => {
     const { handlers, widgets, entries, ctx } = setup();
     try {
       handlers.get("session_start")!({}, ctx);
-      handlers.get("before_agent_start")!({ prompt: "First" }, ctx);
+      handlers.get("before_agent_start")!({ messageType: "user", prompt: "First" }, ctx);
       now.mockReturnValue(30_000);
       handlers.get("ui_prompt_start")!({}, ctx);
       now.mockReturnValue(90_000);
@@ -234,7 +234,7 @@ describe("progress extension", () => {
       now.mockReturnValue(420_000);
       expect(latestLines(widgets)).toEqual(["progress 1m · ✓ settled"]);
 
-      handlers.get("before_agent_start")!({ prompt: "Second" }, ctx);
+      handlers.get("before_agent_start")!({ messageType: "user", prompt: "Second" }, ctx);
       now.mockReturnValue(480_000);
       await flushRender();
       expect(latestLines(widgets)).toEqual(["progress 2m · ● thinking"]);

@@ -522,7 +522,7 @@ export default function titleExtension(pi: ExtensionAPI) {
     deferTerminalTitle(ctx);
   });
 
-  pi.on("before_agent_start", (event, ctx) => evaluateAutomatic(ctx, event.prompt));
+  pi.on("before_agent_start", (event, ctx) => evaluateAutomatic(ctx, event.messageType === "user" ? event.prompt : undefined));
 
   pi.on("session_tree", (_event, ctx) => {
     // The active branch changed, so the cadence is rebased on the branch that is now

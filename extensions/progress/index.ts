@@ -433,7 +433,7 @@ export default function progressExtension(pi: ExtensionAPI): void {
     const previous = state.semantic();
     activeInferenceCount = 0;
     state.beginRun();
-    digest.begin(event.prompt ?? "", previous);
+    digest.begin(event.messageType === "user" ? event.prompt : "", previous);
     scheduleRender(ctx);
   });
 
