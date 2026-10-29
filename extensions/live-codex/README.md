@@ -12,6 +12,7 @@ Requires Node 22.19+ and a microphone.
 /login openai-codex
 /live            start voice mode
 /live <voice>    start with a voice
+/live-relay      share this machine's audio over SSH (start, stop, status)
 ```
 
 | Key | Action |
@@ -27,7 +28,7 @@ Drop image files into the session to attach them to the next backend request. Vo
 
 Requests made while one is running are queued, with status updates and cancellation. Voice also tracks background work such as subagents, can cancel it, and can answer confirmation requests from other extensions.
 
-Only one Pi session owns the microphone at a time. Starting voice in another session pauses the first; it keeps its transcript and drafts, and its work keeps running.
+Only one Pi session owns the microphone at a time. Starting voice in another session asks to move it, then pauses the first; it keeps its transcript and drafts, and its work keeps running. Resuming restores the conversation and any results that arrived while paused, and voice stays quiet until you speak.
 
 ## Over SSH
 
