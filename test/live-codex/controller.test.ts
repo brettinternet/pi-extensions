@@ -454,7 +454,7 @@ test("shared text waits for connection and survives sharing while voice is pause
   harness.session.stageTypedNote("additional error details while paused");
   await harness.session.resume();
   await flush();
-  assert.match(harness.transport().sent.map(contextText).join(""), /additional error details while paused/);
+  assert.match(harness.transport().options.instructions, /additional error details while paused/);
   assert.equal(harness.sentToAgent.length, 0);
   assert.equal(harness.session.takePendingTypedNote(), "connection error details\nadditional error details while paused");
   await harness.session.stop();
@@ -627,10 +627,14 @@ test("pause closes audio and resume reconnects with transcript continuity", asyn
 
   assert.equal(harness.session.isPaused(), false);
   assert.notEqual(harness.transport(), firstTransport);
-  assert.ok(harness.transport().sent.some((message) =>
-    message.type === "session.context.append" &&
-    contextText(message).includes("Recent voice transcript")
-  ));
+  assert.match(
+    harness.transport().options.instructions,
+    /Earlier conversation:\nUser: Remember this request\nAssistant: I will remember it/,
+  );
+  assert.equal(
+    harness.transport().sent.some((message) => message.type === "session.context.append"),
+    false,
+  );
   assert.equal(harness.phases.at(-1), "listening");
   await harness.session.stop();
 });
@@ -666,10 +670,7 @@ test("work updates accumulated after a failed resume reach the retry", async () 
   await flush();
 
   assert.deepEqual(harness.pendingUpdates, [true, false]);
-  const resumedContext = harness.transport().sent
-    .filter((message) => message.type === "session.context.append")
-    .map(contextText)
-    .join("");
+  const resumedContext = harness.transport().options.instructions;
   assert.match(resumedContext, /before-failure/);
   assert.match(resumedContext, /after-failure/);
   await harness.session.stop();
