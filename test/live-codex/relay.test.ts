@@ -83,7 +83,7 @@ test("relays one session's media and refuses a concurrent session", async () => 
   const first = clientCallbacks();
   const client = await connectVoiceRelay(first.callbacks, "first", path);
   assert.ok(client);
-  assert.equal(relay.connected(), true);
+  assert.equal(relay.ownerHost(), hostname());
 
   assert.equal(await client.attestation(), "attestation");
   assert.equal(await client.createOffer(), "offer-sdp");
@@ -117,7 +117,7 @@ test("relays one session's media and refuses a concurrent session", async () => 
   await client.close();
   await settle();
   assert.equal(media[0]!.closed, true);
-  assert.equal(relay.connected(), false);
+  assert.equal(relay.ownerHost(), undefined);
 
   const next = await connectVoiceRelay(clientCallbacks().callbacks, "next", path);
   assert.ok(next);
@@ -146,7 +146,7 @@ test("moves voice to another session only when the owner pauses", async () => {
     accepted: false,
     reason: "Confirmation pending",
   });
-  assert.equal(relay.connected(), true);
+  assert.equal(relay.ownerHost(), hostname());
 
   // Pausing closes media before the owner releases its local voice lock.
   let paused = false;

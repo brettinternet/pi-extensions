@@ -131,14 +131,22 @@ class VoiceRelayCommand {
   #describe(): string {
     const relay = this.#relay;
     if (!relay) return "Voice relay is not running";
-    return `Voice relay ${relay.connected() ? "in use" : "idle"} at ${RELAY_SOCKET_DISPLAY_PATH}. Forward it with:\nssh -N -R /home/<user>/.pi/live-codex-relay.sock:${relay.path} <host>`;
+    const ownerHost = relay.ownerHost();
+    return `Voice relay ${ownerHost ? `in use by ${ownerHost}` : "idle"} at ${RELAY_SOCKET_DISPLAY_PATH}. Forward it with:\nssh -N -R /home/<user>/.pi/live-codex-relay.sock:${relay.path} <host>`;
   }
 
   #showStatus(): void {
     const relay = this.#relay;
-    this.#context?.ui.setStatus(
+    const ui = this.#context?.ui;
+    if (!ui) return;
+    const ownerHost = relay?.ownerHost();
+    ui.setStatus(
       "pi-live-codex-relay",
-      relay ? (relay.connected() ? "relay: live" : "relay") : undefined,
+      relay
+        ? ownerHost
+          ? ui.theme.fg("success", `⇄ ${ownerHost}`)
+          : ui.theme.fg("dim", "⇄ relay")
+        : undefined,
     );
   }
 }
@@ -336,15 +344,11 @@ class LiveExtensionRuntime {
         return visualizer;
       });
       context.ui.setEditorText("");
-      context.ui.setStatus("pi-live-codex", "connecting");
       this.#animation = setInterval(() => {
         this.#visualizer?.advanceFrame();
       }, 80);
 
       await session.start();
-      if (this.#session === session) {
-        context.ui.setStatus("pi-live-codex", "live");
-      }
     } catch (cause) {
       const error = cause instanceof Error ? cause : new Error(String(cause));
       pendingError = error;
@@ -398,12 +402,6 @@ class LiveExtensionRuntime {
         assignedLock = voiceLock;
         voiceLock.setHandoffHandler((request) => this.#handleHandoff(request));
         await session.resume();
-        if (this.#session === session) {
-          context.ui.setStatus(
-            "pi-live-codex",
-            session.isPaused() ? "paused" : "live",
-          );
-        }
       } catch (cause) {
         if (assignedLock && this.#voiceLock === assignedLock) {
           try {
@@ -412,7 +410,6 @@ class LiveExtensionRuntime {
           this.#voiceLock = undefined;
         }
         if (this.#session === session) {
-          context.ui.setStatus("pi-live-codex", "paused");
           context.ui.notify(
             cause instanceof Error ? cause.message : String(cause),
             "warning",
@@ -538,7 +535,6 @@ class LiveExtensionRuntime {
       await session.pause();
       this.#voiceLock?.release();
       this.#voiceLock = undefined;
-      this.#context?.ui.setStatus("pi-live-codex", "paused");
       return { accepted: true };
     } catch (cause) {
       return {
@@ -579,7 +575,6 @@ class LiveExtensionRuntime {
     }
     if (!context) return;
     try {
-      context.ui.setStatus("pi-live-codex", undefined);
       context.ui.setEditorComponent(previousEditor);
       context.ui.setEditorText(
         combineRestoredDrafts(previousText, pendingTypedNote, liveDraft),

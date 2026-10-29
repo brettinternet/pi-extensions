@@ -170,14 +170,14 @@ class RelayConnection {
 
 export interface VoiceRelay {
   readonly path: string;
-  connected(): boolean;
+  ownerHost(): string | undefined;
   close(): Promise<void>;
 }
 
 export interface VoiceRelayOptions {
   path?: string;
   createMedia?: (callbacks: LiveMediaCallbacks) => LiveMedia;
-  onConnectionChange?: (connected: boolean) => void;
+  onConnectionChange?: () => void;
 }
 
 /** Serve this machine's microphone and speaker to one Pi session at a time. */
@@ -206,7 +206,7 @@ export async function startVoiceRelay(
   const connections = new Set<RelayConnection>();
   const setOwner = (next: typeof owner): void => {
     owner = next;
-    options.onConnectionChange?.(next !== undefined);
+    options.onConnectionChange?.();
   };
 
   const handoff = async (
@@ -315,7 +315,7 @@ export async function startVoiceRelay(
 
   return {
     path,
-    connected: () => owner !== undefined,
+    ownerHost: () => owner?.host,
     close: async () => {
       for (const connection of connections) connection.destroy();
       await new Promise<void>((resolve) => server.close(() => resolve()));
