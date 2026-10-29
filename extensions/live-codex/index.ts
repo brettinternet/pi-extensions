@@ -25,8 +25,10 @@ import {
 } from "./image-attachments.ts";
 import {
   RELAY_SOCKET_DISPLAY_PATH,
+  requestVoiceRelayHandoff,
   startVoiceRelay,
   type VoiceRelay,
+  voiceRelayOwner,
 } from "./relay.ts";
 import {
   acquireVoiceLock,
@@ -228,31 +230,35 @@ class LiveExtensionRuntime {
     const previousText = context.ui.getEditorText();
     const sessionId = context.sessionManager.getSessionId();
     try {
+      // The relay owner may be on another machine; pausing it also releases
+      // this machine's lock when it is local.
+      const relayOwner = await voiceRelayOwner();
+      if (relayOwner) {
+        if (!(await this.#confirmVoiceMove(
+          context,
+          `a Pi session on ${relayOwner.host} (session ${relayOwner.sessionId})`,
+        ))) {
+          return;
+        }
+        const handoff = await requestVoiceRelayHandoff(sessionId);
+        if (!handoff.accepted) {
+          context.ui.notify(
+            handoff.reason ?? "The other Pi session declined the voice handoff.",
+            "warning",
+          );
+          return;
+        }
+      }
       let voiceLock: VoiceLock;
       try {
         voiceLock = await acquireVoiceLock(sessionId);
       } catch (error) {
         if (!(error instanceof VoiceLockHeldError) || !error.owner) throw error;
         const owner = error.owner;
-        this.#pi.events.emit("herdr:blocked", {
-          active: true,
-          label: "Voice handoff approval required",
-          scope: "root",
-        });
-        let moveVoice: boolean;
-        try {
-          moveVoice = await context.ui.confirm(
-            "Activate voice here?",
-            `Another Pi session currently owns live voice (PID ${owner.pid}, session ${owner.sessionId}). Pause voice there and activate it here? Its transcript, drafts, and running work will remain in that session.`,
-          );
-        } finally {
-          this.#pi.events.emit("herdr:blocked", { active: false, scope: "root" });
-        }
-        if (!moveVoice) {
-          context.ui.notify(
-            "Voice remains active in the other Pi session.",
-            "info",
-          );
+        if (!(await this.#confirmVoiceMove(
+          context,
+          `another Pi session (PID ${owner.pid}, session ${owner.sessionId})`,
+        ))) {
           return;
         }
         const handoff = await requestVoiceLockHandoff(owner, sessionId);
@@ -297,6 +303,8 @@ class LiveExtensionRuntime {
           onWorkStatus: (status) => this.#visualizer?.setWorkStatus(status),
           onPendingUpdatesChanged: (pending) =>
             this.#visualizer?.setPendingUpdates(pending),
+          onHandoffRequest: () =>
+            this.#handleHandoff({ requesterSessionId: "voice relay" }),
           onTerminal: (error) =>
             session && this.#finish(session, error ?? pendingError),
         },
@@ -362,6 +370,14 @@ class LiveExtensionRuntime {
       let voiceLock: VoiceLock;
       let assignedLock: VoiceLock | undefined;
       try {
+        if (await voiceRelayOwner()) {
+          const handoff = await requestVoiceRelayHandoff(sessionId);
+          if (!handoff.accepted) {
+            throw new Error(
+              handoff.reason ?? "The active voice session declined the pause request.",
+            );
+          }
+        }
         try {
           voiceLock = await acquireVoiceLock(sessionId);
         } catch (error) {
@@ -409,6 +425,30 @@ class LiveExtensionRuntime {
       this.#resumePromise = undefined;
     });
     return this.#resumePromise;
+  }
+
+  async #confirmVoiceMove(
+    context: ExtensionContext,
+    owner: string,
+  ): Promise<boolean> {
+    this.#pi.events.emit("herdr:blocked", {
+      active: true,
+      label: "Voice handoff approval required",
+      scope: "root",
+    });
+    let moveVoice: boolean;
+    try {
+      moveVoice = await context.ui.confirm(
+        "Activate voice here?",
+        `Live voice is active in ${owner}. Pause voice there and activate it here? Its transcript, drafts, and running work will remain in that session.`,
+      );
+    } finally {
+      this.#pi.events.emit("herdr:blocked", { active: false, scope: "root" });
+    }
+    if (!moveVoice) {
+      context.ui.notify("Voice remains active in the other Pi session.", "info");
+    }
+    return moveVoice;
   }
 
   async #attachDroppedImages(

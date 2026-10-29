@@ -41,6 +41,6 @@ Voice uses the microphone and speaker of the machine Pi runs on. To talk to a re
 ssh -N -R /home/you/.pi/live-codex-relay.sock:$HOME/.pi/live-codex-relay.sock remote
 ```
 
-Then `/live` on the remote. Audio flows directly between your machine and OpenAI; only control messages cross SSH. Any Pi that can reach `~/.pi/live-codex-relay.sock` uses the relay, one session at a time, including local ones.
+Then `/live` on the remote. Audio flows directly between your machine and OpenAI; only control messages cross SSH. Any Pi that can reach `~/.pi/live-codex-relay.sock` uses the relay, including local ones. Starting voice while another session uses the relay offers to move it, as on one machine.
 
 The remote `~/.pi` directory must exist. Set `StreamLocalBindUnlink yes` in the remote `sshd_config`, or remove the stale socket, before reconnecting. Use a dedicated forward: Herdr's own SSH connection closes when idle.

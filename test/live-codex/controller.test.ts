@@ -233,6 +233,7 @@ function createHarness(
     onAttachmentsChanged: () => {},
     onWorkStatus: () => {},
     onPendingUpdatesChanged: (pending) => pendingUpdates.push(pending),
+    onHandoffRequest: async () => ({ accepted: true }),
     onTerminal: (error) => terminal.push(error),
   };
   const session = new LiveSession({

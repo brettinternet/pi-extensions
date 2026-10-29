@@ -2,6 +2,7 @@
 import WebSocket from "ws";
 import type { LiveMedia, LiveMediaCallbacks } from "./media.ts";
 import { openLiveMedia } from "./relay.ts";
+import type { VoiceLockHandoffResponse } from "./voice-lock.ts";
 import {
   buildLiveSessionPayload,
   type LiveClientMessage,
@@ -30,6 +31,7 @@ export interface LiveTransportCallbacks {
   onInputLevel(level: number): void;
   onOutputLevel(level: number): void;
   onMicrophoneRestarted(): void;
+  onHandoffRequest(): Promise<VoiceLockHandoffResponse>;
 }
 
 export interface LiveTransportOptions {
@@ -38,7 +40,10 @@ export interface LiveTransportOptions {
   instructions: string;
   voice: string;
   callbacks: LiveTransportCallbacks;
-  openMedia?: (callbacks: LiveMediaCallbacks) => Promise<LiveMedia>;
+  openMedia?: (
+    callbacks: LiveMediaCallbacks,
+    sessionId: string,
+  ) => Promise<LiveMedia>;
   signal?: AbortSignal;
 }
 
@@ -165,7 +170,8 @@ export class CodexLiveTransport {
         }
       },
       onFailure: (error) => this.#reportFailure(error.message),
-    });
+      onHandoffRequest: () => this.#options.callbacks.onHandoffRequest(),
+    }, this.#options.sessionId);
     if (this.#state !== "connecting") {
       await media.close().catch(() => {});
       throw abortError(this.#options.signal);

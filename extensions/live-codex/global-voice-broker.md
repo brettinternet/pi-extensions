@@ -13,7 +13,7 @@ session A (owner)  ← handoff request ─  session B
 
 Handoff is refused while voice-routed confirmations are pending. Queued or active work does not block it.
 
-`/live-relay` serves one machine's microphone, speaker, and WebRTC peer over a Unix socket that SSH can forward. Sessions keep signaling, the sideband, and work; the relay serves one session at a time and refuses others. It has no cross-host handoff yet.
+`/live-relay` serves one machine's microphone, speaker, and WebRTC peer over a Unix socket that SSH can forward. Sessions keep signaling, the sideband, and work. The relay serves one session at a time; another session can ask it to pause the owner, which applies the same blockers as a local handoff.
 
 ## Idea
 

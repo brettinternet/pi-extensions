@@ -1,5 +1,6 @@
 import { generateCodexAttestation } from "./attestation.ts";
 import { AudioCapture, LiveWebRtcPeer } from "./native.cjs";
+import type { VoiceLockHandoffResponse } from "./voice-lock.ts";
 
 export const OUTPUT_ACTIVE_LEVEL = 0.015;
 const MIN_BARGE_IN_LEVEL = 0.04;
@@ -24,6 +25,8 @@ export interface LiveMediaCallbacks {
   onOutputLevel(level: number): void;
   onMicrophoneRestarted(): void;
   onFailure(error: Error): void;
+  /** Another session asked a shared relay for this call's audio. */
+  onHandoffRequest?(): Promise<VoiceLockHandoffResponse>;
 }
 
 export interface LivePeer {

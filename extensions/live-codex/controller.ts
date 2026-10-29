@@ -48,6 +48,7 @@ import {
   type LiveTransportOptions,
 } from "./transport.ts";
 import type { LivePhase } from "./visualizer.ts";
+import type { VoiceLockHandoffResponse } from "./voice-lock.ts";
 
 const OUTPUT_RELEASE_DELAY_MS = 250;
 const LIVE_DELEGATION_MESSAGE_TYPE = "pi-live-codex-delegation";
@@ -91,6 +92,8 @@ export interface LiveSessionCallbacks {
   onAttachmentsChanged(count: number): void;
   onWorkStatus(status: WorkStatus): void;
   onPendingUpdatesChanged(pending: boolean): void;
+  /** Another machine's session asked the voice relay for this call's audio. */
+  onHandoffRequest(): Promise<VoiceLockHandoffResponse>;
   onTerminal(error?: Error): void;
 }
 
@@ -361,6 +364,7 @@ export class LiveSession {
             reason: "capture-stalled",
           });
         },
+        onHandoffRequest: () => this.#callbacks.onHandoffRequest(),
       },
     });
     this.#transport = transport;
