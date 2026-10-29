@@ -47,8 +47,8 @@ test("registers the string limit flag and rejects invalid values before voice st
       assert.equal(name, LIVE_TRANSCRIPT_LIMIT_FLAG);
       return flagValue;
     },
-    registerCommand: (_name: string, options: Parameters<ExtensionAPI["registerCommand"]>[1]) => {
-      command = options;
+    registerCommand: (name: string, options: Parameters<ExtensionAPI["registerCommand"]>[1]) => {
+      if (name === "live") command = options;
     },
     registerShortcut: () => {},
     on: () => {},

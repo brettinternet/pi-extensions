@@ -24,6 +24,11 @@ import {
   loadDroppedImages,
 } from "./image-attachments.ts";
 import {
+  RELAY_SOCKET_DISPLAY_PATH,
+  startVoiceRelay,
+  type VoiceRelay,
+} from "./relay.ts";
+import {
   acquireVoiceLock,
   requestVoiceLockHandoff,
   VoiceLockHeldError,
@@ -62,6 +67,78 @@ function completeVoices(prefix: string): AutocompleteItem[] | null {
       description: voice === "sol" ? "Default voice" : "Realtime voice",
     }));
   return matches.length > 0 ? matches : null;
+}
+
+const RELAY_ACTIONS = [
+  { value: "start", label: "start", description: "Share this machine's audio" },
+  { value: "stop", label: "stop", description: "Stop sharing audio" },
+  { value: "status", label: "status", description: "Show relay state" },
+] as const;
+
+function completeRelayActions(prefix: string): AutocompleteItem[] | null {
+  const query = prefix.trimStart().toLowerCase();
+  const matches = RELAY_ACTIONS.filter(({ value }) => value.startsWith(query));
+  return matches.length > 0 ? [...matches] : null;
+}
+
+class VoiceRelayCommand {
+  #relay: VoiceRelay | undefined;
+  #context: ExtensionContext | undefined;
+
+  async run(action: string, context: ExtensionContext): Promise<void> {
+    this.#context = context;
+    if (action === "stop") {
+      if (!this.#relay) {
+        context.ui.notify("Voice relay is not running", "info");
+        return;
+      }
+      await this.stop();
+      context.ui.notify("Voice relay stopped", "info");
+      return;
+    }
+    if (action === "status" || (action === "start" && this.#relay)) {
+      context.ui.notify(this.#describe(), "info");
+      return;
+    }
+    if (action !== "start") {
+      context.ui.notify("Usage: /live-relay [start|stop|status]", "error");
+      return;
+    }
+    try {
+      this.#relay = await startVoiceRelay({
+        onConnectionChange: () => this.#showStatus(),
+      });
+    } catch (cause) {
+      context.ui.notify(
+        cause instanceof Error ? cause.message : String(cause),
+        "error",
+      );
+      return;
+    }
+    this.#showStatus();
+    context.ui.notify(this.#describe(), "info");
+  }
+
+  async stop(): Promise<void> {
+    const relay = this.#relay;
+    this.#relay = undefined;
+    await relay?.close();
+    this.#showStatus();
+  }
+
+  #describe(): string {
+    const relay = this.#relay;
+    if (!relay) return "Voice relay is not running";
+    return `Voice relay ${relay.connected() ? "in use" : "idle"} at ${RELAY_SOCKET_DISPLAY_PATH}. Forward it with:\nssh -N -R /home/<user>/.pi/live-codex-relay.sock:${relay.path} <host>`;
+  }
+
+  #showStatus(): void {
+    const relay = this.#relay;
+    this.#context?.ui.setStatus(
+      "pi-live-codex-relay",
+      relay ? (relay.connected() ? "relay: live" : "relay") : undefined,
+    );
+  }
 }
 
 export function combineRestoredDrafts(
@@ -495,6 +572,15 @@ export default function piLiveCodex(pi: ExtensionAPI): void {
     },
   });
 
+  const relay = new VoiceRelayCommand();
+  pi.registerCommand("live-relay", {
+    description: "[start|stop|status] — Share this machine's microphone and speaker with Pi over SSH",
+    getArgumentCompletions: completeRelayActions,
+    handler: async (args, context) => {
+      await relay.run(args.trim() || "start", context);
+    },
+  });
+
   pi.registerShortcut("ctrl+l", {
     description: "Toggle gpt-live-1-codex voice mode",
     handler: async (context) => {
@@ -551,5 +637,6 @@ export default function piLiveCodex(pi: ExtensionAPI): void {
     unsubscribeAsyncStarted();
     unsubscribeAsyncCompleted();
     await runtime.stop("shutdown");
+    await relay.stop();
   });
 }
