@@ -706,6 +706,11 @@ test("agent transcript survives user interruption until the next agent response"
     type: "input_transcript.added",
     item: { text: "Wait" },
   });
+  // The interrupted reply keeps streaming after the user starts speaking.
+  harness.transport().emit({
+    type: "output_transcript.added",
+    item: { text: "The checks are still running. Almost" },
+  });
   harness.transport().emit({
     type: "turn.done",
     turn: { role: "user", transcript: "Wait, stop" },
@@ -713,7 +718,9 @@ test("agent transcript survives user interruption until the next agent response"
 
   assert.deepEqual(harness.agentTranscripts, [
     { text: "The checks are still running.", finalized: false },
+    { text: "The checks are still running. Almost", finalized: false },
   ]);
+  assert.deepEqual(harness.agentTranscriptStarts, [true, false]);
   assert.deepEqual(harness.userTranscripts, [
     { text: "Wait", finalized: false },
     { text: "Wait, stop", finalized: true },
@@ -736,9 +743,11 @@ test("agent transcript survives user interruption until the next agent response"
   });
   assert.deepEqual(harness.agentTranscripts, [
     { text: "The checks are still running.", finalized: false },
+    { text: "The checks are still running. Almost", finalized: false },
     { text: "Okay,", finalized: false },
     { text: "Okay, I paused.", finalized: true },
   ]);
+  assert.deepEqual(harness.agentTranscriptStarts, [true, false, true, false]);
 
   await harness.session.stop();
 });

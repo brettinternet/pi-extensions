@@ -413,7 +413,7 @@ export class LiveSession {
       transcript.length > 0 ? `Recent voice transcript:\n${transcript.join("\n")}` : "",
     ].filter(Boolean);
     if (sections.length === 0) return;
-    const text = `Voice session resumed. Use this context for continuity without announcing the resume itself.\n\n${sections.join("\n\n")}`
+    const text = `Voice session resumed. The following is earlier conversation and updates for continuity, not a new request. Do not respond to it or announce the resume; stay silent until the user speaks.\n\n${sections.join("\n\n")}`
       .slice(0, MAX_RESUME_CONTEXT_CHARS);
     this.#pendingSends.unshift(...chunkLiveContext(text).map((chunk) =>
       buildSessionContextAppend(chunk, "commentary")
@@ -721,7 +721,12 @@ export class LiveSession {
         break;
       }
       case "output_transcript.added": {
-        const startsNew = this.#outputTurnComplete;
+        // User speech marks the turn complete, but an interrupted reply can keep
+        // streaming its cumulative transcript; keep that on the same row.
+        const continuesInterrupted = this.#outputTurnComplete &&
+          this.#outputTranscript !== "" &&
+          event.item.text.startsWith(this.#outputTranscript);
+        const startsNew = this.#outputTurnComplete && !continuesInterrupted;
         if (startsNew) {
           this.#outputTranscript = "";
           this.#outputTurnComplete = false;
