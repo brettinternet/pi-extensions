@@ -203,6 +203,7 @@ function openSocket(path: string): Promise<Socket | undefined> {
     socket.once("connect", () => {
       clearTimeout(timer);
       socket.removeAllListeners("error");
+      socket.on("error", () => {});
       resolve(socket);
     });
     socket.once("error", (error: NodeJS.ErrnoException) => {
