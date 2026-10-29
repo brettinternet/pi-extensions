@@ -225,6 +225,12 @@ export class CodexLiveTransport {
       signal: this.#options.signal,
     });
     const responseBody = await response.text();
+    if (response.status === 401) {
+      // OpenAI can revoke a token before its stored expiry, so Pi won't refresh it.
+      throw new Error(
+        "OpenAI Codex rejected this machine's sign-in. Run /login openai-codex and try again.",
+      );
+    }
     if (!response.ok) {
       throw new Error(
         `Codex live signaling failed (${response.status}): ${boundedErrorBody(responseBody, response.statusText)}`,
