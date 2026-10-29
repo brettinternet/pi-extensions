@@ -1,7 +1,7 @@
 // Adapted from Oh My Pi's MIT-licensed Codex live transport.
 import WebSocket from "ws";
-import { LiveWebRtcPeer } from "./native.cjs";
-import { generateCodexAttestation } from "./attestation.ts";
+import type { LiveMedia, LiveMediaCallbacks } from "./media.ts";
+import { openLiveMedia } from "./relay.ts";
 import {
   buildLiveSessionPayload,
   type LiveClientMessage,
@@ -27,7 +27,9 @@ export interface LiveAccess {
 
 export interface LiveTransportCallbacks {
   onEvent(event: LiveServerEvent): void;
+  onInputLevel(level: number): void;
   onOutputLevel(level: number): void;
+  onMicrophoneRestarted(): void;
 }
 
 export interface LiveTransportOptions {
@@ -36,6 +38,7 @@ export interface LiveTransportOptions {
   instructions: string;
   voice: string;
   callbacks: LiveTransportCallbacks;
+  openMedia?: (callbacks: LiveMediaCallbacks) => Promise<LiveMedia>;
   signal?: AbortSignal;
 }
 
@@ -106,7 +109,7 @@ function abortError(signal?: AbortSignal): Error {
 export class CodexLiveTransport {
   readonly #options: LiveTransportOptions;
   readonly #realtimeSessionId = crypto.randomUUID();
-  #peer: LiveWebRtcPeer | undefined;
+  #media: LiveMedia | undefined;
   #sideband: WebSocket | undefined;
   #state: Lifecycle = "idle";
   #connectPromise: Promise<void> | undefined;
@@ -144,31 +147,47 @@ export class CodexLiveTransport {
   }
 
   async #connect(): Promise<void> {
-    const peer = new LiveWebRtcPeer(
-      (error, payload) => {
-        if (error) this.#reportFailure(error.message);
-        else this.#handlePeerEvent(payload);
+    const media = await (this.#options.openMedia ?? openLiveMedia)({
+      onPeerEvent: (payload) => this.#handlePeerEvent(payload),
+      onInputLevel: (level) => {
+        if (this.#state === "connected" && !this.#muted) {
+          this.#options.callbacks.onInputLevel(level);
+        }
       },
-      (error, level) => {
-        if (error) this.#reportFailure(error.message);
-        else this.#handleOutputLevel(level);
+      onOutputLevel: (level) => {
+        if (this.#state === "connected") {
+          this.#options.callbacks.onOutputLevel(level);
+        }
       },
-      (error, message) => this.#reportFailure(error?.message ?? message),
-    );
-    this.#peer = peer;
-    const offer = await peer.createOffer();
+      onMicrophoneRestarted: () => {
+        if (this.#state === "connected") {
+          this.#options.callbacks.onMicrophoneRestarted();
+        }
+      },
+      onFailure: (error) => this.#reportFailure(error.message),
+    });
+    if (this.#state !== "connecting") {
+      await media.close().catch(() => {});
+      throw abortError(this.#options.signal);
+    }
+    this.#media = media;
+    const offer = await media.createOffer();
     if (this.#state !== "connecting") throw abortError(this.#options.signal);
-    const { answer, callId, access, attestation } = await this.#signal(offer);
-    await peer.acceptAnswer(answer);
-    peer.setMuted(this.#muted);
-    await peer.waitForOpen();
+    const { answer, callId, access, attestation } = await this.#signal(
+      media,
+      offer,
+    );
+    await media.acceptAnswer(answer);
+    media.setMuted(this.#muted);
+    await media.waitForOpen();
     if (this.#state !== "connecting") throw abortError(this.#options.signal);
     await this.#connectSideband(callId, access, attestation);
     if (this.#state !== "connecting") throw abortError(this.#options.signal);
     this.#state = "connected";
+    await media.startCapture();
   }
 
-  async #signal(offer: string): Promise<{
+  async #signal(media: LiveMedia, offer: string): Promise<{
     answer: string;
     callId: string;
     access: LiveAccess;
@@ -176,7 +195,7 @@ export class CodexLiveTransport {
   }> {
     const [access, attestation] = await Promise.all([
       this.#options.getAccess(),
-      generateCodexAttestation(),
+      media.attestation(),
     ]);
     const response = await fetch(SIGNALING_URL, {
       method: "POST",
@@ -347,11 +366,6 @@ export class CodexLiveTransport {
     this.#options.callbacks.onEvent(event);
   }
 
-  #handleOutputLevel(level: number): void {
-    if (this.#state !== "connected" || !Number.isFinite(level)) return;
-    this.#options.callbacks.onOutputLevel(Math.min(1, Math.max(0, level)));
-  }
-
   #reportFailure(message: string): void {
     if (
       (this.#state !== "connecting" && this.#state !== "connected") ||
@@ -378,16 +392,9 @@ export class CodexLiveTransport {
     return operation;
   }
 
-  pushAudio(samples: Float32Array): void {
-    if (this.#state !== "connected" || this.#muted || samples.length === 0) {
-      return;
-    }
-    this.#peer?.pushAudio(samples);
-  }
-
   setMuted(muted: boolean): void {
     this.#muted = muted;
-    if (this.#state === "connected") this.#peer?.setMuted(muted);
+    if (this.#state === "connected") this.#media?.setMuted(muted);
   }
 
   close(): Promise<void> {
@@ -400,9 +407,9 @@ export class CodexLiveTransport {
   async #close(): Promise<void> {
     this.#options.signal?.removeEventListener("abort", this.#abortListener);
     const sideband = this.#sideband;
-    const peer = this.#peer;
+    const media = this.#media;
     this.#sideband = undefined;
-    this.#peer = undefined;
+    this.#media = undefined;
     if (
       sideband &&
       (sideband.readyState === WebSocket.OPEN ||
@@ -410,9 +417,9 @@ export class CodexLiveTransport {
     ) {
       sideband.close(1000, "done");
     }
-    if (peer) {
+    if (media) {
       try {
-        await peer.close();
+        await media.close();
       } catch {}
     }
     this.#state = "closed";
